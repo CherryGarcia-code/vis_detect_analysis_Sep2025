@@ -1,0 +1,1370 @@
+{
+  "mat_file": "E:\\python_analysis\\git_repos\\vis_detect_analysis_Apr2023\\matlab_files\\BG_031_260325.mat",
+  "top_level_keys": {
+    "__header__": {
+      "type": "bytes",
+      "repr": "b'MATLAB 5.0 MAT-file, Platform: PCWIN64, Created on: Mon May 26 15:28:34 2025'"
+    },
+    "__version__": {
+      "type": "str",
+      "value": "1.0"
+    },
+    "__globals__": {
+      "type": "list",
+      "length": 0,
+      "samples": []
+    },
+    "data": {
+      "type": "dict",
+      "n_keys": 1,
+      "keys_sample": {
+        "BG_031": {
+          "type": "dict",
+          "n_keys": 1,
+          "keys_sample": {
+            "BG_031_260325": {
+              "type": "dict",
+              "note": "max depth reached"
+            }
+          },
+          "all_keys": [
+            "BG_031_260325"
+          ]
+        }
+      },
+      "all_keys": [
+        "BG_031"
+      ]
+    }
+  },
+  "selected_session_key": "data/BG_031",
+  "session_description": {
+    "type": "dict",
+    "n_keys": 1,
+    "keys_sample": {
+      "BG_031_260325": {
+        "type": "dict",
+        "n_keys": 3,
+        "keys_sample": {
+          "NPX_probes": {
+            "type": "dict",
+            "n_keys": 17,
+            "keys_sample": {
+              "dat_path": {
+                "type": "str",
+                "value": "BG_031_260325_g0_tcat.imec0.ap.bin"
+              },
+              "n_channels_dat": {
+                "type": "int",
+                "value": 385
+              },
+              "dtype": {
+                "type": "str",
+                "value": "int16"
+              },
+              "offset": {
+                "type": "int",
+                "value": 0
+              },
+              "sample_rate": {
+                "type": "int",
+                "value": 30000
+              },
+              "hp_filtered": {
+                "type": "int",
+                "value": 0
+              },
+              "st": {
+                "type": "ndarray",
+                "dtype": "float64",
+                "shape": [
+                  41162633
+                ],
+                "size": 41162633,
+                "min": 0.0029,
+                "max": 12074.701,
+                "mean": 6310.884306880705,
+                "std": 3457.2216665711294,
+                "samples": [
+                  0.0029,
+                  0.004666666666666667,
+                  0.005033333333333333,
+                  0.006033333333333333,
+                  0.006833333333333334,
+                  0.007333333333333333,
+                  0.007466666666666667,
+                  0.0075
+                ]
+              },
+              "clu": {
+                "type": "ndarray",
+                "dtype": "uint32",
+                "shape": [
+                  41162633
+                ],
+                "size": 41162633,
+                "min": 0.0,
+                "max": 384.0,
+                "mean": 183.57030870692844,
+                "std": 108.55094417680961,
+                "samples": [
+                  83,
+                  278,
+                  158,
+                  186,
+                  97,
+                  370,
+                  217,
+                  37
+                ]
+              }
+            },
+            "all_keys": [
+              "dat_path",
+              "n_channels_dat",
+              "dtype",
+              "offset",
+              "sample_rate",
+              "hp_filtered",
+              "st",
+              "clu",
+              "cgs",
+              "cids",
+              "xcoords",
+              "ycoords",
+              "pcFeat",
+              "pcFeatInd",
+              "cluster_id_KS_good",
+              "templateDepths",
+              "templateWaveforms"
+            ]
+          },
+          "NI_events": {
+            "type": "dict",
+            "n_keys": 15,
+            "keys_sample": {
+              "session_name": {
+                "type": "str",
+                "value": "BG_031_260325"
+              },
+              "Synch": {
+                "type": "dict",
+                "n_keys": 3,
+                "keys_sample": {
+                  "rise_t": {
+                    "type": "ndarray",
+                    "dtype": "float64",
+                    "shape": [
+                      12075
+                    ],
+                    "size": 12075,
+                    "min": 0.6192651889891628,
+                    "max": 12074.725012272023,
+                    "mean": 6037.672372455973,
+                    "std": 3485.782767661736,
+                    "samples": [
+                      0.6192651889891628,
+                      1.619246308952913,
+                      2.619321829097912,
+                      3.619302949061662,
+                      4.619284069025412,
+                      5.6193595891704105,
+                      6.619340709134161,
+                      7.6193218290979114
+                    ]
+                  },
+                  "fall_t": {
+                    "type": "ndarray",
+                    "dtype": "float64",
+                    "shape": [
+                      12075
+                    ],
+                    "size": 12075,
+                    "min": 0.11932182909791186,
+                    "max": 12074.22497451195,
+                    "mean": 6037.17236773401,
+                    "std": 3485.782767620189,
+                    "samples": [
+                      0.11932182909791186,
+                      1.1193029490616622,
+                      2.1192840690254124,
+                      3.1192651889891625,
+                      4.119340709134161,
+                      5.1193218290979114,
+                      6.1193029490616615,
+                      7.11937846920666
+                    ]
+                  },
+                  "duration": {
+                    "type": "ndarray",
+                    "dtype": "float64",
+                    "shape": [
+                      12075
+                    ],
+                    "size": 12075,
+                    "min": -0.5000377600736101,
+                    "max": -0.4999433598895848,
+                    "mean": -0.5000047219635174,
+                    "std": 4.502540206264294e-05,
+                    "samples": [
+                      -0.49994335989125094,
+                      -0.4999433598912508,
+                      -0.5000377600724994,
+                      -0.5000377600724994,
+                      -0.49994335989125105,
+                      -0.500037760072499,
+                      -0.5000377600724999,
+                      -0.49994335989125105
+                    ]
+                  }
+                },
+                "all_keys": [
+                  "rise_t",
+                  "fall_t",
+                  "duration"
+                ]
+              },
+              "Front_cam": {
+                "type": "dict",
+                "n_keys": 3,
+                "keys_sample": {
+                  "rise_t": {
+                    "type": "ndarray",
+                    "dtype": "uint8",
+                    "shape": [
+                      0
+                    ],
+                    "size": 0,
+                    "samples": []
+                  },
+                  "fall_t": {
+                    "type": "ndarray",
+                    "dtype": "uint8",
+                    "shape": [
+                      0
+                    ],
+                    "size": 0,
+                    "samples": []
+                  },
+                  "duration": {
+                    "type": "ndarray",
+                    "dtype": "uint8",
+                    "shape": [
+                      0
+                    ],
+                    "size": 0,
+                    "samples": []
+                  }
+                },
+                "all_keys": [
+                  "rise_t",
+                  "fall_t",
+                  "duration"
+                ]
+              },
+              "Eye_cam": {
+                "type": "dict",
+                "n_keys": 3,
+                "keys_sample": {
+                  "rise_t": {
+                    "type": "ndarray",
+                    "dtype": "uint8",
+                    "shape": [
+                      0
+                    ],
+                    "size": 0,
+                    "samples": []
+                  },
+                  "fall_t": {
+                    "type": "ndarray",
+                    "dtype": "uint8",
+                    "shape": [
+                      0
+                    ],
+                    "size": 0,
+                    "samples": []
+                  },
+                  "duration": {
+                    "type": "ndarray",
+                    "dtype": "uint8",
+                    "shape": [
+                      0
+                    ],
+                    "size": 0,
+                    "samples": []
+                  }
+                },
+                "all_keys": [
+                  "rise_t",
+                  "fall_t",
+                  "duration"
+                ]
+              },
+              "Top_cam": {
+                "type": "dict",
+                "n_keys": 3,
+                "keys_sample": {
+                  "rise_t": {
+                    "type": "ndarray",
+                    "dtype": "uint8",
+                    "shape": [
+                      0
+                    ],
+                    "size": 0,
+                    "samples": []
+                  },
+                  "fall_t": {
+                    "type": "ndarray",
+                    "dtype": "uint8",
+                    "shape": [
+                      0
+                    ],
+                    "size": 0,
+                    "samples": []
+                  },
+                  "duration": {
+                    "type": "ndarray",
+                    "dtype": "uint8",
+                    "shape": [
+                      0
+                    ],
+                    "size": 0,
+                    "samples": []
+                  }
+                },
+                "all_keys": [
+                  "rise_t",
+                  "fall_t",
+                  "duration"
+                ]
+              },
+              "Rot_enc_A": {
+                "type": "dict",
+                "n_keys": 3,
+                "keys_sample": {
+                  "rise_t": {
+                    "type": "ndarray",
+                    "dtype": "float64",
+                    "shape": [
+                      237054
+                    ],
+                    "size": 237054,
+                    "min": 14.099139070347015,
+                    "max": 12070.688743722387,
+                    "mean": 6763.958330807209,
+                    "std": 3012.7585768917197,
+                    "samples": [
+                      14.099139070347015,
+                      30.385152739493257,
+                      32.74072046218328,
+                      32.86268549635615,
+                      33.163444473813385,
+                      33.64951100706113,
+                      33.87191783408224,
+                      33.89787788392554
+                    ]
+                  },
+                  "fall_t": {
+                    "type": "ndarray",
+                    "dtype": "float64",
+                    "shape": [
+                      237053
+                    ],
+                    "size": 237053,
+                    "min": 18.94045236566854,
+                    "max": 12070.633897217082,
+                    "mean": 6763.959938800222,
+                    "std": 3012.738150289793,
+                    "samples": [
+                      18.94045236566854,
+                      32.723728429558584,
+                      32.75582449118302,
+                      32.93763924026734,
+                      33.306555148585886,
+                      33.716535135747456,
+                      33.884661858550764,
+                      33.93205074953744
+                    ]
+                  },
+                  "duration": {
+                    "type": "ndarray",
+                    "dtype": "float64",
+                    "shape": [
+                      237053
+                    ],
+                    "size": 237053,
+                    "min": 0.00018880036168411607,
+                    "max": 66.69080164633942,
+                    "mean": 0.023994254365002226,
+                    "std": 0.4317323425121937,
+                    "samples": [
+                      4.841313295321527,
+                      2.3385756900653263,
+                      0.01510402899973684,
+                      0.07495374391118759,
+                      0.14311067477250106,
+                      0.06702412868632734,
+                      0.012744024468524628,
+                      0.03417286561190025
+                    ]
+                  }
+                },
+                "all_keys": [
+                  "rise_t",
+                  "fall_t",
+                  "duration"
+                ]
+              },
+              "Rot_enc_B": {
+                "type": "dict",
+                "n_keys": 3,
+                "keys_sample": {
+                  "rise_t": {
+                    "type": "ndarray",
+                    "dtype": "float64",
+                    "shape": [
+                      237105
+                    ],
+                    "size": 237105,
+                    "min": 14.210059283313823,
+                    "max": 12073.581070875654,
+                    "mean": 6763.588081738892,
+                    "std": 3013.2845056923557,
+                    "samples": [
+                      14.210059283313823,
+                      32.73524525167088,
+                      32.87693992372465,
+                      33.113695578295506,
+                      33.63535097987388,
+                      33.70926632179133,
+                      33.76798323452781,
+                      33.87843144658837
+                    ]
+                  },
+                  "fall_t": {
+                    "type": "ndarray",
+                    "dtype": "float64",
+                    "shape": [
+                      237105
+                    ],
+                    "size": 237105,
+                    "min": 12.224917871842313,
+                    "max": 12070.721122984556,
+                    "mean": 6763.563339707986,
+                    "std": 3013.291774632423,
+                    "samples": [
+                      12.224917871842313,
+                      22.800381376732243,
+                      32.74685647396443,
+                      32.9256504172488,
+                      33.17920930408186,
+                      33.67178944983574,
+                      33.72437035079107,
+                      33.857852207076235
+                    ]
+                  },
+                  "duration": {
+                    "type": "ndarray",
+                    "dtype": "float64",
+                    "shape": [
+                      237105
+                    ],
+                    "size": 237105,
+                    "min": -102.60610580372304,
+                    "max": -0.00018880036259361077,
+                    "mean": -0.02474203090614676,
+                    "std": 0.4654697078714589,
+                    "samples": [
+                      -1.9851414114715098,
+                      -9.934863874938639,
+                      -0.13008344976022101,
+                      -0.1880451610467091,
+                      -0.4561416757920185,
+                      -0.03747687195559024,
+                      -0.04361288373674199,
+                      -0.020579239512137804
+                    ]
+                  }
+                },
+                "all_keys": [
+                  "rise_t",
+                  "fall_t",
+                  "duration"
+                ]
+              },
+              "Baseline_ON": {
+                "type": "dict",
+                "n_keys": 3,
+                "keys_sample": {
+                  "rise_t": {
+                    "type": "ndarray",
+                    "dtype": "float64",
+                    "shape": [
+                      925
+                    ],
+                    "size": 925,
+                    "min": 32.2940188045161,
+                    "max": 11147.335082883359,
+                    "mean": 5618.5740429097295,
+                    "std": 3268.458792344103,
+                    "samples": [
+                      32.2940188045161,
+                      38.327134388098024,
+                      43.37320167654722,
+                      48.52329796473209,
+                      55.43641203791111,
+                      68.37272967564097,
+                      81.3509609938451,
+                      92.53020805799946
+                    ]
+                  },
+                  "fall_t": {
+                    "type": "ndarray",
+                    "dtype": "float64",
+                    "shape": [
+                      925
+                    ],
+                    "size": 925,
+                    "min": 34.337971528905335,
+                    "max": 11147.732413246233,
+                    "mean": 5624.072376976153,
+                    "std": 3267.922652400438,
+                    "samples": [
+                      34.337971528905335,
+                      39.29492504625608,
+                      44.36043877204244,
+                      51.27251444322773,
+                      57.57089453611751,
+                      75.22278442774609,
+                      82.25493712947929,
+                      96.16725824113581
+                    ]
+                  },
+                  "duration": {
+                    "type": "ndarray",
+                    "dtype": "float64",
+                    "shape": [
+                      925
+                    ],
+                    "size": 925,
+                    "min": 0.0348336668794218,
+                    "max": 17.050277536532917,
+                    "mean": 5.498334066423038,
+                    "std": 2.5991428252742437,
+                    "samples": [
+                      2.0439527243892357,
+                      0.9677906581580586,
+                      0.9872370954952245,
+                      2.74921647849564,
+                      2.1344824982063955,
+                      6.850054752105123,
+                      0.9039761356341813,
+                      3.6370501831363526
+                    ]
+                  }
+                },
+                "all_keys": [
+                  "rise_t",
+                  "fall_t",
+                  "duration"
+                ]
+              }
+            },
+            "all_keys": [
+              "session_name",
+              "Synch",
+              "Front_cam",
+              "Eye_cam",
+              "Top_cam",
+              "Rot_enc_A",
+              "Rot_enc_B",
+              "Baseline_ON",
+              "Change_ON",
+              "Air_puff",
+              "Lick_L",
+              "Lick_R",
+              "Valve_L",
+              "Valve_R",
+              "frame_times_tr"
+            ]
+          },
+          "behav_data": {
+            "type": "dict",
+            "n_keys": 3,
+            "keys_sample": {
+              "SessionSettings": {
+                "type": "dict",
+                "n_keys": 53,
+                "keys_sample": {
+                  "savedir": {
+                    "type": "str",
+                    "value": "/home/mrsicflogellab/Documents/Ben/FSMdata/BG_031"
+                  },
+                  "token": {
+                    "type": "str",
+                    "value": "BG_031"
+                  },
+                  "ntrials_max": {
+                    "type": "float",
+                    "value": "inf"
+                  },
+                  "spdrnghigh": {
+                    "type": "int",
+                    "value": 5
+                  },
+                  "spdrnglow": {
+                    "type": "int",
+                    "value": -5
+                  },
+                  "spdavgbin": {
+                    "type": "float",
+                    "value": 0.05
+                  },
+                  "Tcuedelay": {
+                    "type": "float",
+                    "value": 0.1
+                  },
+                  "Tcue": {
+                    "type": "float",
+                    "value": 0.1
+                  }
+                }
+              },
+              "ComputerSettings": {
+                "type": "dict",
+                "n_keys": 3,
+                "keys_sample": {
+                  "datadir": {
+                    "type": "str",
+                    "value": "/mnt/data/FSMdata"
+                  },
+                  "teensyport": {
+                    "type": "str",
+                    "value": "/dev/ttyACM0"
+                  },
+                  "monitors": {
+                    "type": "dict",
+                    "n_keys": 2,
+                    "keys_sample": {
+                      "left": {
+                        "type": "dict",
+                        "n_keys": 6,
+                        "keys_sample": {
+                          "ID": {
+                            "type": "int",
+                            "value": 1
+                          },
+                          "gammatable_path": {
+                            "type": "str",
+                            "value": "/home/mrsicflogellab/Documents/Ben/Code/GammaTable/GammaTable_Left.mat"
+                          },
+                          "width": {
+                            "type": "int",
+                            "value": 49
+                          },
+                          "distance": {
+                            "type": "int",
+                            "value": 20
+                          },
+                          "photodiode_location": {
+                            "type": "ndarray",
+                            "dtype": "uint16",
+                            "shape": [
+                              4
+                            ],
+                            "size": 4,
+                            "min": 0.0,
+                            "max": 1080.0,
+                            "mean": 540.0,
+                            "std": 471.00955404322747,
+                            "samples": [
+                              0,
+                              930,
+                              150,
+                              1080
+                            ]
+                          },
+                          "gammatable": {
+                            "type": "ndarray",
+                            "dtype": "float64",
+                            "shape": [
+                              1024
+                            ],
+                            "size": 1024,
+                            "min": 0.0,
+                            "max": 0.8549734826446801,
+                            "mean": 0.6130909265328072,
+                            "std": 0.18128091499339347,
+                            "samples": [
+                              0.0,
+                              0.055693179017342026,
+                              0.07318697451267503,
+                              0.08586752400229464,
+                              0.09617574957700045,
+                              0.10501624478702412,
+                              0.11283938897913487,
+                              0.1199067234972949
+                            ]
+                          }
+                        },
+                        "all_keys": [
+                          "ID",
+                          "gammatable_path",
+                          "width",
+                          "distance",
+                          "photodiode_location",
+                          "gammatable"
+                        ]
+                      },
+                      "right": {
+                        "type": "dict",
+                        "n_keys": 6,
+                        "keys_sample": {
+                          "ID": {
+                            "type": "int",
+                            "value": 2
+                          },
+                          "gammatable_path": {
+                            "type": "str",
+                            "value": "/home/mrsicflogellab/Documents/Ben/Code/GammaTable/GammaTable_Right.mat"
+                          },
+                          "width": {
+                            "type": "int",
+                            "value": 49
+                          },
+                          "distance": {
+                            "type": "int",
+                            "value": 20
+                          },
+                          "photodiode_location": {
+                            "type": "ndarray",
+                            "dtype": "uint8",
+                            "shape": [
+                              0
+                            ],
+                            "size": 0,
+                            "samples": []
+                          },
+                          "gammatable": {
+                            "type": "ndarray",
+                            "dtype": "float64",
+                            "shape": [
+                              1024
+                            ],
+                            "size": 1024,
+                            "min": 0.0,
+                            "max": 0.7765883793910876,
+                            "mean": 0.5503152868781896,
+                            "std": 0.16799967842401833,
+                            "samples": [
+                              0.0,
+                              0.045073872541759236,
+                              0.059919599556635554,
+                              0.07077763117092416,
+                              0.07965497989331244,
+                              0.08730063836001571,
+                              0.0940892601007363,
+                              0.10023918998920077
+                            ]
+                          }
+                        },
+                        "all_keys": [
+                          "ID",
+                          "gammatable_path",
+                          "width",
+                          "distance",
+                          "photodiode_location",
+                          "gammatable"
+                        ]
+                      }
+                    },
+                    "all_keys": [
+                      "left",
+                      "right"
+                    ]
+                  }
+                },
+                "all_keys": [
+                  "datadir",
+                  "teensyport",
+                  "monitors"
+                ]
+              },
+              "trials_data_exp": {
+                "type": "list",
+                "length": 925,
+                "samples": [
+                  {
+                    "type": "dict",
+                    "n_keys": 29,
+                    "keys_sample": {
+                      "Stim1TF": {
+                        "type": "int",
+                        "value": 1
+                      },
+                      "Stim2TF": {
+                        "type": "float",
+                        "value": 1.25
+                      },
+                      "blockType": {
+                        "type": "int",
+                        "value": 0
+                      },
+                      "trialType": {
+                        "type": "str",
+                        "value": "main"
+                      },
+                      "Stim1Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "Stim2Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "rewd": {
+                        "type": "float",
+                        "value": 0.2
+                      },
+                      "blockTypeRewd": {
+                        "type": "int",
+                        "value": 1
+                      }
+                    },
+                    "all_keys": [
+                      "Stim1TF",
+                      "Stim2TF",
+                      "blockType",
+                      "trialType",
+                      "Stim1Ori",
+                      "Stim2Ori",
+                      "rewd",
+                      "blockTypeRewd",
+                      "trialsd",
+                      "St1TrialVector",
+                      "St2TrialVector",
+                      "hazardblock",
+                      "stimT",
+                      "hazardprobe",
+                      "stimD",
+                      "vbl",
+                      "tag",
+                      "phase",
+                      "TF",
+                      "triallog",
+                      "reactiontimes",
+                      "trialoutcome",
+                      "IsHit",
+                      "IsMiss",
+                      "IsFA",
+                      "IsAbort",
+                      "IsEarlyBlock",
+                      "IsLateBlock",
+                      "IsProbe"
+                    ]
+                  },
+                  {
+                    "type": "dict",
+                    "n_keys": 29,
+                    "keys_sample": {
+                      "Stim1TF": {
+                        "type": "int",
+                        "value": 1
+                      },
+                      "Stim2TF": {
+                        "type": "float",
+                        "value": 1.25
+                      },
+                      "blockType": {
+                        "type": "int",
+                        "value": 0
+                      },
+                      "trialType": {
+                        "type": "str",
+                        "value": "main"
+                      },
+                      "Stim1Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "Stim2Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "rewd": {
+                        "type": "float",
+                        "value": 0.2
+                      },
+                      "blockTypeRewd": {
+                        "type": "int",
+                        "value": 1
+                      }
+                    },
+                    "all_keys": [
+                      "Stim1TF",
+                      "Stim2TF",
+                      "blockType",
+                      "trialType",
+                      "Stim1Ori",
+                      "Stim2Ori",
+                      "rewd",
+                      "blockTypeRewd",
+                      "trialsd",
+                      "St1TrialVector",
+                      "St2TrialVector",
+                      "hazardblock",
+                      "stimT",
+                      "hazardprobe",
+                      "stimD",
+                      "vbl",
+                      "tag",
+                      "phase",
+                      "TF",
+                      "triallog",
+                      "reactiontimes",
+                      "trialoutcome",
+                      "IsHit",
+                      "IsMiss",
+                      "IsFA",
+                      "IsAbort",
+                      "IsEarlyBlock",
+                      "IsLateBlock",
+                      "IsProbe"
+                    ]
+                  },
+                  {
+                    "type": "dict",
+                    "n_keys": 29,
+                    "keys_sample": {
+                      "Stim1TF": {
+                        "type": "int",
+                        "value": 1
+                      },
+                      "Stim2TF": {
+                        "type": "float",
+                        "value": 1.25
+                      },
+                      "blockType": {
+                        "type": "int",
+                        "value": 0
+                      },
+                      "trialType": {
+                        "type": "str",
+                        "value": "main"
+                      },
+                      "Stim1Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "Stim2Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "rewd": {
+                        "type": "float",
+                        "value": 0.2
+                      },
+                      "blockTypeRewd": {
+                        "type": "int",
+                        "value": 1
+                      }
+                    },
+                    "all_keys": [
+                      "Stim1TF",
+                      "Stim2TF",
+                      "blockType",
+                      "trialType",
+                      "Stim1Ori",
+                      "Stim2Ori",
+                      "rewd",
+                      "blockTypeRewd",
+                      "trialsd",
+                      "St1TrialVector",
+                      "St2TrialVector",
+                      "hazardblock",
+                      "stimT",
+                      "hazardprobe",
+                      "stimD",
+                      "vbl",
+                      "tag",
+                      "phase",
+                      "TF",
+                      "triallog",
+                      "reactiontimes",
+                      "trialoutcome",
+                      "IsHit",
+                      "IsMiss",
+                      "IsFA",
+                      "IsAbort",
+                      "IsEarlyBlock",
+                      "IsLateBlock",
+                      "IsProbe"
+                    ]
+                  },
+                  {
+                    "type": "dict",
+                    "n_keys": 29,
+                    "keys_sample": {
+                      "Stim1TF": {
+                        "type": "int",
+                        "value": 1
+                      },
+                      "Stim2TF": {
+                        "type": "float",
+                        "value": 1.25
+                      },
+                      "blockType": {
+                        "type": "int",
+                        "value": 0
+                      },
+                      "trialType": {
+                        "type": "str",
+                        "value": "main"
+                      },
+                      "Stim1Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "Stim2Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "rewd": {
+                        "type": "float",
+                        "value": 0.2
+                      },
+                      "blockTypeRewd": {
+                        "type": "int",
+                        "value": 1
+                      }
+                    },
+                    "all_keys": [
+                      "Stim1TF",
+                      "Stim2TF",
+                      "blockType",
+                      "trialType",
+                      "Stim1Ori",
+                      "Stim2Ori",
+                      "rewd",
+                      "blockTypeRewd",
+                      "trialsd",
+                      "St1TrialVector",
+                      "St2TrialVector",
+                      "hazardblock",
+                      "stimT",
+                      "hazardprobe",
+                      "stimD",
+                      "vbl",
+                      "tag",
+                      "phase",
+                      "TF",
+                      "triallog",
+                      "reactiontimes",
+                      "trialoutcome",
+                      "IsHit",
+                      "IsMiss",
+                      "IsFA",
+                      "IsAbort",
+                      "IsEarlyBlock",
+                      "IsLateBlock",
+                      "IsProbe"
+                    ]
+                  },
+                  {
+                    "type": "dict",
+                    "n_keys": 29,
+                    "keys_sample": {
+                      "Stim1TF": {
+                        "type": "int",
+                        "value": 1
+                      },
+                      "Stim2TF": {
+                        "type": "float",
+                        "value": 1.25
+                      },
+                      "blockType": {
+                        "type": "int",
+                        "value": 0
+                      },
+                      "trialType": {
+                        "type": "str",
+                        "value": "main"
+                      },
+                      "Stim1Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "Stim2Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "rewd": {
+                        "type": "float",
+                        "value": 0.2
+                      },
+                      "blockTypeRewd": {
+                        "type": "int",
+                        "value": 1
+                      }
+                    },
+                    "all_keys": [
+                      "Stim1TF",
+                      "Stim2TF",
+                      "blockType",
+                      "trialType",
+                      "Stim1Ori",
+                      "Stim2Ori",
+                      "rewd",
+                      "blockTypeRewd",
+                      "trialsd",
+                      "St1TrialVector",
+                      "St2TrialVector",
+                      "hazardblock",
+                      "stimT",
+                      "hazardprobe",
+                      "stimD",
+                      "vbl",
+                      "tag",
+                      "phase",
+                      "TF",
+                      "triallog",
+                      "reactiontimes",
+                      "trialoutcome",
+                      "IsHit",
+                      "IsMiss",
+                      "IsFA",
+                      "IsAbort",
+                      "IsEarlyBlock",
+                      "IsLateBlock",
+                      "IsProbe"
+                    ]
+                  },
+                  {
+                    "type": "dict",
+                    "n_keys": 29,
+                    "keys_sample": {
+                      "Stim1TF": {
+                        "type": "int",
+                        "value": 1
+                      },
+                      "Stim2TF": {
+                        "type": "float",
+                        "value": 1.25
+                      },
+                      "blockType": {
+                        "type": "int",
+                        "value": 0
+                      },
+                      "trialType": {
+                        "type": "str",
+                        "value": "main"
+                      },
+                      "Stim1Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "Stim2Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "rewd": {
+                        "type": "float",
+                        "value": 0.2
+                      },
+                      "blockTypeRewd": {
+                        "type": "int",
+                        "value": 1
+                      }
+                    },
+                    "all_keys": [
+                      "Stim1TF",
+                      "Stim2TF",
+                      "blockType",
+                      "trialType",
+                      "Stim1Ori",
+                      "Stim2Ori",
+                      "rewd",
+                      "blockTypeRewd",
+                      "trialsd",
+                      "St1TrialVector",
+                      "St2TrialVector",
+                      "hazardblock",
+                      "stimT",
+                      "hazardprobe",
+                      "stimD",
+                      "vbl",
+                      "tag",
+                      "phase",
+                      "TF",
+                      "triallog",
+                      "reactiontimes",
+                      "trialoutcome",
+                      "IsHit",
+                      "IsMiss",
+                      "IsFA",
+                      "IsAbort",
+                      "IsEarlyBlock",
+                      "IsLateBlock",
+                      "IsProbe"
+                    ]
+                  },
+                  {
+                    "type": "dict",
+                    "n_keys": 29,
+                    "keys_sample": {
+                      "Stim1TF": {
+                        "type": "int",
+                        "value": 1
+                      },
+                      "Stim2TF": {
+                        "type": "int",
+                        "value": 4
+                      },
+                      "blockType": {
+                        "type": "int",
+                        "value": 0
+                      },
+                      "trialType": {
+                        "type": "str",
+                        "value": "main"
+                      },
+                      "Stim1Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "Stim2Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "rewd": {
+                        "type": "float",
+                        "value": 0.2
+                      },
+                      "blockTypeRewd": {
+                        "type": "int",
+                        "value": 1
+                      }
+                    },
+                    "all_keys": [
+                      "Stim1TF",
+                      "Stim2TF",
+                      "blockType",
+                      "trialType",
+                      "Stim1Ori",
+                      "Stim2Ori",
+                      "rewd",
+                      "blockTypeRewd",
+                      "trialsd",
+                      "St1TrialVector",
+                      "St2TrialVector",
+                      "hazardblock",
+                      "stimT",
+                      "hazardprobe",
+                      "stimD",
+                      "vbl",
+                      "tag",
+                      "phase",
+                      "TF",
+                      "triallog",
+                      "reactiontimes",
+                      "trialoutcome",
+                      "IsHit",
+                      "IsMiss",
+                      "IsFA",
+                      "IsAbort",
+                      "IsEarlyBlock",
+                      "IsLateBlock",
+                      "IsProbe"
+                    ]
+                  },
+                  {
+                    "type": "dict",
+                    "n_keys": 29,
+                    "keys_sample": {
+                      "Stim1TF": {
+                        "type": "int",
+                        "value": 1
+                      },
+                      "Stim2TF": {
+                        "type": "int",
+                        "value": 4
+                      },
+                      "blockType": {
+                        "type": "int",
+                        "value": 0
+                      },
+                      "trialType": {
+                        "type": "str",
+                        "value": "main"
+                      },
+                      "Stim1Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "Stim2Ori": {
+                        "type": "int",
+                        "value": 270
+                      },
+                      "rewd": {
+                        "type": "float",
+                        "value": 0.2
+                      },
+                      "blockTypeRewd": {
+                        "type": "int",
+                        "value": 1
+                      }
+                    },
+                    "all_keys": [
+                      "Stim1TF",
+                      "Stim2TF",
+                      "blockType",
+                      "trialType",
+                      "Stim1Ori",
+                      "Stim2Ori",
+                      "rewd",
+                      "blockTypeRewd",
+                      "trialsd",
+                      "St1TrialVector",
+                      "St2TrialVector",
+                      "hazardblock",
+                      "stimT",
+                      "hazardprobe",
+                      "stimD",
+                      "vbl",
+                      "tag",
+                      "phase",
+                      "TF",
+                      "triallog",
+                      "reactiontimes",
+                      "trialoutcome",
+                      "IsHit",
+                      "IsMiss",
+                      "IsFA",
+                      "IsAbort",
+                      "IsEarlyBlock",
+                      "IsLateBlock",
+                      "IsProbe"
+                    ]
+                  }
+                ]
+              }
+            },
+            "all_keys": [
+              "SessionSettings",
+              "ComputerSettings",
+              "trials_data_exp"
+            ]
+          }
+        },
+        "all_keys": [
+          "NPX_probes",
+          "NI_events",
+          "behav_data"
+        ]
+      }
+    },
+    "all_keys": [
+      "BG_031_260325"
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+
+Neuroscience Copilot Project Summary (Sep 2025)
+
+Project Context:
+- Analysis of mouse striatal activity during a visual change-detection task.
+- Data includes Neuropixels recordings, behavioral logs, video, and optogenetic stimulation.
+- Goal: Use GitHub Copilot in VS Code to assist with data wrangling, analysis, and visualization.
+
+Files Provided:
+- `20250816_151256_prompt_engineering_cortico_BG_analyses.txt`: Project overview and research questions.
+- `RAW_SESSION_SCHEMA_BG_031_260325.json`: Example session data structure.
+- Instruction files created:
+  - `README.md`: Project overview, experimental setup, data structure, and research questions.
+  - `PROMPT.md`: Coding and analysis instructions, including dimensionality reduction.
+  - `AGENTS.md`: Agent roles for Copilot (DataWrangler, NeuroAnalyst, VizBot).
+  - `.gitignore`: Template for Python, Jupyter, Conda, and VS Code projects.
+  - `copilot_project_summary.txt`: Summary for future sessions.
+
+Setup Steps Completed:
+1. Created a new Conda environment with Python 3.10.
+2. Installed core packages: numpy, pandas, matplotlib, seaborn, scikit-learn, jupyter.
+3. Initialized a Git repository locally.
+4. Created a GitHub repo and connected it to the local folder.
+5. Added instruction files and organized folder structure.
+6. Opened the folder in VS Code and enabled GitHub Copilot.
+
+Best Practices Discussed:
+- Use instruction files to guide Copilot.
+- Keep raw data separate from scripts and notebooks.
+- Use version control and `.gitignore` to manage files.
+- Keep QC and filtering logic flexible (in code or comments).
+- Update instruction files as project evolves.
+
+Next Steps:
+- Begin analysis and visualization using Copilot.
+- Add new biological questions or analysis tasks to `PROMPT.md` or `README.md`.
+- Use this summary to resume the project in future sessions.
