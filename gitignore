@@ -151,3 +151,5 @@ Desktop.ini
 
 # Data folders (optional, if you want to keep data out of git)
 data/
+database/
+png_output/
