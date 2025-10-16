@@ -154,3 +154,16 @@ data/
 database/
 png_output/
 table_output/
+tmp_demo_qc/
+cleanup_archive/
+bombcell_plots/
+optotagging/
+notebooks/
+
+# Results / outputs (keep generated tables, figures, and temporary outputs out of git)
+results/
+figures/
+outputs/
+*.png
+*.pdf
+*.csv

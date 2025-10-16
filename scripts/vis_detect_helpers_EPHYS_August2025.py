@@ -1,61 +1,29 @@
 # session_utils.py
 
 import pickle
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
+from typing import List, Optional, Any
 import numpy as np
+
+# Import the canonical dataclasses and IO helpers from the new package.
+from visdetect.session import Trial, Cluster, Session
+from visdetect.io import mat_struct_to_dict, parse_good_cluster_ids
 import scipy.io
 
-# ------------------ Data Classes ------------------
-
-@dataclass
-class Trial:
-    trialoutcome: str
-    reactiontimes: Dict[str, float] = field(default_factory=dict)
-    change_size: Optional[int] = None
-    orientation: Optional[int] = None
-    ITI: Optional[float] = None
-    change_time: Optional[float] = None
-    baseline_values: Optional[float] = None
-
-@dataclass
-class Cluster:
-    cluster_id: int
-    spike_times: np.ndarray
-    quality: Optional[str] = None
-
-@dataclass
-class Session:
-    trials: List[Trial]
-    clusters: List[Cluster]
-    subject: str
-    session_name: str
-    good_cluster_ids: Optional[List[int]] = None
-    ni_events: Optional[dict] = None
-
-# ------------------ Helper Functions ------------------
 
 def save_session_to_file(session: Session, filename: str):
     with open(filename, 'wb') as f:
         pickle.dump(session, f)
+
 
 def load_session_from_file(filename: str) -> Session:
     with open(filename, 'rb') as f:
         session = pickle.load(f)
     return session
 
-def mat_struct_to_dict(obj):
-    if isinstance(obj, np.ndarray):
-        if obj.dtype == 'O':
-            return [mat_struct_to_dict(o) for o in obj]
-        else:
-            return obj
-    elif hasattr(obj, '_fieldnames'):
-        return {field: mat_struct_to_dict(getattr(obj, field)) for field in obj._fieldnames}
-    else:
-        return obj
 
 def load_mat_file_to_session(mat_path: str) -> Session:
+    # This wrapper preserves the original behavior but delegates parsing to
+    # shared helpers where possible.
     data = scipy.io.loadmat(mat_path, struct_as_record=False, squeeze_me=True)
     data = mat_struct_to_dict(data)
     if 'data' in data:
@@ -99,13 +67,10 @@ def load_mat_file_to_session(mat_path: str) -> Session:
 
     good_cluster_ids = None
     if 'cluster_id_KS_good' in npx_probes:
-        good_ids = npx_probes['cluster_id_KS_good']
-        if isinstance(good_ids, (np.ndarray, list)):
-            good_cluster_ids = [int(x) for x in np.array(good_ids).flatten()]
-        else:
-            good_cluster_ids = [int(good_ids)]
+        good_cluster_ids = parse_good_cluster_ids(npx_probes['cluster_id_KS_good'])
 
-    ni_events = session_data.get('NI_events', None)
+    ni_events_raw = session_data.get('NI_events', None)
+    ni_events = mat_struct_to_dict(ni_events_raw) if ni_events_raw is not None else None
     session_name_str = ni_events.get('session_name', 'unknown') if ni_events else 'unknown'
     parts = session_name_str.split('_')
     subject = '_'.join(parts[:2]) if len(parts) >= 3 else session_name_str
