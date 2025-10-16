@@ -1,5 +1,9 @@
 import numpy as np
-from src.population import compute_condition_averages, compute_coding_direction, project_onto_cd
+from src.population import (
+    compute_condition_averages,
+    compute_coding_direction,
+    project_onto_cd,
+)
 
 
 def test_cd_projection_simple():

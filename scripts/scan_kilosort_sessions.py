@@ -12,6 +12,7 @@ Outputs:
 
 This script is conservative and configurable; edit the patterns near the top if your lab uses different filenames.
 """
+
 import argparse
 import json
 import os
@@ -54,10 +55,24 @@ def check_folder(folder_path: Path):
     has_spike_npy = any(name in lower_items for name in SPIKE_NPY_FILES)
     has_phy = any(name in lower_items for name in PHY_CLUSTER_FILES)
 
-    has_chanmap = any(fnmatch.fnmatch(n.lower(), pat.lower()) for pat in CHANMAP_PATTERNS for n in lower_items)
-    has_bin = any(n.lower().endswith(suffix) for n in lower_items for suffix in BINARY_SUFFIXES)
+    has_chanmap = any(
+        fnmatch.fnmatch(n.lower(), pat.lower())
+        for pat in CHANMAP_PATTERNS
+        for n in lower_items
+    )
+    has_bin = any(
+        n.lower().endswith(suffix) for n in lower_items for suffix in BINARY_SUFFIXES
+    )
 
-    has_phy_dir = any(p.is_dir() and (p.name.lower().startswith("phy") or "phy" in p.name.lower() or p.name.lower().startswith("sorting")) for p in items)
+    has_phy_dir = any(
+        p.is_dir()
+        and (
+            p.name.lower().startswith("phy")
+            or "phy" in p.name.lower()
+            or p.name.lower().startswith("sorting")
+        )
+        for p in items
+    )
 
     notes = []
     if has_rez:
@@ -108,11 +123,21 @@ def scan(root_path: Path, max_depth: int = 4, verbose: bool = False):
         p = Path(dirpath)
         lower_files = {f.lower() for f in filenames}
         interesting = False
-        if lower_files & SPIKE_NPY_FILES or "rez.mat" in lower_files or lower_files & PHY_CLUSTER_FILES:
+        if (
+            lower_files & SPIKE_NPY_FILES
+            or "rez.mat" in lower_files
+            or lower_files & PHY_CLUSTER_FILES
+        ):
             interesting = True
-        if any(f.lower().endswith(suffix) for f in filenames for suffix in BINARY_SUFFIXES):
+        if any(
+            f.lower().endswith(suffix) for f in filenames for suffix in BINARY_SUFFIXES
+        ):
             interesting = True
-        if any(fnmatch.fnmatch(p.name.lower(), "*session*") or fnmatch.fnmatch(p.name.lower(), "*recording*") for f in filenames):
+        if any(
+            fnmatch.fnmatch(p.name.lower(), "*session*")
+            or fnmatch.fnmatch(p.name.lower(), "*recording*")
+            for f in filenames
+        ):
             interesting = True
 
         if interesting:
@@ -124,7 +149,17 @@ def scan(root_path: Path, max_depth: int = 4, verbose: bool = False):
 
 
 def save_csv(results, outpath):
-    keys = ["path","status","has_rez","has_spike_npy","has_phy_clusters","has_phy_dir","has_chanmap","has_bin","notes"]
+    keys = [
+        "path",
+        "status",
+        "has_rez",
+        "has_spike_npy",
+        "has_phy_clusters",
+        "has_phy_dir",
+        "has_chanmap",
+        "has_bin",
+        "notes",
+    ]
     with open(outpath, "w", newline="", encoding="utf8") as f:
         writer = csv.DictWriter(f, keys)
         writer.writeheader()
@@ -138,11 +173,18 @@ def save_json(results, outpath):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Scan directory tree for Kilosort sessions")
+    ap = argparse.ArgumentParser(
+        description="Scan directory tree for Kilosort sessions"
+    )
     ap.add_argument("root", help="Root directory to scan")
     ap.add_argument("--csv", help="Write CSV report path")
     ap.add_argument("--json", help="Write JSON report path")
-    ap.add_argument("--max-depth", type=int, default=6, help="Max recursion depth relative to root (default 6)")
+    ap.add_argument(
+        "--max-depth",
+        type=int,
+        default=6,
+        help="Max recursion depth relative to root (default 6)",
+    )
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -151,11 +193,15 @@ def main():
         # Try to handle Windows-style path when running in POSIX shell
         # Convert X:\... to /mnt/x/... or /x/... heuristically isn't reliable here, so error out with helpful message
         print(f"ERROR: root not found: {root}")
-        print("If this is a Windows network path (e.g. X:\\\\share\\... ), ensure the drive is mounted and accessible from this shell.")
+        print(
+            "If this is a Windows network path (e.g. X:\\\\share\\... ), ensure the drive is mounted and accessible from this shell."
+        )
         return 2
 
     results = scan(root, max_depth=args.max_depth, verbose=args.verbose)
-    print(f"Found {len(results)} candidate folders with Kilosort/Phy outputs under {root}")
+    print(
+        f"Found {len(results)} candidate folders with Kilosort/Phy outputs under {root}"
+    )
 
     if args.csv:
         save_csv(results, args.csv)
@@ -169,6 +215,7 @@ def main():
         summary.setdefault(r.get("status", "Unknown"), 0)
         summary[r.get("status", "Unknown")] += 1
     print("Summary:", summary)
+
 
 if __name__ == "__main__":
     main()

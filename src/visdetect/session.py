@@ -3,6 +3,7 @@
 This module contains small dataclasses representing a Trial, Cluster, and
 Session. These are intentionally minimal and should be extended as needed.
 """
+
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 import numpy as np

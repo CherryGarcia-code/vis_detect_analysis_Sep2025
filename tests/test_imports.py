@@ -7,13 +7,13 @@ def test_basic_imports():
     repo_root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo_root))
 
-    importlib.import_module('src.optotagging')
-    importlib.import_module('src.unit_tracking')
-    importlib.import_module('src.responsive_analysis')
+    importlib.import_module("src.optotagging")
+    importlib.import_module("src.unit_tracking")
+    importlib.import_module("src.responsive_analysis")
     # ensure the runner script is syntactically valid
-    importlib.import_module('scripts.run_demo_pipeline')
-    importlib.import_module('scripts.run_batch')
-    importlib.import_module('src.kilosort_adapter')
-    from src.kilosort_adapter import attach_kilosort_waveforms
-    importlib.import_module('src.integrations.bombcell_wrapper')
-    importlib.import_module('scripts.run_bombcell_wrapper')
+    importlib.import_module("scripts.run_demo_pipeline")
+    importlib.import_module("scripts.run_batch")
+    importlib.import_module("src.kilosort_adapter")
+
+    importlib.import_module("src.integrations.bombcell_wrapper")
+    importlib.import_module("scripts.run_bombcell_wrapper")

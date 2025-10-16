@@ -1,12 +1,13 @@
 import numpy as np
 from typing import Dict, Any, Tuple
 
+
 def estimate_sample_rate_from_laser(laser: Dict[str, Any]) -> float:
     """Estimate sample rate when rise/fall are in samples and duration in seconds.
     Returns sample_rate (Hz)."""
-    rise = np.asarray(laser.get('rise_t'))
-    fall = np.asarray(laser.get('fall_t'))
-    dur = np.asarray(laser.get('duration'))
+    rise = np.asarray(laser.get("rise_t"))
+    fall = np.asarray(laser.get("fall_t"))
+    dur = np.asarray(laser.get("duration"))
     if rise.size == 0 or fall.size == 0 or dur.size == 0:
         return 30000.0
     # If rise values are clearly > 1 (likely sample indices) and durations < 1 (s)
@@ -20,20 +21,25 @@ def estimate_sample_rate_from_laser(laser: Dict[str, Any]) -> float:
     return 30000.0
 
 
-def pulses_from_ni_events(ni_events: Dict[str, Any], prefer_sample_rate: float = None, split_blocks: bool = False, gap_threshold_s: float = 2.0) -> Tuple[Dict[str, np.ndarray], float]:
+def pulses_from_ni_events(
+    ni_events: Dict[str, Any],
+    prefer_sample_rate: float = None,
+    split_blocks: bool = False,
+    gap_threshold_s: float = 2.0,
+) -> Tuple[Dict[str, np.ndarray], float]:
     """Extract pulse onsets/offsets and durations from ni_events Laser field.
 
     Returns (pulses_dict, sample_rate)
     pulses_dict keys: onset_samples, offset_samples, onset_s, offset_s, duration_s
     """
     if ni_events is None:
-        raise ValueError('ni_events is None')
-    if 'Laser' not in ni_events:
-        raise ValueError('ni_events does not contain Laser')
-    laser = ni_events['Laser']
-    rise = np.asarray(laser.get('rise_t'))
-    fall = np.asarray(laser.get('fall_t'))
-    dur = np.asarray(laser.get('duration'))
+        raise ValueError("ni_events is None")
+    if "Laser" not in ni_events:
+        raise ValueError("ni_events does not contain Laser")
+    laser = ni_events["Laser"]
+    rise = np.asarray(laser.get("rise_t"))
+    fall = np.asarray(laser.get("fall_t"))
+    dur = np.asarray(laser.get("duration"))
 
     # Estimate sample rate
     if prefer_sample_rate is not None:
@@ -58,11 +64,11 @@ def pulses_from_ni_events(ni_events: Dict[str, Any], prefer_sample_rate: float =
         offset_samples = offset_s * sr
 
     pulses = {
-        'onset_samples': onset_samples,
-        'offset_samples': offset_samples,
-        'onset_s': onset_s,
-        'offset_s': offset_s,
-        'duration_s': duration_s,
+        "onset_samples": onset_samples,
+        "offset_samples": offset_samples,
+        "onset_s": onset_s,
+        "offset_s": offset_s,
+        "duration_s": duration_s,
     }
 
     # Optionally detect separate pulse blocks by looking for large gaps between onsets
@@ -73,7 +79,7 @@ def pulses_from_ni_events(ni_events: Dict[str, Any], prefer_sample_rate: float =
             block_ids = np.zeros(n_onsets, dtype=int)
             block_ids[:501] = 0
             block_ids[501:] = 1
-            pulses['block_id'] = block_ids
+            pulses["block_id"] = block_ids
         else:
             # compute gaps (in seconds)
             if n_onsets >= 2:
@@ -86,11 +92,11 @@ def pulses_from_ni_events(ni_events: Dict[str, Any], prefer_sample_rate: float =
                     block_ids = np.zeros(n_onsets, dtype=int)
                     block_ids[: max_gap_idx + 1] = 0
                     block_ids[max_gap_idx + 1 :] = 1
-                    pulses['block_id'] = block_ids
+                    pulses["block_id"] = block_ids
                 else:
                     # no large gaps found; single block
-                    pulses['block_id'] = np.zeros(n_onsets, dtype=int)
+                    pulses["block_id"] = np.zeros(n_onsets, dtype=int)
             else:
-                pulses['block_id'] = np.zeros(n_onsets, dtype=int)
+                pulses["block_id"] = np.zeros(n_onsets, dtype=int)
 
     return pulses, sr

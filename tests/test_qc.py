@@ -5,12 +5,12 @@ from src.qc import run_qc
 
 def test_run_qc_example(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
-    pkl = repo_root / 'data' / 'BG_031_260325.pkl'
+    pkl = repo_root / "data" / "BG_031_260325.pkl"
     session = load_session(str(pkl))
-    outdir = tmp_path / 'qc_out'
+    outdir = tmp_path / "qc_out"
     res = run_qc(session, str(outdir))
     # Check files exist
-    for k in ['summary_path', 'clusters_qc_path', 'trials_qc_path']:
+    for k in ["summary_path", "clusters_qc_path", "trials_qc_path"]:
         p = Path(res[k])
         assert p.exists()
     # Expect at least one cluster and one trial

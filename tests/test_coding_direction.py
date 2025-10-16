@@ -14,11 +14,21 @@ def test_time_resolved_cd_recovery():
     cond[50:] = True
     # Inject a time-resolved effect in bins 8-12 for a larger subset of units
     effected_units = np.arange(15)
-    pop[cond, 8:13, :][:, :, effected_units] += 3.0  # stronger boost for class 1 to ensure detectability
+    pop[cond, 8:13, :][:, :, effected_units] += (
+        3.0  # stronger boost for class 1 to ensure detectability
+    )
 
     # Use a small permutation count for speed; the test asserts recovery by magnitude and location only
-    res = time_resolved_cd(pop, cond, method='shrinkage', reg=1.0, n_splits=5, n_permutations=50, random_state=0)
-    eff = res['effect']
+    res = time_resolved_cd(
+        pop,
+        cond,
+        method="shrinkage",
+        reg=1.0,
+        n_splits=5,
+        n_permutations=50,
+        random_state=0,
+    )
+    eff = res["effect"]
     # Check max effect occurs in the effected bins
     max_bin = np.argmax(eff)
     assert 8 <= max_bin <= 12

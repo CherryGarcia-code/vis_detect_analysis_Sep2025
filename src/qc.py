@@ -4,12 +4,14 @@ Functions
 ---------
 - run_qc(session, outdir): runs QC and writes JSON summary and a couple of PNG plots.
 """
+
 from pathlib import Path
 from typing import Dict, Any
 import numpy as np
 import json
 import matplotlib
-matplotlib.use('Agg')
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
@@ -37,11 +39,11 @@ def cluster_qc_stats(cluster, session_duration: float) -> Dict[str, Any]:
     isi_violations = int(np.sum(isi < 0.002)) if isi.size > 0 else 0
     isi_frac = float(isi_violations / isi.size) if isi.size > 0 else 0.0
     return {
-        'cluster_id': int(cluster.cluster_id),
-        'n_spikes': n_spikes,
-        'mean_rate_hz': mean_rate,
-        'isi_violations_count': isi_violations,
-        'isi_violations_frac': isi_frac,
+        "cluster_id": int(cluster.cluster_id),
+        "n_spikes": n_spikes,
+        "mean_rate_hz": mean_rate,
+        "isi_violations_count": isi_violations,
+        "isi_violations_frac": isi_frac,
     }
 
 
@@ -50,19 +52,29 @@ def trial_qc_stats(session) -> Dict[str, Any]:
     missing_change_time = 0
     missing_rt = 0
     for t in session.trials:
-        o = getattr(t, 'trialoutcome', None) or (t.get('trialoutcome') if isinstance(t, dict) else None)
+        o = getattr(t, "trialoutcome", None) or (
+            t.get("trialoutcome") if isinstance(t, dict) else None
+        )
         outcomes[o] = outcomes.get(o, 0) + 1
-        ct = getattr(t, 'change_time', None) if not isinstance(t, dict) else t.get('change_time', None)
+        ct = (
+            getattr(t, "change_time", None)
+            if not isinstance(t, dict)
+            else t.get("change_time", None)
+        )
         if ct is None:
             missing_change_time += 1
-        rt_dict = getattr(t, 'reactiontimes', None) if not isinstance(t, dict) else t.get('reactiontimes', None)
+        rt_dict = (
+            getattr(t, "reactiontimes", None)
+            if not isinstance(t, dict)
+            else t.get("reactiontimes", None)
+        )
         if not rt_dict:
             missing_rt += 1
     return {
-        'n_trials': len(session.trials),
-        'outcome_counts': outcomes,
-        'missing_change_time': missing_change_time,
-        'trials_missing_reactiontimes': missing_rt,
+        "n_trials": len(session.trials),
+        "outcome_counts": outcomes,
+        "missing_change_time": missing_change_time,
+        "trials_missing_reactiontimes": missing_rt,
     }
 
 
@@ -80,51 +92,56 @@ def run_qc(session, outdir: str):
 
     # Summary
     summary = {
-        'subject': session.subject,
-        'session_name': session.session_name,
-        'n_clusters': len(session.clusters),
-        'n_trials': len(session.trials),
-        'n_good_clusters': len(session.good_cluster_ids) if session.good_cluster_ids else None,
-        'session_duration_s': sdur,
+        "subject": session.subject,
+        "session_name": session.session_name,
+        "n_clusters": len(session.clusters),
+        "n_trials": len(session.trials),
+        "n_good_clusters": len(session.good_cluster_ids)
+        if session.good_cluster_ids
+        else None,
+        "session_duration_s": sdur,
     }
 
     # Write JSON files
-    with (out / 'qc_summary.json').open('w') as f:
+    with (out / "qc_summary.json").open("w") as f:
         json.dump(summary, f, indent=2)
-    with (out / 'clusters_qc.json').open('w') as f:
+    with (out / "clusters_qc.json").open("w") as f:
         json.dump(clusters_stats, f, indent=2)
-    with (out / 'trials_qc.json').open('w') as f:
+    with (out / "trials_qc.json").open("w") as f:
         json.dump(trial_stats, f, indent=2)
 
     # Plots: firing rate histogram and ISI violation fraction scatter
-    rates = np.array([c['mean_rate_hz'] for c in clusters_stats])
-    plt.figure(figsize=(6,4))
+    rates = np.array([c["mean_rate_hz"] for c in clusters_stats])
+    plt.figure(figsize=(6, 4))
     plt.hist(rates, bins=50)
-    plt.xlabel('Mean firing rate (Hz)')
-    plt.ylabel('Number of clusters')
-    plt.title('Cluster mean rate distribution')
+    plt.xlabel("Mean firing rate (Hz)")
+    plt.ylabel("Number of clusters")
+    plt.title("Cluster mean rate distribution")
     plt.tight_layout()
-    plt.savefig(out / 'cluster_mean_rate_hist.png', dpi=120)
+    plt.savefig(out / "cluster_mean_rate_hist.png", dpi=120)
     plt.close()
 
-    isi_fracs = np.array([c['isi_violations_frac'] for c in clusters_stats])
-    cluster_ids = np.array([c['cluster_id'] for c in clusters_stats])
-    plt.figure(figsize=(6,4))
+    isi_fracs = np.array([c["isi_violations_frac"] for c in clusters_stats])
+    cluster_ids = np.array([c["cluster_id"] for c in clusters_stats])
+    plt.figure(figsize=(6, 4))
     plt.scatter(cluster_ids, isi_fracs, s=6)
-    plt.xlabel('Cluster ID')
-    plt.ylabel('ISI violation fraction (<2 ms)')
-    plt.title('ISI violation fraction per cluster')
+    plt.xlabel("Cluster ID")
+    plt.ylabel("ISI violation fraction (<2 ms)")
+    plt.title("ISI violation fraction per cluster")
     plt.tight_layout()
-    plt.savefig(out / 'isi_violation_scatter.png', dpi=120)
+    plt.savefig(out / "isi_violation_scatter.png", dpi=120)
     plt.close()
 
     return {
-        'summary_path': str(out / 'qc_summary.json'),
-        'clusters_qc_path': str(out / 'clusters_qc.json'),
-        'trials_qc_path': str(out / 'trials_qc.json'),
-        'plots': [str(out / 'cluster_mean_rate_hist.png'), str(out / 'isi_violation_scatter.png')]
+        "summary_path": str(out / "qc_summary.json"),
+        "clusters_qc_path": str(out / "clusters_qc.json"),
+        "trials_qc_path": str(out / "trials_qc.json"),
+        "plots": [
+            str(out / "cluster_mean_rate_hist.png"),
+            str(out / "isi_violation_scatter.png"),
+        ],
     }
 
 
-if __name__ == '__main__':
-    print('qc module: import and call run_qc(session, outdir)')
+if __name__ == "__main__":
+    print("qc module: import and call run_qc(session, outdir)")

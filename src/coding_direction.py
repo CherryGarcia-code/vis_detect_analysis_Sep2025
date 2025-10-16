@@ -6,8 +6,9 @@ Functions
 - time_resolved_cd(pop, cond_mask, method='shrinkage', reg=1.0, n_splits=5, n_permutations=200, random_state=0)
   where pop is trials x bins x units; returns cds (bins x units), proj (trials x bins), pvals (bins)
 """
+
 import numpy as np
-from typing import Tuple, Dict, Any
+from typing import Dict, Any
 
 
 def _stratified_kfold_indices(y: np.ndarray, n_splits: int, random_state: int = 0):
@@ -33,7 +34,9 @@ def _stratified_kfold_indices(y: np.ndarray, n_splits: int, random_state: int = 
         per_class_folds[c] = np.array_split(idxs, n_splits)
 
     for k in range(n_splits):
-        test_idx = np.concatenate([per_class_folds[c][k] for c in classes if len(per_class_folds[c][k]) > 0])
+        test_idx = np.concatenate(
+            [per_class_folds[c][k] for c in classes if len(per_class_folds[c][k]) > 0]
+        )
         train_idx = np.setdiff1d(np.arange(len(y)), test_idx, assume_unique=True)
         folds.append((train_idx, test_idx))
     return folds
@@ -91,6 +94,7 @@ def compute_cd_ridge(X: np.ndarray, y: np.ndarray, alpha: float = 1.0) -> np.nda
     """
     # Use closed-form ridge (centered)
     from .coding_direction import _ridge_closed_form as _rcf  # type: ignore
+
     w = _rcf(X, y, alpha=alpha)
     norm = np.linalg.norm(w)
     if norm == 0:
@@ -98,7 +102,15 @@ def compute_cd_ridge(X: np.ndarray, y: np.ndarray, alpha: float = 1.0) -> np.nda
     return w / norm
 
 
-def time_resolved_cd(pop: np.ndarray, cond_mask: np.ndarray, method: str = 'shrinkage', reg: float = 1.0, n_splits: int = 5, n_permutations: int = 200, random_state: int = 0) -> Dict[str, Any]:
+def time_resolved_cd(
+    pop: np.ndarray,
+    cond_mask: np.ndarray,
+    method: str = "shrinkage",
+    reg: float = 1.0,
+    n_splits: int = 5,
+    n_permutations: int = 200,
+    random_state: int = 0,
+) -> Dict[str, Any]:
     """Compute time-resolved coding directions.
 
     pop: trials x bins x units
@@ -115,7 +127,7 @@ def time_resolved_cd(pop: np.ndarray, cond_mask: np.ndarray, method: str = 'shri
     y = cond_mask.astype(int)
     # Ensure both classes present
     if y.sum() == 0 or y.sum() == len(y):
-        raise ValueError('Need both classes present in cond_mask')
+        raise ValueError("Need both classes present in cond_mask")
 
     folds = _stratified_kfold_indices(y, n_splits=n_splits, random_state=random_state)
     proj = np.zeros((trials, bins), dtype=float)
@@ -139,7 +151,7 @@ def time_resolved_cd(pop: np.ndarray, cond_mask: np.ndarray, method: str = 'shri
             if len(np.unique(y_train)) < 2:
                 # cannot compute a discriminative direction with only one class
                 continue
-            if method == 'shrinkage':
+            if method == "shrinkage":
                 cd = compute_cd_shrinkage(X_train, y_train, reg=reg)
             else:
                 # compute ridge via closed form
@@ -186,7 +198,7 @@ def time_resolved_cd(pop: np.ndarray, cond_mask: np.ndarray, method: str = 'shri
                 y_train = y_perm[train_idx]
                 if len(np.unique(y_train)) < 2:
                     continue
-                if method == 'shrinkage':
+                if method == "shrinkage":
                     cd_perm = compute_cd_shrinkage(X_train, y_train, reg=reg)
                 else:
                     cd_perm = _ridge_closed_form(X_train, y_train, alpha=reg)
@@ -198,16 +210,24 @@ def time_resolved_cd(pop: np.ndarray, cond_mask: np.ndarray, method: str = 'shri
                     except Exception:
                         pass
         # compute effect for this permutation
-        perm_effects[i] = proj_perm[y_perm == 1].mean(axis=0) - proj_perm[y_perm == 0].mean(axis=0)
+        perm_effects[i] = proj_perm[y_perm == 1].mean(axis=0) - proj_perm[
+            y_perm == 0
+        ].mean(axis=0)
 
     # p-values (two-sided)
-    pvals = np.array([((np.abs(perm_effects[:, b]) >= abs(effect[b])).sum() + 1) / (n_permutations + 1) for b in range(bins)])
+    pvals = np.array(
+        [
+            ((np.abs(perm_effects[:, b]) >= abs(effect[b])).sum() + 1)
+            / (n_permutations + 1)
+            for b in range(bins)
+        ]
+    )
 
     return {
-        'cds': cds,
-        'proj': proj,
-        'pvals': pvals,
-        'effect': effect,
-        'mean0': mean0,
-        'mean1': mean1
+        "cds": cds,
+        "proj": proj,
+        "pvals": pvals,
+        "effect": effect,
+        "mean0": mean0,
+        "mean1": mean1,
     }

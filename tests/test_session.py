@@ -17,8 +17,8 @@ def test_parse_nested_array():
 
 
 def test_parse_string_and_bytes():
-    assert parse_good_cluster_ids('4') == [4]
-    assert parse_good_cluster_ids(b'6') == [6]
+    assert parse_good_cluster_ids("4") == [4]
+    assert parse_good_cluster_ids(b"6") == [6]
 
 
 def test_parse_empty_or_nan():

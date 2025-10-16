@@ -5,11 +5,13 @@ Functions
 - compute_coding_direction(avgA, avgB)
 - project_onto_cd(population_matrix, cd)
 """
+
 import numpy as np
-from typing import Tuple
 
 
-def compute_condition_averages(population_matrix: np.ndarray, condition_trials: np.ndarray) -> np.ndarray:
+def compute_condition_averages(
+    population_matrix: np.ndarray, condition_trials: np.ndarray
+) -> np.ndarray:
     """population_matrix: units x (trials x time) or trials x bins x units depending on usage.
     Here we expect trials x units (averaged in a given time window) for simplicity.
     condition_trials: boolean mask over trials.
@@ -18,15 +20,14 @@ def compute_condition_averages(population_matrix: np.ndarray, condition_trials: 
     if population_matrix.ndim == 3:
         # trials x bins x units -> average over trials then bins
         trials = population_matrix[condition_trials]
-        return trials.mean(axis=(0,1))
+        return trials.mean(axis=(0, 1))
     else:
         trials = population_matrix[condition_trials]
         return trials.mean(axis=0)
 
 
 def compute_coding_direction(avgA: np.ndarray, avgB: np.ndarray) -> np.ndarray:
-    """Compute coding direction vector from avgA to avgB (unit vector).
-    """
+    """Compute coding direction vector from avgA to avgB (unit vector)."""
     diff = (avgB - avgA).astype(float)
     norm = np.linalg.norm(diff)
     if norm == 0:
