@@ -5,9 +5,12 @@ channels:
   - conda-forge
 dependencies:
   - python=3.10
-  - numpy
+  - "numpy<2"
   - pandas
   - matplotlib
   - seaborn
   - scikit-learn
+  - scipy
+  - h5py
+  - pytest
   - jupyter

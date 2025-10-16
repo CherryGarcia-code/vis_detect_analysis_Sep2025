@@ -1,0 +1,11 @@
+sessions:
+  - path: "X:\\public\\projects\\BeJG_20230130_VisDetect\\wEPhys\\BG_031\\Processed data\\BG_031_260325\\Kilosort&Phy\\BG_031_260325_g0_imec0"
+    has_bombcell: true
+    note: "Bombcell run saved in notebooks/BG_031_260325/bombcell"
+    bombcell_dir: "notebooks/BG_031_260325/bombcell"
+  - path: "X:\\public\\projects\\BeJG_20230130_VisDetect\\wEPhys\\BG_031\\Processed data\\BG_031_25042025\\Kilosort&Phy\\BG_031_25042025_g0_imec0"
+    has_bombcell: true
+    note: "Bombcell run saved in notebooks/BG_031_250425/bombcell"
+    bombcell_dir: "notebooks/BG_031_250425/bombcell"
+report_dir: "table_output/unitmatch"
+use_auto_shanks: true

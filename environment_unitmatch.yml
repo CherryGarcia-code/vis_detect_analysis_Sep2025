@@ -1,0 +1,23 @@
+name: unitmatch_env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - "numpy<2"
+  - scipy
+  - pandas
+  - matplotlib
+  - seaborn
+  - scikit-learn
+  - joblib
+  - tqdm
+  - tk
+  - pip
+  - ipykernel
+  - h5py
+  - pytest
+  - jupyter
+  - pip:
+      - mtscomp
+      - UnitMatchPy
