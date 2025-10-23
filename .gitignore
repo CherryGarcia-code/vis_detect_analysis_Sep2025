@@ -167,3 +167,9 @@ outputs/
 *.png
 *.pdf
 *.csv
+
+# Additional local artifacts to ignore
+# Kilosort counts dump occasionally written by diagnostic script
+scripts/kilosort4_counts.tsv
+# Local channel map .mat files that shouldn't be versioned
+chanMap_*.mat
