@@ -4,7 +4,7 @@ This module provides small utilities to compute per-cluster QC metrics and
 to plot a raster + PSTH aligned to events (e.g., Change_ON). It is intentionally
 lightweight and depends on the repository's `src` helpers (session_io, align).
 """
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any, Sequence
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -13,6 +13,7 @@ from scipy.ndimage import gaussian_filter1d
 
 from src.session_io import load_session
 from src import align as align_mod
+from src import qc as qc_mod
 
 
 def compute_qc_table(session, event_name: str = "Change_ON", window: Tuple[float, float] = (-0.5, 1.0), bin_size: float = 0.02) -> pd.DataFrame:
@@ -378,3 +379,542 @@ def demo_for_session(session_path: str, out_dir: str = "png_output/demo_single_u
         pngs.append(str(png))
 
     return {"qc_csv": str(qc_csv), "pngs": pngs}
+
+
+# ------------------------------
+# Kept-units integration helpers
+# ------------------------------
+
+def selection_csv_default_path(session, root: str = "table_output/unit_qc") -> Path:
+    subject = getattr(session, "subject", None) or "unknown"
+    sname = getattr(session, "session_name", None) or "unknown"
+    return Path(root) / f"{subject}_{sname}" / "unit_selection.csv"
+
+
+def load_kept_ids(
+    session,
+    selection_csv: Optional[str] = None,
+) -> List[int]:
+    """Return kept cluster IDs from a selection CSV; falls back to session.good_cluster_ids.
+
+    If selection_csv is not provided, tries the conventional path under table_output/unit_qc/.
+    """
+    if selection_csv is None:
+        p = selection_csv_default_path(session)
+    else:
+        p = Path(selection_csv)
+    if p.exists():
+        ids = qc_mod.read_kept_cluster_ids(str(p))
+        if ids:
+            return ids
+    # Fallback: use good_cluster_ids if present
+    gids = getattr(session, "good_cluster_ids", None)
+    if gids:
+        return list(map(int, gids))
+    return []
+
+
+def plot_population_heatmap(
+    session,
+    event_name: str = "Baseline_ON",
+    window: Tuple[float, float] = (-0.5, 1.0),
+    bin_size: float = 0.02,
+    selection_csv: Optional[str] = None,
+    kept_ids: Optional[List[int]] = None,
+    normalize: str = "zscore",
+    vmax_percentile: float = 99.0,
+    figsize: Tuple[int, int] = (10, 6),
+    save_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Plot per-unit mean PSTH heatmaps for kept vs dropped units around event.
+
+    Returns dict with figure and the arrays used.
+    """
+    if kept_ids is None:
+        kept_ids = load_kept_ids(session, selection_csv)
+    kept_set = set(kept_ids)
+    event_times = align_mod.get_event_times(session, event_name)
+
+    psths = []
+    ids = []
+    for c in session.clusters:
+        trials_mat, bin_centers = align_mod.align_spikes_to_events(
+            c.spike_times, event_times, window=window, bin_size=bin_size
+        )
+        m = np.nanmean(trials_mat, axis=0) if trials_mat.shape[0] > 0 else np.zeros(len(bin_centers))
+        psths.append(m)
+        ids.append(int(c.cluster_id))
+
+    if len(psths) == 0:
+        raise ValueError("No clusters available for heatmap")
+
+    M = np.vstack(psths)  # units x time
+    # normalization
+    if normalize == "zscore":
+        mu = M.mean(axis=1, keepdims=True)
+        sd = M.std(axis=1, keepdims=True)
+        sd[sd == 0] = 1.0
+        Mnorm = (M - mu) / sd
+    elif normalize == "minmax":
+        mn = M.min(axis=1, keepdims=True)
+        mx = M.max(axis=1, keepdims=True)
+        rng = np.where((mx - mn) == 0, 1.0, (mx - mn))
+        Mnorm = (M - mn) / rng
+    else:
+        Mnorm = M
+
+    # split kept/dropped
+    kept_idx = [i for i, cid in enumerate(ids) if cid in kept_set]
+    drop_idx = [i for i, cid in enumerate(ids) if cid not in kept_set]
+
+    def _sort_by_peak(mat):
+        if mat.size == 0:
+            return mat
+        peaks = np.argmax(mat, axis=1)
+        order = np.argsort(peaks)
+        return mat[order]
+
+    Mk = _sort_by_peak(Mnorm[kept_idx]) if kept_idx else np.empty((0, Mnorm.shape[1]))
+    Md = _sort_by_peak(Mnorm[drop_idx]) if drop_idx else np.empty((0, Mnorm.shape[1]))
+
+    vmax = np.nanpercentile(Mnorm, vmax_percentile)
+    vmin = -vmax if normalize == "zscore" else 0.0
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
+    im1 = ax1.imshow(Mk, aspect="auto", cmap="viridis", vmin=vmin, vmax=vmax, extent=[bin_centers[0], bin_centers[-1], 0, Mk.shape[0]])
+    ax1.set_title(f"Kept units (n={Mk.shape[0]})")
+    ax1.axvline(0, color="w", linestyle="--", linewidth=0.7)
+
+    im2 = ax2.imshow(Md, aspect="auto", cmap="viridis", vmin=vmin, vmax=vmax, extent=[bin_centers[0], bin_centers[-1], 0, Md.shape[0]])
+    ax2.set_title(f"Dropped units (n={Md.shape[0]})")
+    ax2.axvline(0, color="w", linestyle="--", linewidth=0.7)
+    ax2.set_xlabel("Time (s)")
+
+    fig.colorbar(im1, ax=[ax1, ax2], orientation="vertical", fraction=0.02, pad=0.02, label="Normalized FR")
+    fig.suptitle(f"Population heatmap around {event_name}")
+    fig.tight_layout()
+    if save_path is not None:
+        p = Path(save_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(str(p), dpi=140, bbox_inches="tight")
+        plt.close(fig)
+
+    return {"fig": fig, "bin_centers": bin_centers, "Mk": Mk, "Md": Md, "kept_ids": kept_ids}
+
+
+def plot_session_population_psth_by_outcome(
+    session,
+    event_name: str = "Baseline_ON",
+    window: Tuple[float, float] = (-0.5, 1.0),
+    bin_size: float = 0.02,
+    selection_csv: Optional[str] = None,
+    kept_only: bool = True,
+    outcome_order: Optional[Sequence[str]] = ("Hit", "FA", "Abort", "Miss", "Ref", "Other"),
+    outcome_colors: Optional[Dict[str, str]] = None,
+    smooth_sigma: Optional[float] = 1.0,
+    show_sem: bool = True,
+    figsize: Tuple[int, int] = (9, 4),
+    save_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Plot session-level average PSTH per outcome across clusters.
+
+    If kept_only is True, restricts to clusters in the selection CSV; otherwise uses all clusters.
+    Shading shows SEM across clusters.
+    """
+    colors = _get_outcome_colors(outcome_colors)
+
+    # Build trial dataframe with outcomes and event times
+    trials = getattr(session, "trials", []) or []
+    by_trial = align_mod.get_event_times_by_trial(session, event_name)
+    rows = []  # (trial_idx, et, outcome)
+    for i, t in enumerate(trials):
+        try:
+            et = float(by_trial[i])
+        except Exception:
+            et = np.nan
+        if np.isnan(et):
+            continue
+        rows.append((i, et, _normalize_outcome_label(getattr(t, "trialoutcome", None))))
+    if not rows:
+        raise ValueError("No valid events for session trials")
+    df = pd.DataFrame(rows, columns=["trial_idx", "event_time", "outcome"])  # type: ignore
+
+    # Determine cluster set
+    cluster_ids = [int(c.cluster_id) for c in session.clusters]
+    if kept_only:
+        kept = set(load_kept_ids(session, selection_csv))
+        if kept:
+            cluster_ids = [cid for cid in cluster_ids if cid in kept]
+    if not cluster_ids:
+        raise ValueError("No clusters available for population PSTH")
+
+    # Consistent binning
+    _, bin_centers = align_mod.align_spikes_to_events(np.array([]), df["event_time"].tolist(), window=window, bin_size=bin_size)
+
+    # Compute per-cluster PSTH per outcome
+    present = [o for o in (list(outcome_order) if outcome_order is not None else list(colors.keys())) if o in set(df["outcome"].unique())]
+    out_curves: Dict[str, Dict[str, np.ndarray]] = {}
+    for o in present:
+        out_curves[o] = {"psths": []}
+        ets = df.loc[df["outcome"] == o, "event_time"].tolist()
+        if len(ets) == 0:
+            continue
+        for c in session.clusters:
+            cid = int(c.cluster_id)
+            if cid not in cluster_ids:
+                continue
+            m, _ = align_mod.align_spikes_to_events(c.spike_times, ets, window=window, bin_size=bin_size)
+            psth = np.nanmean(m, axis=0) if m.shape[0] > 0 else np.zeros_like(bin_centers)
+            out_curves[o]["psths"].append(psth)
+
+    # Aggregate across clusters
+    fig, ax = plt.subplots(1, 1, figsize=figsize, sharex=True)
+    handles = []
+    labels = []
+    for o in present:
+        psths = out_curves[o].get("psths", [])
+        if not psths:
+            continue
+        M = np.vstack(psths)
+        mean = np.nanmean(M, axis=0)
+        sem = np.nanstd(M, axis=0) / np.sqrt(max(1, M.shape[0])) if show_sem else None
+        if smooth_sigma is not None and mean.size > 1:
+            mean = gaussian_filter1d(mean, sigma=smooth_sigma)
+            if show_sem and sem is not None:
+                sem = gaussian_filter1d(sem, sigma=smooth_sigma)
+        line = ax.plot(bin_centers, mean, color=colors.get(o, colors["Other"]))[0]
+        if show_sem and sem is not None:
+            ax.fill_between(bin_centers, mean - sem, mean + sem, color=colors.get(o, colors["Other"]), alpha=0.2, linewidth=0)
+        handles.append(line)
+        labels.append(f"{o} (nUnits={len(psths)})")
+
+    ax.set_title(f"Session population PSTH by outcome ({'kept' if kept_only else 'all'} units)")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("FR (Hz)")
+    ax.axvline(0, color="k", linestyle="--", linewidth=0.8)
+    if labels:
+        ax.legend(handles, labels, fontsize="small", ncols=2)
+    fig.tight_layout()
+    if save_path is not None:
+        p = Path(save_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(str(p), dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return {"fig": fig, "bin_centers": bin_centers, "present_outcomes": present}
+
+
+def plot_rasters_for_kept(
+    session,
+    selection_csv: Optional[str] = None,
+    event_name: str = "Baseline_ON",
+    window: Tuple[float, float] = (-0.5, 1.0),
+    bin_size: float = 0.02,
+    out_dir: Optional[str] = None,
+    max_units: int = 10,
+) -> List[str]:
+    """Plot single-unit raster+PSTH for first N kept units.
+
+    Returns list of saved PNG paths if out_dir provided.
+    """
+    kept = load_kept_ids(session, selection_csv)
+    if not kept:
+        return []
+    paths = []
+    for cid in kept[:max_units]:
+        png = None
+        if out_dir is not None:
+            png = str(Path(out_dir) / f"cluster_{cid}_raster_psth.png")
+        plot_raster_psth(session, cid, event_name=event_name, window=window, bin_size=bin_size, save_path=png)
+        if png is not None:
+            paths.append(png)
+    return paths
+
+
+# ---------------------------------------------
+# Baseline-aligned, outcome-colored raster/PSTH
+# ---------------------------------------------
+
+def _get_outcome_colors(custom: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Return a mapping from canonical outcome label to color (case-insensitive).
+
+    Defaults per user spec:
+      - Hit: green
+      - FA: red
+      - Abort: violet/purple
+      - Miss: gray
+      - Ref: black
+      - Other: gray
+    """
+    # canonical, case-sensitive keys that we'll use internally
+    default = {
+        "Hit": "#2ca02c",    # green
+        "FA": "#d62728",     # red
+        "Abort": "#7b1fa2",  # purple/violet
+        "Miss": "#7f7f7f",   # gray
+        "Ref": "#000000",    # black
+        "Other": "#7f7f7f",  # gray fallback
+    }
+    if not custom:
+        return default
+    out = default.copy()
+    # allow case-insensitive override keys
+    for k, v in custom.items():
+        if not isinstance(k, str):
+            continue
+        kk = k.strip().lower()
+        # map to canonical
+        if kk in ("hit",):
+            out["Hit"] = v
+        elif kk in ("fa", "falsealarm", "false_alarm"):
+            out["FA"] = v
+        elif kk in ("abort",):
+            out["Abort"] = v
+        elif kk in ("miss",):
+            out["Miss"] = v
+        elif kk in ("ref", "reference", "ref_trial"):
+            out["Ref"] = v
+        elif kk in ("other",):
+            out["Other"] = v
+    return out
+
+
+def _normalize_outcome_label(label: Optional[str]) -> str:
+    """Map various outcome strings to canonical labels: Hit, FA, Abort, Miss, Ref, Other."""
+    if label is None:
+        return "Other"
+    s = str(label).strip().lower()
+    if s == "hit":
+        return "Hit"
+    if s in ("fa", "falsealarm", "false_alarm", "false alarm"):
+        return "FA"
+    if s == "abort":
+        return "Abort"
+    if s == "miss":
+        return "Miss"
+    if s in ("ref", "reference", "ref_trial", "reftrial"):
+        return "Ref"
+    return "Other"
+
+
+def _trial_reaction_time(trial) -> float:
+    """Best-effort extraction of a scalar reaction time (seconds) from a Trial.
+
+    Looks for common keys in Trial.reactiontimes; returns NaN if unavailable.
+    """
+    import math
+
+    rt = getattr(trial, "reactiontimes", None) or {}
+    if not isinstance(rt, dict):
+        return float("nan")
+    for key in (
+        "true",
+        "firstlick",
+        "change_to_lick",
+        "ChangeOn_to_Response",
+        "rt",
+    ):
+        val = rt.get(key, None)
+        if val is None:
+            continue
+        try:
+            f = float(val)
+            if math.isfinite(f):
+                return f
+        except Exception:
+            continue
+    return float("nan")
+
+
+def plot_baseline_raster_psth_by_future_outcome(
+    session,
+    cluster_id: int,
+    window: Tuple[float, float] = (-0.5, 1.0),
+    bin_size: float = 0.02,
+    smooth_sigma: Optional[float] = 1.0,
+    sort_trials: str = "outcome",  # one of: 'outcome' | 'future_rt' | 'none'
+    outcome_order: Optional[Sequence[str]] = ("Hit", "FA", "Abort", "Miss", "Ref", "Other"),
+    outcome_colors: Optional[Dict[str, str]] = None,
+    peth_scale: str = "per_outcome",  # 'shared' or 'per_outcome'
+    show_sem: bool = True,
+    figsize: Tuple[int, int] = (9, 5),
+    save_path: Optional[str] = None,
+):
+    """Baseline-aligned raster with trials colored by FUTURE outcome; PSTH split by outcome.
+
+    - Raster: each trial's spikes are drawn in the color for that trial's future outcome.
+    - PSTH: multiple lines, one per outcome, using the same color mapping.
+
+    sort_trials controls trial ordering in the raster:
+      - 'outcome': group by outcome (order given by outcome_order), preserve within-group original order
+      - 'future_rt': sort all trials by reaction time ascending (NaNs last)
+      - 'none': keep original chronological order
+    """
+    # find cluster
+    cluster = None
+    for c in session.clusters:
+        if int(c.cluster_id) == int(cluster_id):
+            cluster = c
+            break
+    if cluster is None:
+        raise ValueError(f"Cluster {cluster_id} not found in session")
+
+    # Collect per-trial metadata
+    trials = getattr(session, "trials", []) or []
+    by_trial = align_mod.get_event_times_by_trial(session, "Baseline_ON")
+    rows = []  # (trial_idx, et, outcome, rt)
+    for i, t in enumerate(trials):
+        try:
+            et = float(by_trial[i])
+        except Exception:
+            et = np.nan
+        if np.isnan(et):
+            continue
+        o = _normalize_outcome_label(getattr(t, "trialoutcome", None))
+        rt = _trial_reaction_time(t)
+        rows.append((i, et, o, rt))
+    if len(rows) == 0:
+        raise ValueError("No valid Baseline_ON events found for trials")
+
+    df = pd.DataFrame(rows, columns=["trial_idx", "event_time", "outcome", "rt"])  # type: ignore
+
+    # Sorting logic
+    if sort_trials == "future_rt":
+        df = df.sort_values(["rt", "trial_idx"], na_position="last").reset_index(drop=True)
+    elif sort_trials == "outcome":
+        order = list(outcome_order) if outcome_order is not None else ["Hit", "FA", "Abort", "Miss", "Ref", "Other"]
+        cat = pd.Categorical(df["outcome"], categories=order, ordered=True)
+        df = df.assign(_o=cat).sort_values(["_o", "trial_idx"]).drop(columns=["_o"]).reset_index(drop=True)
+    else:
+        # keep original order (by trial index)
+        df = df.sort_values("trial_idx").reset_index(drop=True)
+
+    # Outcome groups and colors
+    colors = _get_outcome_colors(outcome_colors)
+    # Keep only outcomes present and preserve desired order
+    present = [o for o in (list(outcome_order) if outcome_order is not None else list(colors.keys())) if o in set(df["outcome"].unique())]
+    groups = {o: df.loc[df["outcome"] == o] for o in present}
+
+    # Build PSTHs per outcome and raster data per trial
+    # Precompute bin centers using all events for consistency
+    mat_all, bin_centers = align_mod.align_spikes_to_events(cluster.spike_times, df["event_time"].tolist(), window=window, bin_size=bin_size)
+
+    # Prepare figure: raster + PSTH(s)
+    if peth_scale == "shared":
+        fig, (ax_r, ax_p) = plt.subplots(2, 1, figsize=figsize, sharex=True, gridspec_kw={"height_ratios": [2, 1]})
+    else:
+        # per-outcome PSTH panels stacked below raster
+        n_pan = max(1, len(groups))
+        heights = [2] + [1] * n_pan
+        fig, axes = plt.subplots(1 + n_pan, 1, figsize=(figsize[0], 3 + 2 * n_pan), sharex=True, gridspec_kw={"height_ratios": heights})
+        ax_r = axes[0]
+        ax_ps = axes[1:]
+
+    # Raster: iterate in displayed order
+    trials_spikes = _spikes_relative_to_events(cluster.spike_times, df["event_time"].tolist(), window)
+    for row_idx, (_, row) in enumerate(df.iterrows()):
+        sp = trials_spikes[row_idx]
+        if sp.size == 0:
+            continue
+        col = colors.get(row["outcome"], colors.get("Other", "#666666"))
+        ax_r.vlines(sp, row_idx + 0.1, row_idx + 0.9, color=col, linewidth=0.6)
+    ax_r.set_ylabel("Trial")
+    ax_r.set_title(f"Cluster {cluster_id} aligned to Baseline_ON (trials colored by future outcome)")
+    ax_r.axvline(0, color="k", linestyle="--", linewidth=0.8)
+
+    # PSTH: overlay or per-outcome panels
+    if peth_scale == "shared":
+        for o, g in groups.items():
+            if g.shape[0] == 0:
+                continue
+            idxs = g.index.values
+            if np.ndim(mat_all) != 2 or mat_all.shape[0] == 0:
+                psth = np.zeros_like(bin_centers)
+                sem = np.zeros_like(bin_centers)
+            else:
+                sub = mat_all[idxs, :]
+                psth = np.nanmean(sub, axis=0)
+                # SEM across trials
+                sem = np.nanstd(sub, axis=0) / np.sqrt(max(1, sub.shape[0])) if show_sem else None
+            if smooth_sigma is not None and psth.size > 1:
+                psth = gaussian_filter1d(psth, sigma=smooth_sigma)
+                if show_sem and sem is not None:
+                    sem = gaussian_filter1d(sem, sigma=smooth_sigma)
+            ax_p.plot(bin_centers, psth, label=f"{o} (n={g.shape[0]})", color=colors.get(o, colors["Other"]))
+            if show_sem and sem is not None:
+                ax_p.fill_between(bin_centers, psth - sem, psth + sem, color=colors.get(o, colors["Other"]), alpha=0.2, linewidth=0)
+        ax_p.set_xlabel("Time (s)")
+        ax_p.set_ylabel("Firing rate (Hz)")
+        ax_p.axvline(0, color="k", linestyle="--", linewidth=0.8)
+        ax_p.legend(fontsize="small", ncols=2)
+    else:
+        # separate y-scales
+        for (o, g), axp in zip(groups.items(), ax_ps):
+            if g.shape[0] == 0:
+                continue
+            idxs = g.index.values
+            if np.ndim(mat_all) != 2 or mat_all.shape[0] == 0:
+                psth = np.zeros_like(bin_centers)
+                sem = np.zeros_like(bin_centers)
+            else:
+                sub = mat_all[idxs, :]
+                psth = np.nanmean(sub, axis=0)
+                sem = np.nanstd(sub, axis=0) / np.sqrt(max(1, sub.shape[0])) if show_sem else None
+            if smooth_sigma is not None and psth.size > 1:
+                psth = gaussian_filter1d(psth, sigma=smooth_sigma)
+                if show_sem and sem is not None:
+                    sem = gaussian_filter1d(sem, sigma=smooth_sigma)
+            axp.plot(bin_centers, psth, label=f"{o} (n={g.shape[0]})", color=colors.get(o, colors["Other"]))
+            if show_sem and sem is not None:
+                axp.fill_between(bin_centers, psth - sem, psth + sem, color=colors.get(o, colors["Other"]), alpha=0.2, linewidth=0)
+            axp.axvline(0, color="k", linestyle="--", linewidth=0.8)
+            axp.set_ylabel("FR (Hz)")
+            axp.legend(fontsize="x-small", loc="upper right")
+        ax_ps[-1].set_xlabel("Time (s)")
+
+    fig.tight_layout()
+    if save_path is not None:
+        p = Path(save_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(str(p), dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
+def plot_baseline_rasters_for_kept_by_outcome(
+    session,
+    selection_csv: Optional[str] = None,
+    window: Tuple[float, float] = (-0.5, 1.0),
+    bin_size: float = 0.02,
+    out_dir: Optional[str] = None,
+    max_units: int = 10,
+    sort_trials: str = "outcome",
+    outcome_colors: Optional[Dict[str, str]] = None,
+    smooth_sigma: Optional[float] = 1.0,
+    peth_scale: str = "per_outcome",
+) -> List[str]:
+    """Generate baseline-aligned, outcome-colored rasters/PSTHs for first N kept units.
+
+    Returns list of saved PNG paths if out_dir is provided.
+    """
+    kept = load_kept_ids(session, selection_csv)
+    if not kept:
+        return []
+    paths = []
+    for cid in kept[:max_units]:
+        png = None
+        if out_dir is not None:
+            png = str(Path(out_dir) / f"cluster_{cid}_baseline_by_outcome.png")
+        plot_baseline_raster_psth_by_future_outcome(
+            session,
+            cid,
+            window=window,
+            bin_size=bin_size,
+            smooth_sigma=smooth_sigma,
+            sort_trials=sort_trials,
+            outcome_colors=outcome_colors,
+            peth_scale=peth_scale,
+            save_path=png,
+        )
+        if png is not None:
+            paths.append(png)
+    return paths

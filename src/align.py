@@ -188,6 +188,20 @@ def get_event_times(
 
         return list(map(float, arr))
 
+    # Generic NI event: if present as a key in ni_events, return its times (drop NaNs)
+    if event_name in ni_events:
+        ev = ni_events.get(event_name, [])
+        if isinstance(ev, dict) and "rise_t" in ev:
+            arr = np.array(ev["rise_t"]).flatten()
+        else:
+            arr = np.array(ev).flatten()
+        try:
+            arr = arr.astype(float)
+        except Exception:
+            arr = np.array(arr, dtype=float)
+        arr = arr[~np.isnan(arr)]
+        return list(map(float, arr))
+
     # Otherwise treat as behavioral outcome
     event_times = []
     for idx, t in enumerate(session.trials):
@@ -260,6 +274,16 @@ def get_event_times_by_trial(
                     # fallback to absolute ct if baseline not available
                     out[idx] = ct_val
         # return as list of floats (with NaNs retained)
+        return out.tolist()
+
+    # Generic NI event by trial: if key exists in ni_events, map to per-trial array
+    if event_name in ni_events:
+        ev = ni_events.get(event_name, None)
+        arr = _to_array(ev)
+        m = min(len(arr), n_trials)
+        if m > 0:
+            out[:m] = arr[:m]
+        # retain NaNs for missing trials
         return out.tolist()
 
     # Behavioral outcomes: per-trial reaction time or NaN for non-matching trials

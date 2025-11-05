@@ -25,6 +25,7 @@ class Trial:
     ITI: Optional[float] = None
     change_time: Optional[float] = None
     baseline_values: Optional[Any] = None
+    n_seen: Optional[int] = None
 
 
 @dataclass
@@ -121,6 +122,7 @@ def _convert_external_session(obj):
                 if t.get("baseline_values", None) is not None
                 else t.get("St1TrialVector", None)
             )
+            n_seen = t.get("n_seen", None)
         else:
             trialoutcome = getattr(t, "trialoutcome", None)
             reactiontimes = getattr(t, "reactiontimes", {}) or {}
@@ -150,6 +152,7 @@ def _convert_external_session(obj):
                 if getattr(t, "baseline_values", None) is not None
                 else getattr(t, "St1TrialVector", None)
             )
+            n_seen = getattr(t, "n_seen", None)
         trials_out.append(
             Trial(
                 trialoutcome=trialoutcome,
@@ -159,6 +162,7 @@ def _convert_external_session(obj):
                 ITI=ITI,
                 change_time=change_time,
                 baseline_values=baseline_values,
+                n_seen=n_seen,
             )
         )
 
@@ -220,20 +224,69 @@ def load_session(path: str) -> Session:
     scripts_dir = repo_root / "scripts"
     if scripts_dir.exists():
         sys.path.insert(0, str(scripts_dir))
+        # Inject a lightweight shim for legacy 'visdetect.session' so pickles can import it
+        try:
+            import types as _types
+
+            # Root package shim
+            if "visdetect" not in sys.modules:
+                sys.modules["visdetect"] = _types.ModuleType("visdetect")
+            visdetect_mod = sys.modules["visdetect"]
+
+            # Submodule: session
+            if "visdetect.session" not in sys.modules:
+                session_mod = _types.ModuleType("visdetect.session")
+                session_mod.Trial = Trial  # type: ignore[attr-defined]
+                session_mod.Cluster = Cluster  # type: ignore[attr-defined]
+                session_mod.Session = Session  # type: ignore[attr-defined]
+                sys.modules["visdetect.session"] = session_mod
+                setattr(visdetect_mod, "session", session_mod)
+
+            # Submodule: io (provide lightweight no-op helpers for import-time only)
+            if "visdetect.io" not in sys.modules:
+                io_mod = _types.ModuleType("visdetect.io")
+
+                def _mat_struct_to_dict(x):
+                    return x
+
+                def _parse_good_cluster_ids(x):
+                    try:
+                        import numpy as _np
+                        arr = _np.array(x).flatten()
+                        return [int(v) for v in arr]
+                    except Exception:
+                        try:
+                            return [int(v) for v in (x or [])]
+                        except Exception:
+                            return []
+
+                io_mod.mat_struct_to_dict = _mat_struct_to_dict  # type: ignore[attr-defined]
+                io_mod.parse_good_cluster_ids = _parse_good_cluster_ids  # type: ignore[attr-defined]
+                sys.modules["visdetect.io"] = io_mod
+                setattr(visdetect_mod, "io", io_mod)
+        except Exception:
+            pass
 
         with p.open("rb") as f:
             try:
                 obj = pickle.load(f)
             except ModuleNotFoundError:
-                # Fallback: some legacy pickles reference compiled submodules like
-                # 'numpy._core' which may not exist in newer numpy builds. Try a
-                # resilient unpickler that remaps that module path to 'numpy.core'.
+                # Fallback: use a resilient unpickler to remap module paths
                 f.seek(0)
 
                 class RenamingUnpickler(pickle.Unpickler):
                     def find_class(self, module, name):
+                        # Map deprecated numpy module path
                         if module.startswith("numpy._core"):
                             module = module.replace("numpy._core", "numpy.core")
+                        # Map legacy visdetect dataclasses to our local ones
+                        if module in ("visdetect.session", "visdetect"):
+                            if name == "Trial":
+                                return Trial
+                            if name == "Cluster":
+                                return Cluster
+                            if name == "Session":
+                                return Session
                         return super().find_class(module, name)
 
                 obj = RenamingUnpickler(f).load()
