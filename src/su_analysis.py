@@ -593,7 +593,7 @@ def plot_session_population_psth_by_outcome(
     ax.set_ylabel("FR (Hz)")
     ax.axvline(0, color="k", linestyle="--", linewidth=0.8)
     if labels:
-        ax.legend(handles, labels, fontsize="small", ncols=2)
+        ax.legend(handles, labels, fontsize="small", ncol=2)
     fig.tight_layout()
     if save_path is not None:
         p = Path(save_path)
@@ -845,7 +845,7 @@ def plot_baseline_raster_psth_by_future_outcome(
         ax_p.set_xlabel("Time (s)")
         ax_p.set_ylabel("Firing rate (Hz)")
         ax_p.axvline(0, color="k", linestyle="--", linewidth=0.8)
-        ax_p.legend(fontsize="small", ncols=2)
+        ax_p.legend(fontsize="small", ncol=2)
     else:
         # separate y-scales
         for (o, g), axp in zip(groups.items(), ax_ps):
