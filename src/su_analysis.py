@@ -889,16 +889,36 @@ def plot_baseline_raster_psth_by_future_outcome(
     # Precompute bin centers using all events for consistency
     mat_all, bin_centers = align_mod.align_spikes_to_events(cluster.spike_times, df["event_time"].tolist(), window=window, bin_size=bin_size)
 
-    # Prepare figure: raster + PSTH(s)
+    # Prepare figure: raster + PSTH(s) with optional right-side legend column
+    total_trials = len(df)
     if peth_scale == "shared":
-        fig, (ax_r, ax_p) = plt.subplots(2, 1, figsize=figsize, sharex=True, gridspec_kw={"height_ratios": [2, 1]})
+        # 2 rows x 2 cols: left column holds raster and overlay PSTH; right column is legend
+        fig, axes_grid = plt.subplots(2, 2, figsize=figsize, sharex=True,
+                                      gridspec_kw={"height_ratios": [2, 1], "width_ratios": [5, 2], "wspace": 0.25})
+        ax_r, ax_p = axes_grid[0, 0], axes_grid[1, 0]
+        legend_ax = axes_grid[0, 1]
+        # Hide lower-right cell
+        axes_grid[1, 1].axis("off")
+        legend_ax.axis("off")
     else:
-        # per-outcome PSTH panels stacked below raster
+        # per-outcome PSTH panels stacked below raster; add a legend column on the right
         n_pan = max(1, len(groups))
         heights = [2] + [1] * n_pan
-        fig, axes = plt.subplots(1 + n_pan, 1, figsize=(figsize[0], 3 + 2 * n_pan), sharex=True, gridspec_kw={"height_ratios": heights})
-        ax_r = axes[0]
-        ax_ps = axes[1:]
+        # Build a 2-column grid: left = plots, right = legend
+        fig_w = figsize[0]
+        fig_h = max(figsize[1], 3 + 2 * n_pan)
+        import matplotlib.gridspec as gridspec
+        fig = plt.figure(figsize=(fig_w, fig_h))
+        gs = gridspec.GridSpec(1 + n_pan, 2, figure=fig, height_ratios=heights, width_ratios=[5, 2], wspace=0.25)
+        # Left column axes
+        ax_r = fig.add_subplot(gs[0, 0])
+        ax_ps = [fig.add_subplot(gs[i, 0], sharex=ax_r) for i in range(1, 1 + n_pan)]
+        # Right legend axis (top-right cell)
+        legend_ax = fig.add_subplot(gs[0, 1])
+        legend_ax.axis("off")
+        # Hide any remaining right-column cells
+        for i in range(1, 1 + n_pan):
+            fig.add_subplot(gs[i, 1]).axis("off")
 
     # Raster: iterate in displayed order
     trials_spikes = _spikes_relative_to_events(cluster.spike_times, df["event_time"].tolist(), window)
@@ -909,11 +929,13 @@ def plot_baseline_raster_psth_by_future_outcome(
         col = colors.get(row["outcome"], colors.get("Other", "#666666"))
         ax_r.vlines(sp, row_idx + 0.1, row_idx + 0.9, color=col, linewidth=0.6)
     ax_r.set_ylabel("Trial")
-    ax_r.set_title(f"Cluster {cluster_id} aligned to Baseline_ON (trials colored by future outcome)")
+    # Keep raster clean; legend and suptitle will carry meta-information
     ax_r.axvline(0, color="k", linestyle="--", linewidth=0.8)
 
     # PSTH: overlay or per-outcome panels
     if peth_scale == "shared":
+        handles = []
+        labels = []
         for o, g in groups.items():
             if g.shape[0] == 0:
                 continue
@@ -930,15 +952,21 @@ def plot_baseline_raster_psth_by_future_outcome(
                 psth = gaussian_filter1d(psth, sigma=smooth_sigma)
                 if show_sem and sem is not None:
                     sem = gaussian_filter1d(sem, sigma=smooth_sigma)
-            ax_p.plot(bin_centers, psth, label=f"{o} (n={g.shape[0]})", color=colors.get(o, colors["Other"]))
+            ln = ax_p.plot(bin_centers, psth, color=colors.get(o, colors["Other"]))[0]
+            handles.append(ln)
+            labels.append(o)
             if show_sem and sem is not None:
                 ax_p.fill_between(bin_centers, psth - sem, psth + sem, color=colors.get(o, colors["Other"]), alpha=0.2, linewidth=0)
         ax_p.set_xlabel("Time (s)")
         ax_p.set_ylabel("Firing rate (Hz)")
         ax_p.axvline(0, color="k", linestyle="--", linewidth=0.8)
-        ax_p.legend(fontsize="small", ncol=2)
+        if handles:
+            legend_ax.legend(handles, labels, loc="upper left", frameon=False,
+                             title=f"Outcomes (nTrials={total_trials})\nAligned to: Baseline_ON")
     else:
         # separate y-scales
+        handles = []
+        labels = []
         for (o, g), axp in zip(groups.items(), ax_ps):
             if g.shape[0] == 0:
                 continue
@@ -954,13 +982,18 @@ def plot_baseline_raster_psth_by_future_outcome(
                 psth = gaussian_filter1d(psth, sigma=smooth_sigma)
                 if show_sem and sem is not None:
                     sem = gaussian_filter1d(sem, sigma=smooth_sigma)
-            axp.plot(bin_centers, psth, label=f"{o} (n={g.shape[0]})", color=colors.get(o, colors["Other"]))
+            ln = axp.plot(bin_centers, psth, color=colors.get(o, colors["Other"]))[0]
+            handles.append(ln)
+            labels.append(o)
             if show_sem and sem is not None:
                 axp.fill_between(bin_centers, psth - sem, psth + sem, color=colors.get(o, colors["Other"]), alpha=0.2, linewidth=0)
             axp.axvline(0, color="k", linestyle="--", linewidth=0.8)
             axp.set_ylabel("FR (Hz)")
-            axp.legend(fontsize="x-small", loc="upper right")
         ax_ps[-1].set_xlabel("Time (s)")
+        # Build unified legend at right
+        if handles:
+            legend_ax.legend(handles, labels, loc="upper left", frameon=False,
+                             title=f"Outcomes (nTrials={total_trials})\nAligned to: Baseline_ON")
 
     fig.tight_layout()
     if save_path is not None:
