@@ -513,13 +513,43 @@ def plot_session_population_psth_by_outcome(
     outcome_colors: Optional[Dict[str, str]] = None,
     smooth_sigma: Optional[float] = 1.0,
     show_sem: bool = True,
-    figsize: Tuple[int, int] = (9, 4),
+    figsize: Optional[Tuple[int, int]] = None,
+    separate_panels: bool = True,
+    panel_height: float = 1.2,
     save_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Plot session-level average PSTH per outcome across clusters.
 
     If kept_only is True, restricts to clusters in the selection CSV; otherwise uses all clusters.
     Shading shows SEM across clusters.
+
+    Parameters
+    ----------
+    session : Session-like object
+        Must expose `.clusters` (each with `cluster_id` and `spike_times`), `.trials`, and NI events for alignment.
+    event_name : str
+        Event to align spikes to (e.g. Baseline_ON or Change_ON).
+    window : (float, float)
+        Time window around event.
+    bin_size : float
+        PSTH bin size (seconds).
+    kept_only : bool
+        Restrict to kept units (from selection_csv) if True.
+    outcome_order : Sequence[str] | None
+        Ordering of outcome panels / curves. Only outcomes present in data are plotted.
+    smooth_sigma : float | None
+        Optional Gaussian smoothing sigma (in bins) applied to mean (and SEM if present).
+    show_sem : bool
+        Whether to display SEM shading.
+    figsize : (w, h) | None
+        If separate_panels is False: figure size for single overlay panel. If separate_panels is True
+        and figsize is None, height auto-scales as panel_height * n_present (min 3.0) and width defaults to 9.
+    separate_panels : bool
+        If True (default) plot one subplot per outcome for clarity instead of overlaying all outcomes.
+    panel_height : float
+        Height per panel (ignored if separate_panels is False or figsize provided).
+    save_path : str | None
+        Optional path to save figure.
     """
     colors = _get_outcome_colors(outcome_colors)
 
@@ -568,39 +598,100 @@ def plot_session_population_psth_by_outcome(
             out_curves[o]["psths"].append(psth)
 
     # Aggregate across clusters
-    fig, ax = plt.subplots(1, 1, figsize=figsize, sharex=True)
-    handles = []
-    labels = []
-    for o in present:
-        psths = out_curves[o].get("psths", [])
-        if not psths:
-            continue
-        M = np.vstack(psths)
-        mean = np.nanmean(M, axis=0)
-        sem = np.nanstd(M, axis=0) / np.sqrt(max(1, M.shape[0])) if show_sem else None
-        if smooth_sigma is not None and mean.size > 1:
-            mean = gaussian_filter1d(mean, sigma=smooth_sigma)
-            if show_sem and sem is not None:
-                sem = gaussian_filter1d(sem, sigma=smooth_sigma)
-        line = ax.plot(bin_centers, mean, color=colors.get(o, colors["Other"]))[0]
-        if show_sem and sem is not None:
-            ax.fill_between(bin_centers, mean - sem, mean + sem, color=colors.get(o, colors["Other"]), alpha=0.2, linewidth=0)
-        handles.append(line)
-        labels.append(f"{o} (nUnits={len(psths)})")
+    axes: List[plt.Axes] = []
+    if not present:
+        raise ValueError("No outcomes present to plot")
 
-    ax.set_title(f"Session population PSTH by outcome ({'kept' if kept_only else 'all'} units)")
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("FR (Hz)")
-    ax.axvline(0, color="k", linestyle="--", linewidth=0.8)
-    if labels:
-        ax.legend(handles, labels, fontsize="small", ncol=2)
+    # Determine total number of units used (constant across outcomes when kept_only True)
+    n_units_total = len(set([int(c.cluster_id) for c in session.clusters if (not kept_only) or (int(c.cluster_id) in set(cluster_ids))]))
+
+    if separate_panels and len(present) > 1:
+        # Determine figure size dynamically if not provided
+        if figsize is None:
+            height = max(3.0, panel_height * len(present))
+            figsize = (9, height)
+        # Build a 2-column layout: left = plots, right = legend area
+        fig, axes_grid = plt.subplots(len(present), 2, figsize=figsize, sharex=True,
+                                      constrained_layout=False,
+                                      gridspec_kw={"width_ratios": [5, 2], "wspace": 0.25})
+        # Normalize to 2D array
+        if not isinstance(axes_grid, np.ndarray) or axes_grid.ndim == 1:
+            axes_grid = np.array([axes_grid])
+        left_axes = [axes_grid[i, 0] for i in range(len(present))]
+        legend_axes = [axes_grid[i, 1] for i in range(len(present))]
+        # We'll use the top-right axis for the legend and hide others
+        for la in legend_axes[1:]:
+            la.axis("off")
+        legend_ax = legend_axes[0]
+        legend_ax.axis("off")
+
+        axes = left_axes
+        handles_for_legend = []
+        labels_for_legend = []
+        for ax, o in zip(left_axes, present):
+            psths = out_curves[o].get("psths", [])
+            if not psths:
+                ax.text(0.5, 0.5, f"No trials for {o}", ha="center", va="center")
+                continue
+            M = np.vstack(psths)
+            mean = np.nanmean(M, axis=0)
+            sem = np.nanstd(M, axis=0) / np.sqrt(max(1, M.shape[0])) if show_sem else None
+            if smooth_sigma is not None and mean.size > 1:
+                mean = gaussian_filter1d(mean, sigma=smooth_sigma)
+                if show_sem and sem is not None:
+                    sem = gaussian_filter1d(sem, sigma=smooth_sigma)
+            ln = ax.plot(bin_centers, mean, color=colors.get(o, colors["Other"]))[0]
+            if show_sem and sem is not None:
+                ax.fill_between(bin_centers, mean - sem, mean + sem, color=colors.get(o, colors["Other"]), alpha=0.25, linewidth=0)
+            ax.axvline(0, color="k", linestyle="--", linewidth=0.8)
+            ax.set_ylabel("FR (Hz)")
+            # Collect legend handle and label once per outcome
+            handles_for_legend.append(ln)
+            labels_for_legend.append(o)
+        axes[-1].set_xlabel("Time (s)")
+        # Build a unified legend in the right column
+        if handles_for_legend:
+            lg_title = f"Outcomes (nUnits={n_units_total})\nAligned to: {event_name}"
+            legend_ax.legend(handles_for_legend, labels_for_legend, loc="upper left", frameon=False, title=lg_title)
+        fig.suptitle(f"Session population PSTH by outcome ({'kept' if kept_only else 'all'} units)")
+    else:
+        # Fallback to single overlay panel (either only one outcome or user requested overlay)
+        if figsize is None:
+            figsize = (9, 4)
+        fig, ax = plt.subplots(1, 1, figsize=figsize, sharex=True)
+        axes = [ax]
+        handles = []
+        labels = []
+        for o in present:
+            psths = out_curves[o].get("psths", [])
+            if not psths:
+                continue
+            M = np.vstack(psths)
+            mean = np.nanmean(M, axis=0)
+            sem = np.nanstd(M, axis=0) / np.sqrt(max(1, M.shape[0])) if show_sem else None
+            if smooth_sigma is not None and mean.size > 1:
+                mean = gaussian_filter1d(mean, sigma=smooth_sigma)
+                if show_sem and sem is not None:
+                    sem = gaussian_filter1d(sem, sigma=smooth_sigma)
+            line = ax.plot(bin_centers, mean, color=colors.get(o, colors["Other"]))[0]
+            if show_sem and sem is not None:
+                ax.fill_between(bin_centers, mean - sem, mean + sem, color=colors.get(o, colors["Other"]), alpha=0.2, linewidth=0)
+            handles.append(line)
+            labels.append(o)
+        ax.set_title(f"Session population PSTH by outcome — aligned to {event_name} ({'kept' if kept_only else 'all'} units; n={n_units_total})")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("FR (Hz)")
+        ax.axvline(0, color="k", linestyle="--", linewidth=0.8)
+        if labels:
+            ax.legend(handles, labels, fontsize="small", ncol=2, title=f"nUnits={n_units_total}")
+
     fig.tight_layout()
     if save_path is not None:
         p = Path(save_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(str(p), dpi=150, bbox_inches="tight")
         plt.close(fig)
-    return {"fig": fig, "bin_centers": bin_centers, "present_outcomes": present}
+    return {"fig": fig, "axes": axes, "bin_centers": bin_centers, "present_outcomes": present}
 
 
 def plot_rasters_for_kept(

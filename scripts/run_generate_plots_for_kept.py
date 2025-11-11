@@ -141,6 +141,7 @@ def main():
                     kept_only=True,
                     smooth_sigma=1.0,
                     show_sem=args.show_sem,
+                    separate_panels=True,
                     save_path=str(pop_path),
                 )
             results.append((key, True, None))
