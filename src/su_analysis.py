@@ -283,6 +283,127 @@ def plot_change_rasters_by_outcome(
     return fig
 
 
+def plot_change_raster_psth_stacked(
+    session,
+    cluster_id: int,
+    window: Tuple[float, float] = (-0.5, 1.0),
+    bin_size: float = 0.02,
+    smooth_sigma: Optional[float] = 1.0,
+    outcome_colors: Optional[Dict[str, str]] = None,
+    show_sem: bool = True,
+    figsize: Tuple[float, float] = (9, 5),
+    compact_scale: float = 1.0,
+    raster_line_height: float = 0.8,
+    save_path: Optional[str] = None,
+):
+    """Change_ON-aligned raster with trials colored by outcome and stacked PSTH panels (Hit, Miss).
+
+    Layout mirrors plot_baseline_raster_psth_by_future_outcome(per_outcome):
+      - Top: raster of all trials colored by outcome
+      - Bottom: stacked PSTHs for Hit and Miss with right-side legend
+    """
+    # find cluster
+    cluster = None
+    for c in session.clusters:
+        if int(c.cluster_id) == int(cluster_id):
+            cluster = c
+            break
+    if cluster is None:
+        raise ValueError(f"Cluster {cluster_id} not found in session")
+
+    change_by_trial = align_mod.get_event_times_by_trial(session, "Change_ON")
+    trials = getattr(session, "trials", []) or []
+
+    rows = []  # (trial_idx, et, outcome)
+    for i, t in enumerate(trials):
+        try:
+            et = float(change_by_trial[i])
+        except Exception:
+            et = np.nan
+        if np.isnan(et):
+            continue
+        o = _normalize_outcome_label(getattr(t, "trialoutcome", None))
+        rows.append((i, et, o))
+    if len(rows) == 0:
+        raise ValueError("No valid Change_ON events found for trials")
+    import pandas as pd
+    df = pd.DataFrame(rows, columns=["trial_idx", "event_time", "outcome"])  # type: ignore
+
+    # Keep only Hit/Miss (if present); preserve order: Hit, Miss
+    colors = _get_outcome_colors(outcome_colors)
+    present = [o for o in ("Hit", "Miss") if o in set(df["outcome"].unique())]
+    groups = {o: df.loc[df["outcome"] == o] for o in present}
+
+    # Precompute alignment and binning using all trials
+    mat_all, bin_centers = align_mod.align_spikes_to_events(cluster.spike_times, df["event_time"].tolist(), window=window, bin_size=bin_size)
+
+    # Figure layout: raster + stacked PSTHs + right legend
+    n_pan = max(1, len(groups))
+    heights = [2] + [1] * n_pan
+    fig_w = figsize[0]
+    fig_h_base = 3 + 2 * n_pan
+    fig_h = max(figsize[1], compact_scale * fig_h_base)
+    import matplotlib.gridspec as gridspec
+    fig = plt.figure(figsize=(fig_w, fig_h), constrained_layout=True)
+    gs = gridspec.GridSpec(1 + n_pan, 2, figure=fig, height_ratios=heights, width_ratios=[5, 2], wspace=0.25)
+    ax_r = fig.add_subplot(gs[0, 0])
+    ax_ps = [fig.add_subplot(gs[i, 0], sharex=ax_r) for i in range(1, 1 + n_pan)]
+    legend_ax = fig.add_subplot(gs[0, 1])
+    legend_ax.axis("off")
+    for i in range(1, 1 + n_pan):
+        fig.add_subplot(gs[i, 1]).axis("off")
+
+    # Raster colored by outcome
+    trials_spikes = _spikes_relative_to_events(cluster.spike_times, df["event_time"].tolist(), window)
+    for row_idx, (_, row) in enumerate(df.iterrows()):
+        sp = trials_spikes[row_idx]
+        if sp.size == 0:
+            continue
+        col = colors.get(row["outcome"], colors.get("Other", "#666666"))
+        h = max(0.1, min(0.95, float(raster_line_height)))
+        y1 = row_idx + 0.5 - h / 2.0
+        y2 = row_idx + 0.5 + h / 2.0
+        ax_r.vlines(sp, y1, y2, color=col, linewidth=0.6)
+    ax_r.set_ylabel("Trial")
+    ax_r.axvline(0, color="k", linestyle="--", linewidth=0.8)
+
+    # Stacked PSTHs
+    handles = []
+    labels = []
+    for (o, g), axp in zip(groups.items(), ax_ps):
+        idxs = g.index.values
+        if np.ndim(mat_all) != 2 or mat_all.shape[0] == 0:
+            psth = np.zeros_like(bin_centers)
+            sem = np.zeros_like(bin_centers)
+        else:
+            sub = mat_all[idxs, :]
+            psth = np.nanmean(sub, axis=0)
+            sem = np.nanstd(sub, axis=0) / np.sqrt(max(1, sub.shape[0])) if show_sem else None
+        if smooth_sigma is not None and psth.size > 1:
+            psth = gaussian_filter1d(psth, sigma=smooth_sigma)
+            if show_sem and sem is not None:
+                sem = gaussian_filter1d(sem, sigma=smooth_sigma)
+        ln = axp.plot(bin_centers, psth, color=colors.get(o, colors["Other"]))[0]
+        if show_sem and sem is not None:
+            axp.fill_between(bin_centers, psth - sem, psth + sem, color=colors.get(o, colors["Other"]), alpha=0.2, linewidth=0)
+        axp.axvline(0, color="k", linestyle="--", linewidth=0.8)
+        axp.set_ylabel("FR (Hz)")
+        handles.append(ln)
+        labels.append(f"{o} (n={g.shape[0]})")
+    ax_ps[-1].set_xlabel("Time (s)")
+
+    if handles:
+        legend_ax.legend(handles, labels, loc="upper left", frameon=False,
+                         title=f"Outcomes (nTrials={len(df)})\nAligned to: Change_ON")
+
+    if save_path is not None:
+        p = Path(save_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(str(p), dpi=150, bbox_inches="tight")
+        plt.close(fig)
+    return fig
+
+
 def plot_change_rasters_hit_by_size(
     session,
     cluster_id: int,
@@ -928,7 +1049,8 @@ def plot_baseline_raster_psth_by_future_outcome(
         heights = [2] + [1] * n_pan
         # Build a 2-column grid: left = plots, right = legend
         fig_w = figsize[0]
-        fig_h = max(figsize[1], 3 + 2 * n_pan)
+        fig_h_base = 3 + 2 * n_pan
+        fig_h = max(figsize[1], compact_scale * fig_h_base)
         import matplotlib.gridspec as gridspec
         fig = plt.figure(figsize=(fig_w, fig_h), constrained_layout=True)
         gs = gridspec.GridSpec(1 + n_pan, 2, figure=fig, height_ratios=heights, width_ratios=[5, 2], wspace=0.25)

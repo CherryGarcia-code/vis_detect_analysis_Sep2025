@@ -39,7 +39,8 @@ def draw_image(ax, path: Path, title: str | None = None):
 
 def build_unit_comparison(session_pkl: Path, cluster_id: int, out_png: Path,
                            include: List[str], compact_scale: float, raster_line_height: float,
-                           window=(-0.5, 1.0), bin_size=0.02) -> Path:
+                           window=(-0.5, 1.0), bin_size=0.02,
+                           stack_change_outcome: bool = True) -> Path:
     session = load_session(str(session_pkl))
     key = f"{getattr(session, 'subject', 'unknown')}_{getattr(session, 'session_name', 'unknown')}"
 
@@ -75,12 +76,20 @@ def build_unit_comparison(session_pkl: Path, cluster_id: int, out_png: Path,
     # 3) Change_ON aligned, Hit vs Miss
     if "change_outcome" in include:
         p = tmp / f"{key}_c{cluster_id}_change_outcome.png"
-        su.plot_change_rasters_by_outcome(
-            session, cluster_id,
-            window=window, bin_size=bin_size,
-            smooth_sigma=1.0,
-            compact_scale=compact_scale, raster_line_height=raster_line_height,
-            save_path=str(p))
+        if stack_change_outcome:
+            su.plot_change_raster_psth_stacked(
+                session, cluster_id,
+                window=window, bin_size=bin_size,
+                smooth_sigma=1.0,
+                compact_scale=compact_scale, raster_line_height=raster_line_height,
+                save_path=str(p))
+        else:
+            su.plot_change_rasters_by_outcome(
+                session, cluster_id,
+                window=window, bin_size=bin_size,
+                smooth_sigma=1.0,
+                compact_scale=compact_scale, raster_line_height=raster_line_height,
+                save_path=str(p))
         panels.append(("Change_ON — Hit vs Miss", p))
 
     # Optionally: generic raster aligned to First_Lick if event exists
@@ -128,6 +137,8 @@ def main(argv=None):
     p.add_argument("--compact-scale", type=float, default=0.5)
     p.add_argument("--raster-line-height", type=float, default=0.6)
     p.add_argument("--window", nargs=2, type=float, default=[-0.5, 1.0])
+    p.add_argument("--stack-change-outcome", action="store_true", default=True,
+                   help="Use stacked layout for Change_ON Hit vs Miss panel (recommended)")
     p.add_argument("--bin-size", type=float, default=0.02)
     args = p.parse_args(argv)
 
@@ -142,7 +153,8 @@ def main(argv=None):
     build_unit_comparison(pkl, args.cluster_id, out_png,
                           include=list(args.include), compact_scale=float(args.compact_scale),
                           raster_line_height=float(args.raster_line_height),
-                          window=tuple(map(float, args.window)), bin_size=float(args.bin_size))
+                          window=tuple(map(float, args.window)), bin_size=float(args.bin_size),
+                          stack_change_outcome=bool(args.stack_change_outcome))
     print(f"Wrote {out_png}")
 
 
