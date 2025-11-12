@@ -105,7 +105,9 @@ def plot_raster_psth(
     window: Tuple[float, float] = (-0.5, 1.0),
     bin_size: float = 0.02,
     smooth_sigma: Optional[float] = 1.0,
-    figsize: Tuple[int, int] = (8, 5),
+    figsize: Tuple[float, float] = (8, 5),
+    compact_scale: float = 1.0,
+    raster_line_height: float = 0.8,
     save_path: Optional[str] = None,
 ):
     """Plot raster (top) and PSTH (bottom) for a single cluster aligned to event_name.
@@ -138,13 +140,19 @@ def plot_raster_psth(
     else:
         mean_psth_smooth = mean_psth
 
-    fig, (ax_raster, ax_psth) = plt.subplots(2, 1, figsize=figsize, gridspec_kw={"height_ratios": [2, 1]}, sharex=True)
+    if compact_scale != 1.0:
+        figsize = (figsize[0] * compact_scale, figsize[1] * compact_scale)
+    fig, (ax_raster, ax_psth) = plt.subplots(2, 1, figsize=figsize, gridspec_kw={"height_ratios": [2, 1]}, sharex=True, constrained_layout=True)
 
     # Raster
     for i, sp in enumerate(trials_spikes):
         if sp.size == 0:
             continue
-        ax_raster.vlines(sp, i + 0.1, i + 0.9, color="k", linewidth=0.6)
+        # draw short vertical lines centered on the row
+        h = max(0.1, min(0.95, float(raster_line_height)))
+        y1 = i + 0.5 - h / 2.0
+        y2 = i + 0.5 + h / 2.0
+        ax_raster.vlines(sp, y1, y2, color="k", linewidth=0.6)
     ax_raster.set_ylabel("Trial")
     ax_raster.set_title(f"Raster: cluster {cluster_id} aligned to {event_name}")
     ax_raster.axvline(0, color="C1", linestyle="--", linewidth=0.8)
@@ -157,7 +165,7 @@ def plot_raster_psth(
     ax_psth.axvline(0, color="k", linestyle="--", linewidth=0.8)
     ax_psth.legend(fontsize="small")
 
-    fig.tight_layout()
+    # Use constrained_layout for cleaner spacing
     if save_path is not None:
         p = Path(save_path)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -172,7 +180,9 @@ def plot_change_rasters_by_outcome(
     window: Tuple[float, float] = (-0.5, 1.0),
     bin_size: float = 0.02,
     smooth_sigma: Optional[float] = 1.0,
-    figsize: Tuple[int, int] = (10, 6),
+    figsize: Tuple[float, float] = (10, 6),
+    compact_scale: float = 1.0,
+    raster_line_height: float = 0.8,
     save_path: Optional[str] = None,
 ):
     """Plot rasters/PSTHs aligned to Change_ON, split by outcome (Hit vs Miss).
@@ -220,7 +230,9 @@ def plot_change_rasters_by_outcome(
     else:
         psth_hit_s, psth_miss_s = psth_hit, psth_miss
 
-    fig, axes = plt.subplots(2, 2, figsize=figsize, sharex=True, gridspec_kw={"height_ratios": [2, 1]})
+    if compact_scale != 1.0:
+        figsize = (figsize[0] * compact_scale, figsize[1] * compact_scale)
+    fig, axes = plt.subplots(2, 2, figsize=figsize, sharex=True, gridspec_kw={"height_ratios": [2, 1]}, constrained_layout=True)
     ax_r_hit, ax_r_miss = axes[0]
     ax_p_hit, ax_p_miss = axes[1]
 
@@ -229,7 +241,10 @@ def plot_change_rasters_by_outcome(
     for i, sp in enumerate(trials_spikes_hit):
         if len(sp) == 0:
             continue
-        ax_r_hit.vlines(sp, i + 0.1, i + 0.9, color="k", linewidth=0.6)
+        h = max(0.1, min(0.95, float(raster_line_height)))
+        y1 = i + 0.5 - h / 2.0
+        y2 = i + 0.5 + h / 2.0
+        ax_r_hit.vlines(sp, y1, y2, color="k", linewidth=0.6)
     ax_r_hit.set_title(f"Hit (n={len(ets_hit)})")
     ax_r_hit.set_ylabel("Trial")
     ax_r_hit.axvline(0, color="C1", linestyle="--", linewidth=0.8)
@@ -239,7 +254,10 @@ def plot_change_rasters_by_outcome(
     for i, sp in enumerate(trials_spikes_miss):
         if len(sp) == 0:
             continue
-        ax_r_miss.vlines(sp, i + 0.1, i + 0.9, color="k", linewidth=0.6)
+        h = max(0.1, min(0.95, float(raster_line_height)))
+        y1 = i + 0.5 - h / 2.0
+        y2 = i + 0.5 + h / 2.0
+        ax_r_miss.vlines(sp, y1, y2, color="k", linewidth=0.6)
     ax_r_miss.set_title(f"Miss (n={len(ets_miss)})")
     ax_r_miss.axvline(0, color="C1", linestyle="--", linewidth=0.8)
 
@@ -257,7 +275,6 @@ def plot_change_rasters_by_outcome(
     ax_p_miss.legend(fontsize="small")
 
     fig.suptitle(f"Cluster {cluster_id} aligned to Change_ON by Outcome", y=1.02)
-    fig.tight_layout()
     if save_path is not None:
         p = Path(save_path)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -612,7 +629,7 @@ def plot_session_population_psth_by_outcome(
             figsize = (9, height)
         # Build a 2-column layout: left = plots, right = legend area
         fig, axes_grid = plt.subplots(len(present), 2, figsize=figsize, sharex=True,
-                                      constrained_layout=False,
+                                      constrained_layout=True,
                                       gridspec_kw={"width_ratios": [5, 2], "wspace": 0.25})
         # Normalize to 2D array
         if not isinstance(axes_grid, np.ndarray) or axes_grid.ndim == 1:
@@ -658,7 +675,7 @@ def plot_session_population_psth_by_outcome(
         # Fallback to single overlay panel (either only one outcome or user requested overlay)
         if figsize is None:
             figsize = (9, 4)
-        fig, ax = plt.subplots(1, 1, figsize=figsize, sharex=True)
+        fig, ax = plt.subplots(1, 1, figsize=figsize, sharex=True, constrained_layout=True)
         axes = [ax]
         handles = []
         labels = []
@@ -685,7 +702,7 @@ def plot_session_population_psth_by_outcome(
         if labels:
             ax.legend(handles, labels, fontsize="small", ncol=2, title=f"nUnits={n_units_total}")
 
-    fig.tight_layout()
+    # Use constrained_layout for spacing
     if save_path is not None:
         p = Path(save_path)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -827,7 +844,9 @@ def plot_baseline_raster_psth_by_future_outcome(
     outcome_colors: Optional[Dict[str, str]] = None,
     peth_scale: str = "per_outcome",  # 'shared' or 'per_outcome'
     show_sem: bool = True,
-    figsize: Tuple[int, int] = (9, 5),
+    figsize: Tuple[float, float] = (9, 5),
+    compact_scale: float = 1.0,
+    raster_line_height: float = 0.8,
     save_path: Optional[str] = None,
 ):
     """Baseline-aligned raster with trials colored by FUTURE outcome; PSTH split by outcome.
@@ -891,10 +910,13 @@ def plot_baseline_raster_psth_by_future_outcome(
 
     # Prepare figure: raster + PSTH(s) with optional right-side legend column
     total_trials = len(df)
+    if compact_scale != 1.0:
+        figsize = (figsize[0] * compact_scale, figsize[1] * compact_scale)
     if peth_scale == "shared":
         # 2 rows x 2 cols: left column holds raster and overlay PSTH; right column is legend
         fig, axes_grid = plt.subplots(2, 2, figsize=figsize, sharex=True,
-                                      gridspec_kw={"height_ratios": [2, 1], "width_ratios": [5, 2], "wspace": 0.25})
+                                      gridspec_kw={"height_ratios": [2, 1], "width_ratios": [5, 2], "wspace": 0.25},
+                                      constrained_layout=True)
         ax_r, ax_p = axes_grid[0, 0], axes_grid[1, 0]
         legend_ax = axes_grid[0, 1]
         # Hide lower-right cell
@@ -908,7 +930,7 @@ def plot_baseline_raster_psth_by_future_outcome(
         fig_w = figsize[0]
         fig_h = max(figsize[1], 3 + 2 * n_pan)
         import matplotlib.gridspec as gridspec
-        fig = plt.figure(figsize=(fig_w, fig_h))
+        fig = plt.figure(figsize=(fig_w, fig_h), constrained_layout=True)
         gs = gridspec.GridSpec(1 + n_pan, 2, figure=fig, height_ratios=heights, width_ratios=[5, 2], wspace=0.25)
         # Left column axes
         ax_r = fig.add_subplot(gs[0, 0])
@@ -927,7 +949,10 @@ def plot_baseline_raster_psth_by_future_outcome(
         if sp.size == 0:
             continue
         col = colors.get(row["outcome"], colors.get("Other", "#666666"))
-        ax_r.vlines(sp, row_idx + 0.1, row_idx + 0.9, color=col, linewidth=0.6)
+        h = max(0.1, min(0.95, float(raster_line_height)))
+        y1 = row_idx + 0.5 - h / 2.0
+        y2 = row_idx + 0.5 + h / 2.0
+        ax_r.vlines(sp, y1, y2, color=col, linewidth=0.6)
     ax_r.set_ylabel("Trial")
     # Keep raster clean; legend and suptitle will carry meta-information
     ax_r.axvline(0, color="k", linestyle="--", linewidth=0.8)
@@ -995,7 +1020,7 @@ def plot_baseline_raster_psth_by_future_outcome(
             legend_ax.legend(handles, labels, loc="upper left", frameon=False,
                              title=f"Outcomes (nTrials={total_trials})\nAligned to: Baseline_ON")
 
-    fig.tight_layout()
+    # Use constrained_layout for spacing
     if save_path is not None:
         p = Path(save_path)
         p.parent.mkdir(parents=True, exist_ok=True)
