@@ -294,6 +294,8 @@ def plot_change_raster_psth_stacked(
     figsize: Tuple[float, float] = (9, 5),
     compact_scale: float = 1.0,
     raster_line_height: float = 0.8,
+    legend_ratio: float = 0.18,
+    export_dpi: int = 220,
     save_path: Optional[str] = None,
 ):
     """Change_ON-aligned raster with trials colored by outcome and stacked PSTH panels (Hit, Miss).
@@ -339,13 +341,16 @@ def plot_change_raster_psth_stacked(
 
     # Figure layout: raster + stacked PSTHs + right legend
     n_pan = max(1, len(groups))
-    heights = [2] + [1] * n_pan
+    # Allocate half of vertical height to raster, half to PSTHs collectively
+    heights = [n_pan] + [1] * n_pan
     fig_w = figsize[0]
     fig_h_base = 3 + 2 * n_pan
     fig_h = max(figsize[1], compact_scale * fig_h_base)
     import matplotlib.gridspec as gridspec
+    # Allocate more width to plots vs legend; legend_ratio is fraction of total width
+    lr = float(np.clip(legend_ratio, 0.08, 0.3))
     fig = plt.figure(figsize=(fig_w, fig_h), constrained_layout=True)
-    gs = gridspec.GridSpec(1 + n_pan, 2, figure=fig, height_ratios=heights, width_ratios=[5, 2], wspace=0.25)
+    gs = gridspec.GridSpec(1 + n_pan, 2, figure=fig, height_ratios=heights, width_ratios=[1.0 - lr, lr], wspace=0.15)
     ax_r = fig.add_subplot(gs[0, 0])
     ax_ps = [fig.add_subplot(gs[i, 0], sharex=ax_r) for i in range(1, 1 + n_pan)]
     legend_ax = fig.add_subplot(gs[0, 1])
@@ -393,13 +398,20 @@ def plot_change_raster_psth_stacked(
     ax_ps[-1].set_xlabel("Time (s)")
 
     if handles:
-        legend_ax.legend(handles, labels, loc="upper left", frameon=False,
-                         title=f"Outcomes (nTrials={len(df)})\nAligned to: Change_ON")
+        legend_ax.legend(
+            handles,
+            labels,
+            loc="upper left",
+            frameon=False,
+            title=f"Outcomes (nTrials={len(df)})\nAligned to: Change_ON",
+            fontsize=7,
+            title_fontsize=8,
+        )
 
     if save_path is not None:
         p = Path(save_path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(str(p), dpi=150, bbox_inches="tight")
+        fig.savefig(str(p), dpi=int(export_dpi), bbox_inches="tight")
         plt.close(fig)
     return fig
 
@@ -963,11 +975,13 @@ def plot_baseline_raster_psth_by_future_outcome(
     sort_trials: str = "outcome",  # one of: 'outcome' | 'future_rt' | 'none'
     outcome_order: Optional[Sequence[str]] = ("Hit", "FA", "Abort", "Miss", "Ref", "Other"),
     outcome_colors: Optional[Dict[str, str]] = None,
-    peth_scale: str = "per_outcome",  # 'shared' or 'per_outcome'
+    peth_scale: str = "per_outcome",  # 'shared' | 'per_outcome' | 'none' (raster only)
     show_sem: bool = True,
     figsize: Tuple[float, float] = (9, 5),
     compact_scale: float = 1.0,
     raster_line_height: float = 0.8,
+    legend_ratio: float = 0.18,
+    export_dpi: int = 220,
     save_path: Optional[str] = None,
 ):
     """Baseline-aligned raster with trials colored by FUTURE outcome; PSTH split by outcome.
@@ -1033,11 +1047,22 @@ def plot_baseline_raster_psth_by_future_outcome(
     total_trials = len(df)
     if compact_scale != 1.0:
         figsize = (figsize[0] * compact_scale, figsize[1] * compact_scale)
-    if peth_scale == "shared":
+    if peth_scale == "none":
+        # Raster only mode: allocate full figure to raster (no PSTH panels, no legend)
+        fig, ax_r = plt.subplots(1, 1, figsize=figsize, constrained_layout=True)
+        ax_p = None
+        legend_ax = None
+    elif peth_scale == "shared":
         # 2 rows x 2 cols: left column holds raster and overlay PSTH; right column is legend
-        fig, axes_grid = plt.subplots(2, 2, figsize=figsize, sharex=True,
-                                      gridspec_kw={"height_ratios": [2, 1], "width_ratios": [5, 2], "wspace": 0.25},
-                                      constrained_layout=True)
+        lr = float(np.clip(legend_ratio, 0.08, 0.3))
+        fig, axes_grid = plt.subplots(
+            2,
+            2,
+            figsize=figsize,
+            sharex=True,
+            gridspec_kw={"height_ratios": [2, 1], "width_ratios": [1.0 - lr, lr], "wspace": 0.15},
+            constrained_layout=True,
+        )
         ax_r, ax_p = axes_grid[0, 0], axes_grid[1, 0]
         legend_ax = axes_grid[0, 1]
         # Hide lower-right cell
@@ -1046,14 +1071,23 @@ def plot_baseline_raster_psth_by_future_outcome(
     else:
         # per-outcome PSTH panels stacked below raster; add a legend column on the right
         n_pan = max(1, len(groups))
-        heights = [2] + [1] * n_pan
+        # Allocate half of vertical height to raster, half to PSTHs collectively
+        heights = [n_pan] + [1] * n_pan
         # Build a 2-column grid: left = plots, right = legend
         fig_w = figsize[0]
         fig_h_base = 3 + 2 * n_pan
         fig_h = max(figsize[1], compact_scale * fig_h_base)
         import matplotlib.gridspec as gridspec
+        lr = float(np.clip(legend_ratio, 0.08, 0.3))
         fig = plt.figure(figsize=(fig_w, fig_h), constrained_layout=True)
-        gs = gridspec.GridSpec(1 + n_pan, 2, figure=fig, height_ratios=heights, width_ratios=[5, 2], wspace=0.25)
+        gs = gridspec.GridSpec(
+            1 + n_pan,
+            2,
+            figure=fig,
+            height_ratios=heights,
+            width_ratios=[1.0 - lr, lr],
+            wspace=0.15,
+        )
         # Left column axes
         ax_r = fig.add_subplot(gs[0, 0])
         ax_ps = [fig.add_subplot(gs[i, 0], sharex=ax_r) for i in range(1, 1 + n_pan)]
@@ -1080,7 +1114,9 @@ def plot_baseline_raster_psth_by_future_outcome(
     ax_r.axvline(0, color="k", linestyle="--", linewidth=0.8)
 
     # PSTH: overlay or per-outcome panels
-    if peth_scale == "shared":
+    if peth_scale == "none":
+        pass  # raster-only; no PSTH rendering
+    elif peth_scale == "shared":
         handles = []
         labels = []
         for o, g in groups.items():
@@ -1108,8 +1144,15 @@ def plot_baseline_raster_psth_by_future_outcome(
         ax_p.set_ylabel("Firing rate (Hz)")
         ax_p.axvline(0, color="k", linestyle="--", linewidth=0.8)
         if handles:
-            legend_ax.legend(handles, labels, loc="upper left", frameon=False,
-                             title=f"Outcomes (nTrials={total_trials})\nAligned to: Baseline_ON")
+            legend_ax.legend(
+                handles,
+                labels,
+                loc="upper left",
+                frameon=False,
+                title=f"Outcomes (nTrials={total_trials})\nAligned to: Baseline_ON",
+                fontsize=7,
+                title_fontsize=8,
+            )
     else:
         # separate y-scales
         handles = []
@@ -1139,14 +1182,21 @@ def plot_baseline_raster_psth_by_future_outcome(
         ax_ps[-1].set_xlabel("Time (s)")
         # Build unified legend at right
         if handles:
-            legend_ax.legend(handles, labels, loc="upper left", frameon=False,
-                             title=f"Outcomes (nTrials={total_trials})\nAligned to: Baseline_ON")
+            legend_ax.legend(
+                handles,
+                labels,
+                loc="upper left",
+                frameon=False,
+                title=f"Outcomes (nTrials={total_trials})\nAligned to: Baseline_ON",
+                fontsize=7,
+                title_fontsize=8,
+            )
 
     # Use constrained_layout for spacing
     if save_path is not None:
         p = Path(save_path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(str(p), dpi=150, bbox_inches="tight")
+        fig.savefig(str(p), dpi=int(export_dpi), bbox_inches="tight")
         plt.close(fig)
     return fig
 
