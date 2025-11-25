@@ -2,8 +2,8 @@ from pathlib import Path
 import argparse
 import logging
 
-from src.session_io import load_session
-from src.integrations.bombcell_wrapper import detect_with_bombcell
+from visdetect.core.legacy_io import load_session
+from visdetect.integrations.bombcell_wrapper import detect_with_bombcell
 
 
 def parse_args():

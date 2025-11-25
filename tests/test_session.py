@@ -1,5 +1,5 @@
 import numpy as np
-from visdetect.io import parse_good_cluster_ids
+from visdetect.core.io import parse_good_cluster_ids
 
 
 def test_parse_scalar_int():

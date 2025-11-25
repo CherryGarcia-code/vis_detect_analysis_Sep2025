@@ -1,6 +1,6 @@
 from pathlib import Path
-from src.session_io import load_session
-from src.qc import run_qc
+from visdetect.core.legacy_io import load_session
+from visdetect.core.qc import run_qc
 
 
 def test_run_qc_example(tmp_path):

@@ -1,6 +1,6 @@
 from pathlib import Path
 import numpy as np
-from src.session_io import Session, Trial, Cluster, save_session
+from visdetect.core.legacy_io import Session, Trial, Cluster, save_session
 
 # Determine repo root from this file's location
 REPO = Path(__file__).resolve().parents[1]

@@ -1,5 +1,5 @@
 import numpy as np
-from src.coding_direction import time_resolved_cd
+from visdetect.analysis.coding_direction import time_resolved_cd
 
 
 def test_time_resolved_cd_recovery():

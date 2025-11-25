@@ -75,7 +75,7 @@ orig_count = len(units)
 good_ids = set()
 try:
     # session IO provides load_session which normalizes a pickle into Session dataclass
-    from src.session_io import load_session
+    from visdetect.core.legacy_io import load_session
 
     PKL_PATH = ROOT / "data" / "BG_031_260325.pkl"
     if PKL_PATH.exists():

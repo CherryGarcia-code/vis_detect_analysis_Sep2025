@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 import numpy as np
 import json
-from src.session_io import load_session
-from src.align import compute_peth_for_session
+from visdetect.core.legacy_io import load_session
+from visdetect.analysis.align import compute_peth_for_session
 
 
 def main(argv):

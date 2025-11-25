@@ -11,6 +11,15 @@ default:
   # Optional: set to null to ignore (no upper cap)
   max_median_spikes_per_trial: null
 
+# QC-only filter: keep purely quality-related gates, no baseline responsiveness
+qc_only:
+  require_good_cluster: true
+  min_total_spikes: 500
+  min_mean_rate_hz: 0.1
+  max_isi_viol_frac: 0.2
+  min_median_spikes_per_trial: 0.0
+  max_median_spikes_per_trial: null
+
 # Striatum-focused, stricter single-unit quality
 striatal_strict:
   require_good_cluster: true

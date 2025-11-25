@@ -16,8 +16,8 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from scripts.vis_detect_helpers_EPHYS_August2025 import load_mat_file_to_session
-from src.session_io import save_session, session_summary
+from visdetect.core.io import load_mat_file_to_session
+from visdetect.core.legacy_io import save_session, session_summary
 
 
 def main(argv=None):

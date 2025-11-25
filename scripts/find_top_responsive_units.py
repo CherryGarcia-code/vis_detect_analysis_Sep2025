@@ -16,9 +16,9 @@ repo_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(repo_root))
 sys.path.insert(0, str(repo_root / 'src'))
 
-from src.session_io import load_session
-from src import align as align_mod
-from src.su_analysis import plot_raster_psth, plot_change_rasters_by_outcome, plot_change_rasters_hit_by_size
+from visdetect.core.legacy_io import load_session
+from visdetect.analysis import align as align_mod
+from visdetect.analysis.su_analysis import plot_raster_psth, plot_change_rasters_by_outcome, plot_change_rasters_hit_by_size
 
 
 def mean_rate_in_window(trials_mat, bin_centers, win):

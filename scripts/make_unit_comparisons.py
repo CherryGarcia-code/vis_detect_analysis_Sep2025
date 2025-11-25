@@ -16,12 +16,12 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from src.session_io import load_session
-from src import su_analysis as su
-from src import align as align_mod
+from visdetect.core.legacy_io import load_session
+from visdetect.analysis import su_analysis as su
+from visdetect.analysis import align as align_mod
 
 # Reuse internal helpers for inline plotting (keeps font vector quality)
-from src.su_analysis import _get_outcome_colors, _normalize_outcome_label, _spikes_relative_to_events
+from visdetect.analysis.su_analysis import _get_outcome_colors, _normalize_outcome_label, _spikes_relative_to_events
 
 
 def safe_read_png(path: Path):

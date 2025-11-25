@@ -16,8 +16,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from src.session_io import load_session
-from src.lick_decoding import LickCDConfig, run_lick_decoding
+from visdetect.core.legacy_io import load_session
+from visdetect.analysis.lick_decoding import LickCDConfig, run_lick_decoding
 
 
 def _session_key(session) -> str:
@@ -32,7 +32,10 @@ def main():
     p.add_argument("--profiles-root", default="table_output/unit_qc")
     p.add_argument("--out-root", default="table_output/lick_decoding")
     p.add_argument("--png-root", default="png_output/lick_decoding")
-    p.add_argument("--kept-only", action="store_true")
+    kept_group = p.add_mutually_exclusive_group()
+    kept_group.add_argument("--kept-only", dest="kept_only", action="store_true")
+    kept_group.add_argument("--no-kept-only", dest="kept_only", action="store_false")
+    p.set_defaults(kept_only=True)
     p.add_argument("--prefer-profile", default="striatal_strict")
     p.add_argument("--event", default="Lick_L")
     p.add_argument("--window", nargs=2, type=float, default=[-0.5, 0.5])
@@ -60,14 +63,9 @@ def main():
             key = _session_key(session)
             print(f"Processing {key} ...")
 
-            # locate selection CSV (prefer profile)
-            sel_csv = None
-            prefer = Path(args.profiles_root) / f"{key}_{args.prefer_profile}" / "unit_selection.csv"
-            exact = Path(args.profiles_root) / key / "unit_selection.csv"
-            if prefer.exists():
-                sel_csv = str(prefer)
-            elif exact.exists():
-                sel_csv = str(exact)
+            # locate selection CSV (prefer consistent default path)
+            from visdetect.analysis.su_analysis import selection_csv_default_path
+            sel_csv = str(selection_csv_default_path(session, root=args.profiles_root))
 
             cfg = LickCDConfig(
                 event_name=args.event,

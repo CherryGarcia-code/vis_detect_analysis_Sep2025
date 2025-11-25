@@ -31,7 +31,7 @@ sys.path.insert(0, str(repo_root))
 scripts_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(scripts_dir))
 
-from src.session_io import load_session
+from visdetect.core.legacy_io import load_session
 
 # Import validation modules
 try:

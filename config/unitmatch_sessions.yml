@@ -1,11 +1,41 @@
 sessions:
-  - path: "X:\\public\\projects\\BeJG_20230130_VisDetect\\wEPhys\\BG_031\\Processed data\\BG_031_260325\\Kilosort&Phy\\BG_031_260325_g0_imec0"
-    has_bombcell: true
-    note: "Bombcell run saved in notebooks/BG_031_260325/bombcell"
-    bombcell_dir: "notebooks/BG_031_260325/bombcell"
-  - path: "X:\\public\\projects\\BeJG_20230130_VisDetect\\wEPhys\\BG_031\\Processed data\\BG_031_25042025\\Kilosort&Phy\\BG_031_25042025_g0_imec0"
-    has_bombcell: true
-    note: "Bombcell run saved in notebooks/BG_031_250425/bombcell"
-    bombcell_dir: "notebooks/BG_031_250425/bombcell"
+  - path: "X:\\public\\projects\\BeJG_20230130_VisDetect\\wEPhys\\BG_046\\Processed data\\BG_046_13082025\\Kilosort&Phy\\BG_046_13082025_g0_imec0"
+    name: "BG_046_13082025"
+    session_pkl: "data/BG_046_13082025.pkl"
+    raw_ap: "X:\\public\\projects\\BeJG_20230130_VisDetect\\wEPhys\\BG_046\\Processed data\\BG_046_13082025\\Kilosort&Phy\\BG_046_13082025_g0_imec0\\BG_046_13082025_g0_tcat.imec0.ap.bin"
+    note: "Baseline day for consecutive UnitMatch test"
+  - path: "X:\\public\\projects\\BeJG_20230130_VisDetect\\wEPhys\\BG_046\\Processed data\\BG_046_14082025\\Kilosort&Phy\\BG_046_14082025_g0_imec0"
+    name: "BG_046_14082025"
+    session_pkl: "data/BG_046_14082025.pkl"
+    raw_ap: "X:\\public\\projects\\BeJG_20230130_VisDetect\\wEPhys\\BG_046\\Processed data\\BG_046_14082025\\Kilosort&Phy\\BG_046_14082025_g0_imec0\\BG_046_14082025_g0_tcat.imec0.ap.bin"
+    note: "Next day for consecutive UnitMatch test"
+
+# Waveform extraction configuration
+waveform_config:
+  source: 'both'  # 'kilosort', 'bombcell', or 'both' (for comparison)
+  use_iti: true  # Extract waveforms from ITI periods only
+  iti_method: 'trial_field'  # 'trial_field' (use Trial.ITI before Baseline_ON), 'trial_boundaries', or 'fallback'
+  fallback_window: [1.0, 3.0]  # Fallback window (seconds) before Baseline_ON
+  min_iti_duration: 0.5  # Minimum ITI duration to consider valid (seconds)
+  iti_window_mode: 'uniform'  # 'all' uses every ITI window, 'uniform' subsamples
+  max_iti_windows: 50  # Only used when iti_window_mode='uniform'
+  compare_sources: true  # Generate comparison plots if source='both'
+  max_spikes_per_unit: 100
+  min_spikes_per_unit: 80
+  min_spikes_per_half: 25
+  show_progress: true
+  cache_waveforms: true
+  iti_cache_dir: "table_output/unitmatch/iti_cache"
+
+# Spatial constraints for matching
+spatial_constraints:
+  max_cross_shank_distance_um: 350  # Maximum distance for cross-shank matches (chronic implant)
+
+# Matching parameters (from UnitMatch paper)
+matching_params:
+  prob_threshold: 0.5  # Default probability threshold from paper
+  check_neighboring_recordings: true  # Check matches in neighboring recordings
+  allow_disappear_reappear: true  # Allow units to disappear and reappear
+
 report_dir: "table_output/unitmatch"
 use_auto_shanks: true

@@ -15,8 +15,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from src.session_io import load_session
-from src.tf_pulse import TFRespPulseConfig, run_tf_pulse_screening
+from visdetect.core.legacy_io import load_session
+from visdetect.analysis.su_analysis import selection_csv_default_path
+from visdetect.analysis.tf_pulse import TFRespPulseConfig, run_tf_pulse_screening
 
 
 def main(argv=None):
@@ -24,8 +25,12 @@ def main(argv=None):
     ap.add_argument("--input-glob", default="data/*.pkl", help="Glob pattern for session pickle files")
     ap.add_argument("--out-root", default="table_output/tf_pulse", help="Root folder for per-session CSV outputs")
     ap.add_argument("--png-root", default="png_output/tf_pulse", help="Root folder for per-session PNG outputs")
-    ap.add_argument("--selection-csv", default=None, help="Path to unit selection CSV (optional; defaults to unit_qc path per session)")
-    ap.add_argument("--kept-only", action="store_true", help="Restrict to kept/good clusters only")
+    ap.add_argument("--selection-csv", default=None, help="Explicit path to unit selection CSV (overrides per-session default)")
+    ap.add_argument("--profiles-root", default="table_output/unit_qc", help="Root where per-session unit_selection.csv files are stored")
+    kept_group = ap.add_mutually_exclusive_group()
+    kept_group.add_argument("--kept-only", dest="kept_only", action="store_true", help="Restrict to kept clusters (default)")
+    kept_group.add_argument("--no-kept-only", dest="kept_only", action="store_false", help="Use all good clusters (disable kept-only)")
+    ap.set_defaults(kept_only=True)
     ap.add_argument("--fast-thresh-log2", type=float, default=0.25, help="Log2(TF) threshold for fast pulses")
     ap.add_argument("--slow-thresh-log2", type=float, default=-0.25, help="Log2(TF) threshold for slow pulses")
     ap.add_argument("--pre-window", nargs=2, type=float, default=[-0.4, 0.0], help="Pre window [start, end] (s)")
@@ -59,7 +64,18 @@ def main(argv=None):
         try:
             sess = load_session(f)
             ident = f"{getattr(sess,'subject','unknown')}_{getattr(sess,'session_name','unknown')}"
-            paths = run_tf_pulse_screening(sess, out_root=args.out_root, png_root=args.png_root, cfg=cfg, selection_csv=args.selection_csv, generate_grid=args.grid)
+            # Resolve selection CSV per session if kept-only and not explicitly provided
+            sel_csv = args.selection_csv
+            if cfg.kept_only and sel_csv is None:
+                sel_csv = str(selection_csv_default_path(sess, root=args.profiles_root))
+            paths = run_tf_pulse_screening(
+                sess,
+                out_root=args.out_root,
+                png_root=args.png_root,
+                cfg=cfg,
+                selection_csv=sel_csv,
+                generate_grid=args.grid,
+            )
             manifest_rows.append({"file": f, "session": ident, "status": "OK", **paths})
             print(f"[OK] {ident} -> {paths.get('csv','')} ")
         except Exception as e:

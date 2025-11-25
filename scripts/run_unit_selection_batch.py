@@ -25,8 +25,25 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-from src.session_io import load_session, session_summary
+from visdetect.core.legacy_io import load_session, session_summary
 from src import qc
+
+
+def _progress(iterable, *, desc: str = "", unit: str = "item"):
+    total = len(iterable) if hasattr(iterable, "__len__") else None
+    if total is None or total == 0:
+        for item in iterable:
+            yield item
+        return
+    width = 30
+    print(f"{desc} (0/{total} {unit})")
+    for idx, item in enumerate(iterable, 1):
+        pct = idx / total
+        filled = int(width * pct)
+        bar = "#" * filled + "-" * (width - filled)
+        print(f"\r{desc} [{bar}] {idx}/{total} {unit}", end="", flush=True)
+        yield item
+    print()
 
 
 def parse_args():
@@ -60,7 +77,7 @@ def main():
         return 0
 
     print(f"Found {len(pkls)} pkl files in {data_dir}")
-    for pkl in pkls:
+    for pkl in _progress(pkls, desc="Processing sessions", unit="session"):
         try:
             sess = load_session(str(pkl))
             summ = session_summary(sess)

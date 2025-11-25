@@ -14,8 +14,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from src.optotag.laser_detection import pulses_from_ni_events
-from src.optotag.align_and_classify import (
+from visdetect.analysis.optotag.laser_detection import pulses_from_ni_events
+from visdetect.analysis.optotag.align_and_classify import (
     build_units_table,
     align_spikes_to_onsets,
     compute_psth,

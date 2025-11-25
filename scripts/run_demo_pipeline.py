@@ -18,15 +18,13 @@ import matplotlib.pyplot as plt
 from scipy import stats
 
 # Analysis imports (project-local)
-from src.session_io import load_session
-from src.align import (
+from visdetect.core.legacy_io import load_session
+from visdetect.analysis.align import (
     compute_peth_for_session,
     get_event_times,
     compute_true_reaction_time,
 )
-from src.coding_direction import compute_cd_shrinkage, time_resolved_cd
-
-
+from visdetect.analysis.coding_direction import compute_cd_shrinkage, time_resolved_cd
 def parse_args(argv: Optional[list] = None):
     p = argparse.ArgumentParser(
         description="Run demo single-session pipeline (PETH → pop → CD → baseline stats)"

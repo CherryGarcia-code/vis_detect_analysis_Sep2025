@@ -19,8 +19,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from src.session_io import load_session
-from src.su_analysis import load_kept_ids
+from visdetect.core.legacy_io import load_session
+from visdetect.analysis.su_analysis import load_kept_ids
 from src.responsiveness import RespConfig, run_responsiveness
 
 

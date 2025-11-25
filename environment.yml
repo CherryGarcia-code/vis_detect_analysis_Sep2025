@@ -14,3 +14,4 @@ dependencies:
   - h5py
   - pytest
   - jupyter
+  - tqdm  # progress bars

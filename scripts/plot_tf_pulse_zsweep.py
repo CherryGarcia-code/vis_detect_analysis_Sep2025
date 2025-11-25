@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+from typing import Optional
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -14,8 +15,29 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from src.session_io import load_session
-from src.tf_pulse import TFRespPulseConfig, plot_tf_pulse_grid
+from visdetect.core.legacy_io import load_session
+from visdetect.analysis.tf_pulse import (
+    TFRespPulseConfig,
+    plot_tf_pulse_grid,
+    plot_tf_pulse_high_z_summary,
+)
+
+
+def _progress(iterable, *, desc: str = ""):
+    total = len(iterable) if hasattr(iterable, "__len__") else None
+    if total is None or total == 0:
+        for item in iterable:
+            yield item
+        return
+    width = 30
+    print(f"{desc} (0/{total})")
+    for idx, item in enumerate(iterable, 1):
+        pct = idx / total
+        filled = int(width * pct)
+        bar = "#" * filled + "-" * (width - filled)
+        print(f"\r{desc} [{bar}] {idx}/{total}", end="", flush=True)
+        yield item
+    print()
 
 
 def main(argv=None):
@@ -25,6 +47,7 @@ def main(argv=None):
     ap.add_argument("--out", default="png_output/tf_pulse_grids", help="Output root folder")
     ap.add_argument("--cols", type=int, default=12, help="Number of columns in each grid")
     ap.add_argument("--kept-only", action="store_true", help="Use only kept/good units")
+    ap.add_argument("--high-z", type=float, default=3.0, help="|z| cutoff for the survivor grid + summary")
     args = ap.parse_args(argv)
 
     sess = load_session(args.file)
@@ -34,7 +57,7 @@ def main(argv=None):
 
     # Produce individual grids
     png_paths = []
-    for z in args.zs:
+    for z in _progress(list(args.zs), desc="Generating z grids"):
         cfg = TFRespPulseConfig(kept_only=args.kept_only)
         png = out_dir / f"tf_pulse_grid_both_z{z:g}.png"
         plot_tf_pulse_grid(sess, str(png), cfg=cfg, n_cols=args.cols, which="both", z_line=z)
@@ -54,6 +77,22 @@ def main(argv=None):
     fig.savefig(combo, dpi=120, bbox_inches="tight")
     plt.close(fig)
     print(f"Wrote sweep: {combo}")
+
+    # Survivor grid with aligned modulation summary
+    survivor_png = out_dir / f"tf_pulse_highz_summary_z{args.high_z:g}.png"
+    cfg = TFRespPulseConfig(kept_only=args.kept_only)
+    result_path = plot_tf_pulse_high_z_summary(
+        sess,
+        str(survivor_png),
+        cfg=cfg,
+        n_cols=args.cols,
+        which="both",
+        min_abs_z=float(args.high_z),
+    )
+    if result_path:
+        print(f"Wrote high-z summary: {result_path}")
+    else:
+        print(f"No clusters exceeded |z| ≥ {args.high_z:g}; skipping survivor plot")
 
 
 if __name__ == "__main__":

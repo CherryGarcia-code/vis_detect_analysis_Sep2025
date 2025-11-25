@@ -9,8 +9,8 @@ repo_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(repo_root))
 sys.path.insert(0, str(repo_root / 'src'))
 
-from src.session_io import load_session
-from src import align as align_mod
+from visdetect.core.legacy_io import load_session
+from visdetect.analysis import align as align_mod
 import numpy as np
 
 p = repo_root / 'data' / 'BG_046_15082025.pkl'

@@ -20,7 +20,7 @@ import pandas as pd
 repo_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(repo_root))
 
-from src.session_io import load_session
+from visdetect.core.legacy_io import load_session
 
 
 def parse_spikeglx_meta(meta_path: Path) -> Dict[str, str]:

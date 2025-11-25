@@ -1,5 +1,5 @@
 from pathlib import Path
-from src.session_io import load_session, session_summary
+from visdetect.core.legacy_io import load_session, session_summary
 
 
 def test_load_example_session():

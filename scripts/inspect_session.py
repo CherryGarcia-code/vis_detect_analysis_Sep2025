@@ -8,7 +8,7 @@ from pathlib import Path
 import json
 import matplotlib.pyplot as plt
 
-from src.session_io import load_session, session_summary
+from visdetect.core.legacy_io import load_session, session_summary
 
 
 def main(argv):

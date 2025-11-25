@@ -11,13 +11,14 @@ import argparse
 import logging
 from pathlib import Path
 import sys
+from tqdm import tqdm
 
 # Add repo root to path
 repo_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(repo_root))
 
-from src.visdetect.io import load_mat_file_to_session
-from src.session_io import save_session
+from visdetect.core.io import load_mat_file_to_session
+from visdetect.core.legacy_io import save_session
 
 
 def setup_logging(verbose: bool = False):
@@ -79,6 +80,12 @@ def main(argv=None):
         help='Directory containing .mat files (default: data/)'
     )
     parser.add_argument(
+        '--out-dir',
+        type=Path,
+        default=repo_root / 'data',
+        help='Directory to save .pkl files (default: data/)'
+    )
+    parser.add_argument(
         '--force',
         action='store_true',
         help='Overwrite existing .pkl files'
@@ -129,16 +136,16 @@ def main(argv=None):
     success_count = 0
     failed_files = []
     
-    for idx, mat_file in enumerate(mat_files, 1):
+    for mat_file in tqdm(mat_files, desc="Converting sessions", unit="file"):
         pkl_file = mat_file.with_suffix('.pkl')
-        logging.info(f"[{idx}/{len(mat_files)}] Processing {mat_file.name}")
+        # logging.info(f"Processing {mat_file.name}") # Reduced verbosity for tqdm
         
         if convert_single_session(mat_file, pkl_file, args.force):
             success_count += 1
         else:
             failed_files.append(mat_file.name)
         
-        logging.info("")  # Blank line between files
+        # logging.info("")  # Blank line between files
     
     # Summary
     logging.info("=== CONVERSION SUMMARY ===")

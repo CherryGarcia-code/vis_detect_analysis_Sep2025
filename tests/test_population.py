@@ -1,5 +1,5 @@
 import numpy as np
-from src.population import (
+from visdetect.analysis.population import (
     compute_condition_averages,
     compute_coding_direction,
     project_onto_cd,
