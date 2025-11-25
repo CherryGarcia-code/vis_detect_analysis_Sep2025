@@ -24,3 +24,26 @@ nohup.out
 # Archives
 archive/
 
+# Additional data & outputs to reduce working-tree noise
+# raw data and matlab session files
+data/
+# pickles and previous run outputs
+pkls/
+pkls/previous_runs/
+*.pkl
+*.npz
+*.7z
+*.zip
+*.tar.gz
+*.tgz
+# notebook outputs and generated images
+png_output/
+notebooks/png_output/
+notebooks/aggregated/
+notebooks/batch_outputs/
+table_output/
+# runtime/logs
+nohup.out
+*.log
+# notebook checkpoints
+.ipynb_checkpoints/
