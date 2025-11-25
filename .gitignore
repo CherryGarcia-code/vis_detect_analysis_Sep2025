@@ -47,3 +47,12 @@ nohup.out
 *.log
 # notebook checkpoints
 .ipynb_checkpoints/
+# Additional ignores for notebooks, databases, and temp folders
+notebooks/
+database/
+cleanup_archive/
+paper_references/
+tmp_demo_qc/
+src/visdetect.egg-info/
+chanMap_*.mat
+*.png
