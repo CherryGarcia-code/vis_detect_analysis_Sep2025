@@ -5,9 +5,8 @@ from . import responsiveness
 from . import population
 from . import tracking
 from . import tf_pulse
-from . import lick_decoding
-from . import lick_responsiveness
 from . import optotagging
 from . import su_analysis
 from . import coding_direction
 from . import responsive_analysis
+from . import lick

@@ -11,9 +11,8 @@ def test_basic_imports():
     importlib.import_module("visdetect.analysis.tracking")
     importlib.import_module("visdetect.analysis.responsive_analysis")
     # ensure the runner script is syntactically valid
-    importlib.import_module("scripts.run_demo_pipeline")
-    importlib.import_module("scripts.run_batch")
+    importlib.import_module("scripts.pipelines.run_demo_pipeline")
     importlib.import_module("visdetect.core.kilosort")
 
     importlib.import_module("visdetect.integrations.bombcell_wrapper")
-    importlib.import_module("scripts.run_bombcell_wrapper")
+    importlib.import_module("scripts.pipelines.run_bombcell_wrapper")

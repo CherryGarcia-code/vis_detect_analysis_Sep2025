@@ -652,8 +652,19 @@ def propose_matches(sess_a: Any, sess_b: Any, top_k: int = 5) -> pd.DataFrame:
     """
     # Placeholder: iterate over possible cluster pairs and compute similarity
     rows = []
-    clusters_a = getattr(sess_a, "good_cluster_ids", [])
-    clusters_b = getattr(sess_b, "good_cluster_ids", [])
+    # Prefer good_and_stable_ids, then good_cluster_ids, else all clusters
+    if getattr(sess_a, "good_and_stable_ids", None):
+        clusters_a = list(sess_a.good_and_stable_ids)
+    elif getattr(sess_a, "good_cluster_ids", None):
+        clusters_a = list(sess_a.good_cluster_ids)
+    else:
+        clusters_a = [c.cluster_id for c in sess_a.clusters]
+    if getattr(sess_b, "good_and_stable_ids", None):
+        clusters_b = list(sess_b.good_and_stable_ids)
+    elif getattr(sess_b, "good_cluster_ids", None):
+        clusters_b = list(sess_b.good_cluster_ids)
+    else:
+        clusters_b = [c.cluster_id for c in sess_b.clusters]
     for a in clusters_a:
         for b in clusters_b:
             rows.append(

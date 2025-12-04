@@ -40,8 +40,16 @@ class Progress:
             auto = (tqdm is not None) and (self.total > 0) and ("PROGRESS_SIMPLE" not in os.environ)
             use_tqdm = auto
         if use_tqdm and tqdm is not None and self.total > 0:
-            # leave dynamic_ncols for better fit; disable smoothing for immediate feedback
-            self._bar = tqdm(total=self.total, desc=self.desc, unit="it", leave=False)
+            # use stdout so bars are visible in typical terminals, allow dynamic width
+            # and keep the final bar visible (`leave=True`) for easier inspection.
+            self._bar = tqdm(
+                total=self.total,
+                desc=self.desc,
+                unit="it",
+                leave=True,
+                dynamic_ncols=True,
+                file=self.stream,
+            )
         if self.total > 0:
             self._step = max(1, self.total // self.ticks)
         else:

@@ -20,6 +20,8 @@ import matplotlib.pyplot as plt
 from visdetect.analysis.su_analysis import load_kept_ids
 from scipy.ndimage import gaussian_filter1d
 from visdetect.utils.progress import Progress
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import os
 
 
 @dataclass
@@ -71,7 +73,9 @@ def _safe_log2(x: np.ndarray) -> np.ndarray:
 
 
 def _per_trial_event_times(session, key: str) -> np.ndarray:
-    from src.align import get_event_times_by_trial
+    # Import the project alignment helper. Older code referenced `src.align`;
+    # the correct import path in this repository layout is `visdetect.analysis.align`.
+    from visdetect.analysis.align import get_event_times_by_trial
 
     arr = np.array(get_event_times_by_trial(session, key), dtype=float)
     return arr
@@ -222,22 +226,123 @@ def _zscore_trace(
     return z
 
 
+def _compute_trace_for_cluster(args):
+    """Top-level worker for parallel trace computation.
+
+    args: tuple containing (cid, spike_times, fast_times, slow_times, t_vec, pre_window, post_window, dt, sigma_ms)
+    Returns a tuple (cid, TFUnitTrace)
+    """
+    (cid, spike_times, fast_times, slow_times, t_vec, pre_window, post_window, dt, sigma_ms) = args
+    import numpy as _np
+
+    post_mask = (t_vec >= post_window[0]) & (t_vec < post_window[1])
+
+    st = _np.asarray(spike_times, dtype=float).flatten()
+
+    mf, mf_sem, _ = _mean_activity_per_unit(st, fast_times, pre_window, post_window, dt, sigma_ms)
+    if mf.size > 0:
+        zf, fast_sd = _zscore_trace(mf, t_vec, pre_window, return_stats=True)
+        zf_sem = mf_sem / fast_sd if _np.isfinite(fast_sd) and fast_sd > 0 else _np.zeros_like(mf_sem)
+        zf_peak = float(_np.nanmax(zf[post_mask])) if _np.any(post_mask) else _np.nan
+        zf_trough = float(_np.nanmin(zf[post_mask])) if _np.any(post_mask) else _np.nan
+    else:
+        zf = _np.full_like(t_vec, _np.nan)
+        zf_sem = _np.zeros_like(t_vec)
+        zf_peak = _np.nan
+        zf_trough = _np.nan
+
+    ms, ms_sem, _ = _mean_activity_per_unit(st, slow_times, pre_window, post_window, dt, sigma_ms)
+    if ms.size > 0:
+        zs, slow_sd = _zscore_trace(ms, t_vec, pre_window, return_stats=True)
+        zs_sem = ms_sem / slow_sd if _np.isfinite(slow_sd) and slow_sd > 0 else _np.zeros_like(ms_sem)
+        zs_peak = float(_np.nanmax(zs[post_mask])) if _np.any(post_mask) else _np.nan
+        zs_trough = float(_np.nanmin(zs[post_mask])) if _np.any(post_mask) else _np.nan
+    else:
+        zs = _np.full_like(t_vec, _np.nan)
+        zs_sem = _np.zeros_like(t_vec)
+        zs_peak = _np.nan
+        zs_trough = _np.nan
+
+    entry = TFUnitTrace(
+        cluster_id=cid,
+        fast_z=zf,
+        fast_z_sem=zf_sem,
+        slow_z=zs,
+        slow_z_sem=zs_sem,
+        z_max_fast=zf_peak,
+        z_min_fast=zf_trough,
+        z_max_slow=zs_peak,
+        z_min_slow=zs_trough,
+    )
+    return cid, entry
+
+
 def collect_tf_pulse_traces(
     session,
     cfg: Optional[TFRespPulseConfig] = None,
     selection_csv: Optional[str] = None,
-    show_progress: bool = False,
+    show_progress: bool = True,
+    fast_times: Optional[np.ndarray] = None,
+    slow_times: Optional[np.ndarray] = None,
+    cache_path: Optional[str] = None,
+    parallel: bool = False,
+    n_workers: Optional[int] = None,
 ) -> Tuple[np.ndarray, List[TFUnitTrace]]:
-    """Return time vector and per-cluster z-scored traces plus metadata."""
+    """Return time vector and per-cluster z-scored traces plus metadata.
+
+    If `cache_path` is provided, attempt to load traces from the compressed
+    `.npz` file at that path. If not present, compute traces and save a cache
+    there for future reuse.
+    """
     if cfg is None:
         cfg = TFRespPulseConfig()
     kept_ids = load_kept_ids(session, selection_csv) if cfg.kept_only else None
     cluster_ids = [int(c.cluster_id) for c in session.clusters if (kept_ids is None or int(c.cluster_id) in kept_ids)]
-    fast_times, slow_times = _collect_pulses(session, cfg, show_progress=show_progress)
+
+    # Allow caller to provide precomputed pulse times to avoid redundant work
+    if fast_times is None or slow_times is None:
+        fast_times, slow_times = _collect_pulses(session, cfg, show_progress=show_progress)
 
     full0, full1 = cfg.pre_window[0], cfg.post_window[1]
     t_vec = np.arange(full0, full1, cfg.dt, dtype=float)
     post_mask = (t_vec >= cfg.post_window[0]) & (t_vec < cfg.post_window[1])
+
+    # Try loading cache if requested
+    if cache_path is not None:
+        try:
+            p = Path(cache_path)
+            if p.exists():
+                npz = np.load(str(p), allow_pickle=False)
+                t_vec = npz["t_vec"]
+                cluster_ids_loaded = npz["cluster_ids"].astype(int).tolist()
+                fast_z = npz["fast_z"]
+                fast_z_sem = npz["fast_z_sem"]
+                slow_z = npz["slow_z"]
+                slow_z_sem = npz["slow_z_sem"]
+                z_max_fast = npz.get("z_max_fast")
+                z_min_fast = npz.get("z_min_fast")
+                z_max_slow = npz.get("z_max_slow")
+                z_min_slow = npz.get("z_min_slow")
+
+                entries = []
+                for i, cid in enumerate(cluster_ids_loaded):
+                    entries.append(
+                        TFUnitTrace(
+                            cluster_id=int(cid),
+                            fast_z=fast_z[i],
+                            fast_z_sem=fast_z_sem[i],
+                            slow_z=slow_z[i],
+                            slow_z_sem=slow_z_sem[i],
+                            z_max_fast=float(z_max_fast[i]) if z_max_fast is not None else np.nan,
+                            z_min_fast=float(z_min_fast[i]) if z_min_fast is not None else np.nan,
+                            z_max_slow=float(z_max_slow[i]) if z_max_slow is not None else np.nan,
+                            z_min_slow=float(z_min_slow[i]) if z_min_slow is not None else np.nan,
+                        )
+                    )
+                return t_vec, entries
+        except Exception:
+            # Ignore cache load errors and fall back to recompute
+            pass
 
     entries: List[TFUnitTrace] = []
     total = len(cluster_ids)
@@ -246,60 +351,140 @@ def collect_tf_pulse_traces(
     if pr2 is not None:
         pr2.start()
 
-    for idx, cid in enumerate(cluster_ids, 1):
-        c = next((x for x in session.clusters if int(x.cluster_id) == int(cid)), None)
-        if c is None:
-            continue
-        st = np.asarray(c.spike_times, dtype=float).flatten()
+    # Parallel path
+    if parallel and total > 0:
+        if n_workers is None:
+            n_workers = min(os.cpu_count() or 1, 8)
+        # Build args for each cluster: (cid, spike_times, fast_times, slow_times, t_vec, pre_window, post_window, dt, sigma_ms)
+        tasks = []
+        for cid in cluster_ids:
+            c = next((x for x in session.clusters if int(x.cluster_id) == int(cid)), None)
+            if c is None:
+                continue
+            st = np.asarray(c.spike_times, dtype=float).flatten()
+            tasks.append((int(cid), st, fast_times, slow_times, t_vec, cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms))
 
-        mf, mf_sem, _ = _mean_activity_per_unit(st, fast_times, cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms)
-        if mf.size > 0:
-            zf, fast_sd = _zscore_trace(mf, t_vec, cfg.pre_window, return_stats=True)
-            zf_sem = mf_sem / fast_sd if np.isfinite(fast_sd) and fast_sd > 0 else np.zeros_like(mf_sem)
-            zf_peak = float(np.nanmax(zf[post_mask])) if np.any(post_mask) else np.nan
-            zf_trough = float(np.nanmin(zf[post_mask])) if np.any(post_mask) else np.nan
-        else:
-            zf = np.full_like(t_vec, np.nan)
-            zf_sem = np.zeros_like(t_vec)
-            zf_peak = np.nan
-            zf_trough = np.nan
+        results = []
+        with ProcessPoolExecutor(max_workers=n_workers) as ex:
+            futures = {ex.submit(_compute_trace_for_cluster, t): t[0] for t in tasks}
+            for fut in as_completed(futures):
+                try:
+                    cid_ret, entry = fut.result()
+                    results.append((cid_ret, entry))
+                except Exception:
+                    # If a worker fails, continue and let the serial path handle missing entries
+                    pass
 
-        ms, ms_sem, _ = _mean_activity_per_unit(st, slow_times, cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms)
-        if ms.size > 0:
-            zs, slow_sd = _zscore_trace(ms, t_vec, cfg.pre_window, return_stats=True)
-            zs_sem = ms_sem / slow_sd if np.isfinite(slow_sd) and slow_sd > 0 else np.zeros_like(ms_sem)
-            zs_peak = float(np.nanmax(zs[post_mask])) if np.any(post_mask) else np.nan
-            zs_trough = float(np.nanmin(zs[post_mask])) if np.any(post_mask) else np.nan
-        else:
-            zs = np.full_like(t_vec, np.nan)
-            zs_sem = np.zeros_like(t_vec)
-            zs_peak = np.nan
-            zs_trough = np.nan
+        # Preserve order of cluster_ids
+        id_to_entry = {cid: entry for cid, entry in results}
+        for cid in cluster_ids:
+            e = id_to_entry.get(int(cid))
+            if e is not None:
+                entries.append(e)
+            else:
+                # Fall back to serial compute for missing cluster
+                c = next((x for x in session.clusters if int(x.cluster_id) == int(cid)), None)
+                if c is None:
+                    continue
+                st = np.asarray(c.spike_times, dtype=float).flatten()
+                cid_ret, entry = _compute_trace_for_cluster((int(cid), st, fast_times, slow_times, t_vec, cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms))
+                entries.append(entry)
+        if pr2 is not None:
+            pr2.close()
+    else:
+        # Serial path (original behavior)
+        for idx, cid in enumerate(cluster_ids, 1):
+            c = next((x for x in session.clusters if int(x.cluster_id) == int(cid)), None)
+            if c is None:
+                continue
+            st = np.asarray(c.spike_times, dtype=float).flatten()
 
-        entries.append(
-            TFUnitTrace(
-                cluster_id=cid,
-                fast_z=zf,
-                fast_z_sem=zf_sem,
-                slow_z=zs,
-                slow_z_sem=zs_sem,
-                z_max_fast=zf_peak,
-                z_min_fast=zf_trough,
-                z_max_slow=zs_peak,
-                z_min_slow=zs_trough,
+            mf, mf_sem, _ = _mean_activity_per_unit(st, fast_times, cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms)
+            if mf.size > 0:
+                zf, fast_sd = _zscore_trace(mf, t_vec, cfg.pre_window, return_stats=True)
+                zf_sem = mf_sem / fast_sd if np.isfinite(fast_sd) and fast_sd > 0 else np.zeros_like(mf_sem)
+                zf_peak = float(np.nanmax(zf[post_mask])) if np.any(post_mask) else np.nan
+                zf_trough = float(np.nanmin(zf[post_mask])) if np.any(post_mask) else np.nan
+            else:
+                zf = np.full_like(t_vec, np.nan)
+                zf_sem = np.zeros_like(t_vec)
+                zf_peak = np.nan
+                zf_trough = np.nan
+
+            ms, ms_sem, _ = _mean_activity_per_unit(st, slow_times, cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms)
+            if ms.size > 0:
+                zs, slow_sd = _zscore_trace(ms, t_vec, cfg.pre_window, return_stats=True)
+                zs_sem = ms_sem / slow_sd if np.isfinite(slow_sd) and slow_sd > 0 else np.zeros_like(ms_sem)
+                zs_peak = float(np.nanmax(zs[post_mask])) if np.any(post_mask) else np.nan
+                zs_trough = float(np.nanmin(zs[post_mask])) if np.any(post_mask) else np.nan
+            else:
+                zs = np.full_like(t_vec, np.nan)
+                zs_sem = np.zeros_like(t_vec)
+                zs_peak = np.nan
+                zs_trough = np.nan
+
+            entries.append(
+                TFUnitTrace(
+                    cluster_id=cid,
+                    fast_z=zf,
+                    fast_z_sem=zf_sem,
+                    slow_z=zs,
+                    slow_z_sem=zs_sem,
+                    z_max_fast=zf_peak,
+                    z_min_fast=zf_trough,
+                    z_max_slow=zs_peak,
+                    z_min_slow=zs_trough,
+                )
             )
-        )
+
+            if pr2 is not None:
+                pr2.update(idx)
 
         if pr2 is not None:
-            pr2.update(idx)
+            pr2.close()
 
-    if pr2 is not None:
-        pr2.close()
+    # Save cache if requested
+    if cache_path is not None:
+        try:
+            p = Path(cache_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            cluster_ids_arr = np.array([int(e.cluster_id) for e in entries], dtype=int)
+            if entries and entries[0].fast_z.size:
+                fast_z = np.stack([e.fast_z for e in entries])
+                fast_z_sem = np.stack([e.fast_z_sem for e in entries])
+            else:
+                fast_z = np.zeros((0, t_vec.size))
+                fast_z_sem = np.zeros((0, t_vec.size))
+            if entries and entries[0].slow_z.size:
+                slow_z = np.stack([e.slow_z for e in entries])
+                slow_z_sem = np.stack([e.slow_z_sem for e in entries])
+            else:
+                slow_z = np.zeros((0, t_vec.size))
+                slow_z_sem = np.zeros((0, t_vec.size))
+            z_max_fast = np.array([e.z_max_fast for e in entries], dtype=float)
+            z_min_fast = np.array([e.z_min_fast for e in entries], dtype=float)
+            z_max_slow = np.array([e.z_max_slow for e in entries], dtype=float)
+            z_min_slow = np.array([e.z_min_slow for e in entries], dtype=float)
+            np.savez_compressed(
+                str(p),
+                t_vec=t_vec,
+                cluster_ids=cluster_ids_arr,
+                fast_z=fast_z,
+                fast_z_sem=fast_z_sem,
+                slow_z=slow_z,
+                slow_z_sem=slow_z_sem,
+                z_max_fast=z_max_fast,
+                z_min_fast=z_min_fast,
+                z_max_slow=z_max_slow,
+                z_min_slow=z_min_slow,
+            )
+        except Exception:
+            pass
 
     return t_vec, entries
 
 
-def run_tf_pulse_screening(session, out_root: str, png_root: Optional[str] = None, cfg: Optional[TFRespPulseConfig] = None, selection_csv: Optional[str] = None, generate_grid: bool = True) -> Dict[str, str]:
+def run_tf_pulse_screening(session, out_root: str, png_root: Optional[str] = None, cfg: Optional[TFRespPulseConfig] = None, selection_csv: Optional[str] = None, generate_grid: bool = True, show_progress: bool = False) -> Dict[str, str]:
     if cfg is None:
         cfg = TFRespPulseConfig()
     out_dir = Path(out_root) / f"{getattr(session,'subject','unknown')}_{getattr(session,'session_name','unknown')}"
@@ -310,15 +495,17 @@ def run_tf_pulse_screening(session, out_root: str, png_root: Optional[str] = Non
     kept_ids = load_kept_ids(session, selection_csv) if cfg.kept_only else None
     cluster_ids = [int(c.cluster_id) for c in session.clusters if (kept_ids is None or int(c.cluster_id) in kept_ids)]
 
-    # Collect pulse times
-    fast_times, slow_times = _collect_pulses(session, cfg)
+    # Collect pulse times (allow progress updates) — compute once and pass into traces
+    fast_times, slow_times = _collect_pulses(session, cfg, show_progress=show_progress)
 
     rows = []
     mean_traces_fast = []
     mean_traces_slow = []
     t_axis = None
 
-    t_vec, trace_entries = collect_tf_pulse_traces(session, cfg=cfg, selection_csv=selection_csv)
+    t_vec, trace_entries = collect_tf_pulse_traces(
+        session, cfg=cfg, selection_csv=selection_csv, show_progress=show_progress, fast_times=fast_times, slow_times=slow_times
+    )
 
     traces_by_id = {entry.cluster_id: entry for entry in trace_entries}
 
@@ -326,8 +513,21 @@ def run_tf_pulse_screening(session, out_root: str, png_root: Optional[str] = Non
         entry = traces_by_id.get(cid)
         if entry is None:
             continue
-        fast_resp = bool(np.isfinite(entry.z_max_fast) and (entry.z_max_fast >= cfg.z_thresh))
-        slow_resp = bool(np.isfinite(entry.z_min_slow) and (entry.z_min_slow <= -cfg.z_thresh))
+        # Consider both polarities: responsiveness can be an increase or a decrease.
+        # Fast pulses: responsive if either a significant increase after fast pulses
+        # (z_max_fast >= z_thresh) or a significant decrease after fast pulses
+        # (z_min_fast <= -z_thresh).
+        fast_resp = bool(
+            (np.isfinite(entry.z_max_fast) and (entry.z_max_fast >= cfg.z_thresh))
+            or (np.isfinite(entry.z_min_fast) and (entry.z_min_fast <= -cfg.z_thresh))
+        )
+        # Slow pulses: responsive if either a significant decrease after slow pulses
+        # (z_min_slow <= -z_thresh) or a significant increase after slow pulses
+        # (z_max_slow >= z_thresh).
+        slow_resp = bool(
+            (np.isfinite(entry.z_min_slow) and (entry.z_min_slow <= -cfg.z_thresh))
+            or (np.isfinite(entry.z_max_slow) and (entry.z_max_slow >= cfg.z_thresh))
+        )
 
         # For plotting aggregates: use underlying mean traces if available
         # Since collect_tf_pulse_traces only stores z-traces, recompute mean activity when needed
@@ -351,6 +551,8 @@ def run_tf_pulse_screening(session, out_root: str, png_root: Optional[str] = Non
             "fast_responsive": bool(fast_resp),
             "slow_responsive": bool(slow_resp),
             "z_max_fast": float(entry.z_max_fast) if np.isfinite(entry.z_max_fast) else np.nan,
+            "z_min_fast": float(entry.z_min_fast) if np.isfinite(entry.z_min_fast) else np.nan,
+            "z_max_slow": float(entry.z_max_slow) if np.isfinite(entry.z_max_slow) else np.nan,
             "z_min_slow": float(entry.z_min_slow) if np.isfinite(entry.z_min_slow) else np.nan,
             "n_fast_pulses_used": int(fast_times.size),
             "n_slow_pulses_used": int(slow_times.size),
@@ -375,7 +577,7 @@ def run_tf_pulse_screening(session, out_root: str, png_root: Optional[str] = Non
         if png_dir is not None and generate_grid:
             png_dir.mkdir(parents=True, exist_ok=True)
             grid_path = png_dir / "tf_pulse_grid_both.png"
-            gp = plot_tf_pulse_grid(session, str(grid_path), cfg=cfg, selection_csv=selection_csv, n_cols=12, which="both")
+            gp = plot_tf_pulse_grid(session, str(grid_path), cfg=cfg, selection_csv=selection_csv, n_cols=12, which="both", show_progress=show_progress)
             paths["grid_png"] = str(gp)
     except Exception:
         pass
@@ -394,7 +596,7 @@ def plot_tf_pulse_grid(
     filter_ids: Optional[Sequence[int]] = None,
     min_abs_z: Optional[float] = None,
     sort_by_strength: bool = False,
-    show_progress: bool = False,
+    show_progress: bool = True,
     save_csv_path: Optional[str] = None,
 ) -> str:
     """Save a grid of per-unit z-scored mean traces for visual threshold inspection.
@@ -437,7 +639,12 @@ def plot_tf_pulse_grid(
                 "z_max_slow": e.z_max_slow,
                 "z_min_slow": e.z_min_slow,
             })
-        pd.DataFrame(rows).to_csv(save_csv_path, index=False)
+        try:
+            print(f"[plot_tf_pulse_grid] Writing CSV to {save_csv_path} with {len(rows)} rows...")
+            pd.DataFrame(rows).to_csv(save_csv_path, index=False)
+            print(f"[plot_tf_pulse_grid] Successfully wrote CSV to {save_csv_path}")
+        except Exception as exc:
+            print(f"[plot_tf_pulse_grid] ERROR writing CSV to {save_csv_path}: {exc}")
 
     ids = [e.cluster_id for e in entries]
     n = len(ids)

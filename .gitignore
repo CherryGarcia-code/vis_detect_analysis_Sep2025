@@ -37,6 +37,8 @@ pkls/previous_runs/
 *.tar.gz
 *.tgz
 # notebook outputs and generated images
+group_meeting_*/
+FIGURES/
 png_output/
 notebooks/png_output/
 notebooks/aggregated/
@@ -56,3 +58,4 @@ tmp_demo_qc/
 src/visdetect.egg-info/
 chanMap_*.mat
 *.png
+chanMap_related/

@@ -1,5 +1,5 @@
 from pathlib import Path
-from visdetect.core.legacy_io import load_session
+from visdetect.core.session import load_session
 from visdetect.analysis.align import compute_peth_for_session
 
 

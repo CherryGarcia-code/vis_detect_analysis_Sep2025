@@ -46,6 +46,9 @@ This project investigates neural dynamics in the medial striatum of mice perform
 - What does population activity look like across trials and learning?
 - How do mice learn to balance impulsive actions and stimulus sensitivity?
 - How is expert performance represented in neural activity?
+- What do different states of performance in the task look like in terms of neuronal activity dynamics. (impulsive, balanced/engaged, disengaged...)
+
+
 
 ---
 

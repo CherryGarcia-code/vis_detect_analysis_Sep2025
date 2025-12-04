@@ -289,6 +289,19 @@ def load_session(path: str) -> Session:
                     # Map deprecated numpy module path
                     if module.startswith("numpy._core"):
                         module = module.replace("numpy._core", "numpy.core")
+                    # Map legacy top-level 'src' package used in older pickles
+                    # to the current package layout (remove 'src.' prefix).
+                    if module == "src":
+                        # Old pickles sometimes used a flat 'src' module for dataclasses
+                        # Map common dataclass names to our local definitions
+                        if name == "Trial":
+                            return Trial
+                        if name == "Cluster":
+                            return Cluster
+                        if name == "Session":
+                            return Session
+                    if module.startswith("src."):
+                        module = module[len("src."):]
                     # Map legacy visdetect dataclasses to our local ones
                     if module in (
                         "visdetect.session",

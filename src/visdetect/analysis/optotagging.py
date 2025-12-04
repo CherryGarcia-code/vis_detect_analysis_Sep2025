@@ -33,8 +33,14 @@ def detect_optotagged_units(
     # Placeholder: real implementation should compute trial-aligned PSTHs
     # and calculate per-cluster metrics (latency, z-score, reliability).
     results = {}
-    clusters = getattr(session, "good_cluster_ids", getattr(session, "clusters", []))
-    for cid in clusters:
+    # Prefer good_and_stable_ids, then good_cluster_ids, else all clusters
+    if getattr(session, "good_and_stable_ids", None):
+        cluster_id_list = list(session.good_and_stable_ids)
+    elif getattr(session, "good_cluster_ids", None):
+        cluster_id_list = list(session.good_cluster_ids)
+    else:
+        cluster_id_list = [c.cluster_id for c in session.clusters]
+    for cid in cluster_id_list:
         results[int(cid)] = {
             "cluster_id": int(cid),
             "is_optotagged": False,

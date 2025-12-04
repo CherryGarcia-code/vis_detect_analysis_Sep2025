@@ -11,7 +11,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter1d
 
-from visdetect.core.legacy_io import load_session
+from visdetect.core.session import load_session
 from visdetect.analysis import align as align_mod
 from visdetect.core import qc as qc_mod
 
@@ -545,7 +545,7 @@ def load_kept_ids(
     session,
     selection_csv: Optional[str] = None,
 ) -> List[int]:
-    """Return kept cluster IDs from a selection CSV; falls back to session.good_cluster_ids.
+    """Return kept cluster IDs from a selection CSV; falls back to session.good_and_stable_ids, then good_cluster_ids.
 
     If selection_csv is not provided, tries the conventional path under table_output/unit_qc/.
     """
@@ -557,7 +557,9 @@ def load_kept_ids(
         ids = qc_mod.read_kept_cluster_ids(str(p))
         if ids:
             return ids
-    # Fallback: use good_cluster_ids if present
+    # Fallback: prefer good_and_stable_ids, then good_cluster_ids
+    if getattr(session, "good_and_stable_ids", None):
+        return list(map(int, session.good_and_stable_ids))
     gids = getattr(session, "good_cluster_ids", None)
     if gids:
         return list(map(int, gids))

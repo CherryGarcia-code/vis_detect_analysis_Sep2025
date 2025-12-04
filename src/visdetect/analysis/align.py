@@ -330,27 +330,38 @@ def compute_peth_for_session(
     event_name: str,
     window: Tuple[float, float] = (-0.5, 1.0),
     bin_size: float = 0.01,
-    good_cluster_ids: Optional[List[int]] = None,
-    use_good_only: bool = True,
+    cluster_id_list: Optional[List[int]] = None,
+    restrict_to_good: bool = True,
 ) -> Dict[int, Dict[str, Any]]:
     """Compute PETHs for clusters in session aligned to event_name.
 
-    By default (use_good_only=True) this function will prefer the session's canonical
-    `good_cluster_ids` when present. If `use_good_only` is False, or the session
-    has no `good_cluster_ids`, all clusters in `session.clusters` are used.
+    By default (restrict_to_good=True), this function will use the session's canonical
+    `good_and_stable_ids` if present, then fall back to `good_cluster_ids` if needed.
+    If `restrict_to_good` is False, or the session has neither, all clusters in `session.clusters` are used.
+    You can override the cluster list by passing `cluster_id_list`.
 
     Returns a dict keyed by cluster_id with {'peth': mean_psth (1D), 'trials_matrix': 2D, 'n_trials': int, 'bin_centers': array}
     """
-    if good_cluster_ids is None:
-        if use_good_only and getattr(session, "good_cluster_ids", None):
-            good_cluster_ids = list(session.good_cluster_ids)
+
+    if cluster_id_list is None:
+        if restrict_to_good:
+            # Prefer good_and_stable_ids, then good_cluster_ids
+            if getattr(session, "good_and_stable_ids", None):
+                cluster_id_list = list(session.good_and_stable_ids)
+                print("[align] Using good_and_stable_ids for cluster selection.")
+            elif getattr(session, "good_cluster_ids", None):
+                cluster_id_list = list(session.good_cluster_ids)
+                print("[align] Using good_cluster_ids for cluster selection.")
+            else:
+                cluster_id_list = [c.cluster_id for c in session.clusters]
+                print("[align] No good cluster list found; using all clusters.")
         else:
-            good_cluster_ids = [c.cluster_id for c in session.clusters]
+            cluster_id_list = [c.cluster_id for c in session.clusters]
 
     event_times = get_event_times(session, event_name)
     out = {}
     for c in session.clusters:
-        if c.cluster_id not in good_cluster_ids:
+        if c.cluster_id not in cluster_id_list:
             continue
         trials_mat, bin_centers = align_spikes_to_events(
             c.spike_times, event_times, window=window, bin_size=bin_size
@@ -376,11 +387,13 @@ def compute_and_cache_peth(
     window: Tuple[float, float] = (-0.5, 1.0),
     bin_size: float = 0.01,
     sigma: Optional[float] = None,
-    good_cluster_ids: Optional[List[int]] = None,
-    use_good_only: bool = True,
+    cluster_id_list: Optional[List[int]] = None,
+    restrict_to_good: bool = True,
 ):
     """Compute PETHs and save to HDF5 cache. If sigma is provided, smooth mean PSTH with gaussian filter.
     Returns the HDF5 path written.
+
+    By default, prefers session.good_and_stable_ids, then good_cluster_ids, for cluster selection.
     """
     path = Path(out_h5_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -389,8 +402,8 @@ def compute_and_cache_peth(
         event_name,
         window=window,
         bin_size=bin_size,
-        good_cluster_ids=good_cluster_ids,
-        use_good_only=use_good_only,
+        cluster_id_list=cluster_id_list,
+        restrict_to_good=restrict_to_good,
     )
     with h5py.File(str(path), "w") as h5:
         meta = h5.create_group("meta")
