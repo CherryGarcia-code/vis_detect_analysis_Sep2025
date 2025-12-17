@@ -59,3 +59,4 @@ src/visdetect.egg-info/
 chanMap_*.mat
 *.png
 chanMap_related/
+scripts/scripts_archive/

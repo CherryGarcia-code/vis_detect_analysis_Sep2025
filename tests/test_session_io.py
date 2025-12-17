@@ -4,7 +4,7 @@ from visdetect.core.session import load_session, session_summary
 
 def test_load_example_session():
     repo_root = Path(__file__).resolve().parents[1]
-    pkl = repo_root / "data" / "BG_031_260325.pkl"
+    pkl = repo_root / "data" / "pkls" / "BG_031" / "BG_031_260325.pkl"
     assert pkl.exists(), "Example pkl missing"
     session = load_session(str(pkl))
     summary = session_summary(session)

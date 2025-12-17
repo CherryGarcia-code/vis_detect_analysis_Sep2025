@@ -5,7 +5,7 @@ from visdetect.core.qc import run_qc
 
 def test_run_qc_example(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
-    pkl = repo_root / "data" / "BG_031_260325.pkl"
+    pkl = repo_root / "data" / "pkls" / "BG_031" / "BG_031_260325.pkl"
     session = load_session(str(pkl))
     outdir = tmp_path / "qc_out"
     res = run_qc(session, str(outdir))
