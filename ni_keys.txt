@@ -1,0 +1,33 @@
+Loading data/pkls/BG_046/BG_046_23062025.pkl
+Session Keys: dict_keys(['trials', 'clusters', 'subject', 'session_name', 'good_cluster_ids', 'good_and_stable_ids', 'ni_events'])
+
+NI Events Keys: dict_keys(['session_name', 'Synch', 'Front_cam', 'Eye_cam', 'Top_cam', 'Rot_enc_A', 'Rot_enc_B', 'Baseline_ON', 'Change_ON', 'Air_puff', 'Lick_L', 'Lick_R', 'Valve_L', 'Valve_R', 'frame_times_tr'])
+  session_name: <class 'str'>
+  Synch: <class 'dict'>
+    keys: dict_keys(['rise_t', 'fall_t', 'duration'])
+  Front_cam: <class 'dict'>
+    keys: dict_keys(['rise_t', 'fall_t', 'duration'])
+  Eye_cam: <class 'dict'>
+    keys: dict_keys(['rise_t', 'fall_t', 'duration'])
+  Top_cam: <class 'dict'>
+    keys: dict_keys(['rise_t', 'fall_t', 'duration'])
+  Rot_enc_A: <class 'dict'>
+    keys: dict_keys(['rise_t', 'fall_t', 'duration'])
+  Rot_enc_B: <class 'dict'>
+    keys: dict_keys(['rise_t', 'fall_t', 'duration'])
+  Baseline_ON: <class 'dict'>
+    keys: dict_keys(['rise_t', 'fall_t', 'duration'])
+  Change_ON: <class 'dict'>
+    keys: dict_keys(['rise_t', 'fall_t', 'duration'])
+  Air_puff: <class 'dict'>
+    keys: dict_keys(['rise_t', 'fall_t', 'duration'])
+  Lick_L: <class 'dict'>
+    keys: dict_keys(['rise_t', 'fall_t', 'duration'])
+  Lick_R: <class 'dict'>
+    keys: dict_keys(['rise_t', 'fall_t', 'duration'])
+  Valve_L: <class 'dict'>
+    keys: dict_keys(['rise_t', 'fall_t', 'duration'])
+  Valve_R: <class 'dict'>
+    keys: dict_keys(['rise_t', 'fall_t', 'duration'])
+  frame_times_tr: <class 'dict'>
+    keys: dict_keys(['time', 'delayed_frames_numb'])
