@@ -17,9 +17,9 @@ import pandas as pd
 def run_session_analysis(args):
     """
     Worker function to run analysis for a single session.
-    args: (session_name, pkl_path, out_dir_base, repo_root)
+    args: (session_name, pkl_path, out_dir_base, repo_root, stats_only)
     """
-    session_name, pkl_path, out_dir_base, repo_root = args
+    session_name, pkl_path, out_dir_base, repo_root, stats_only = args
     
     # Create specific output directory for this session
     out_dir = out_dir_base / session_name
@@ -27,6 +27,8 @@ def run_session_analysis(args):
     script_path = repo_root / "scripts" / "analysis" / "lick" / "run_lick_analysis_pipeline.py"
     
     cmd = f"python {script_path} --session {session_name} --pkl {pkl_path} --out {out_dir}"
+    if stats_only:
+        cmd += " --stats-only"
     
     # Capture output to avoid interleaved printing in parallel mode
     try:
@@ -46,7 +48,7 @@ def main():
     parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers (default: 4)")
     args = parser.parse_args()
 
-    # Define paths
+    # Define paths 
     repo_root = Path(__file__).resolve().parents[3]
     pkl_dir = Path(args.pkl_dir)
     out_dir_base = Path(args.out)
@@ -116,7 +118,7 @@ def main():
         for pkl_path in pkl_files:
             # session_name usually matches filename stem
             session_name = pkl_path.stem.replace('.new', '')
-            tasks.append((session_name, pkl_path, out_dir_base, repo_root))
+            tasks.append((session_name, pkl_path, out_dir_base, repo_root, args.stats_only))
 
     print(f"Outputting to {out_dir_base}")
     print(f"Running with {args.workers} workers.")

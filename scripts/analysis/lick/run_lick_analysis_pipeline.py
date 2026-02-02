@@ -36,16 +36,25 @@ def main():
     parser.add_argument('--session', required=True, help='Session name (e.g. BG_046_17092025)')
     parser.add_argument('--pkl', required=True, help='Path to session pkl file')
     parser.add_argument('--out', required=True, help='Output directory (e.g. FIGURES/lick/BG_046_17092025)')
+    parser.add_argument('--stats-only', action='store_true', help='Only run stats generation, skip plotting and summary')
     args = parser.parse_args()
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Run all analysis/plotting scripts
+    # Run analysis
     for script, argstr in PLOTS:
+        # If stats-only, skip everything except find_lick_responsive_neurons.py
+        if args.stats_only and "find_lick_responsive_neurons.py" not in script:
+            continue
+            
         script_path = f"scripts/analysis/lick/{script}"
         cmd = f"python {script_path} {argstr.format(pkl=args.pkl, out_dir=args.out, session=args.session)}"
         run(cmd)
+
+    if args.stats_only:
+        print(f"Stats generation complete for {args.session}. Skipping plots/summary.")
+        return
 
     # Collect all PNGs for summary
     plot_files = sorted([f for f in out_dir.glob("*.png")])
