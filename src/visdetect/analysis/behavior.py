@@ -42,31 +42,34 @@ def get_trial_dataframe(session: Session) -> pd.DataFrame:
                 except:
                     pass
 
+        # Determine trial type from change_size, NOT from outcome label.
+        # Go trial: change_size > 1 (stimulus changed).  Catch trial: change_size ≈ 1 (no change).
+        cs = t.change_size if t.change_size is not None else 1.0
+        is_go_trial = (cs - 1.0) > 0.01
+        is_catch_trial = not is_go_trial
+
         rows.append({
             'trial_idx': i,
             'outcome': outcome,
-            'change_size': t.change_size if t.change_size is not None else 0,
+            'change_size': cs,
             'orientation': t.orientation if t.orientation is not None else 0,
             'change_time': t.change_time if t.change_time is not None else 0,
             'rt': rt,
-            'is_hit': outcome == 'hit',
-            'is_miss': outcome == 'miss',
-            'is_fa': outcome == 'fa',
+            'is_hit': outcome == 'hit',       # Behavioral label: licked in response window
+            'is_miss': outcome == 'miss',     # Behavioral label: withheld lick
+            'is_fa': outcome == 'fa',         # Behavioral label: early/anticipatory lick (NOT SDT false alarm)
             'is_abort': outcome == 'abort',
-            'is_go': outcome in ['hit', 'miss'], # Assuming Go trial if it has a change
-            'is_catch': outcome in ['fa', 'cr'] # Assuming Catch if no change (CR logic might need refinement based on task structure)
+            'is_ref': outcome == 'ref',       # Behavioral label: reflex lick (too fast)
+            'is_go': is_go_trial,             # Trial type from change_size (NOT outcome label)
+            'is_catch': is_catch_trial,       # Trial type from change_size (NOT outcome label)
         })
     
     df = pd.DataFrame(rows)
-    
+
+    if df.empty:
+        return df
+
     # Calculate Response Time (Time from Trial Start)
-    # response_time = rt + change_time
-    # Note: For FAs, change_time might be the time the FA happened? Or is it undefined?
-    # Usually for FA, there is no change.
-    # If change_time is 0 or None for FA, then response_time = rt (which is just time from start?)
-    # Let's check the snippet output for FA?
-    # The snippet only checked Hits.
-    # But for Hits, we definitely want rt + change_time.
     df['response_time'] = df['rt'] + df['change_time']
         
     return df
@@ -100,88 +103,105 @@ def identify_session_state(row):
         return 'balanced'
 
 def compute_session_performance(session: Session) -> Dict[str, float]:
-    """Compute aggregate performance metrics for a session."""
+    """Compute aggregate performance metrics for a session.
+
+    SDT Classification (uses change_size, NOT behavioral software labels):
+      - True Hit:  outcome='hit'  on go trial   (change_size > 1)  — correct detection
+      - True Miss: outcome='miss' on go trial   (change_size > 1)  — failed detection
+      - True FA:   outcome='hit'  on catch trial (change_size ≈ 1) — licked when no change
+      - True CR:   outcome='miss' on catch trial (change_size ≈ 1) — correctly withheld
+      - Excluded from SDT: 'fa' (early/anticipatory lick), 'ref' (reflex), 'abort'
+
+    Behavioral label counts (n_hits, n_miss, n_fa, n_abort) and fraction_* columns
+    still use the raw software labels so that QC rules remain compatible.
+    """
     df = get_trial_dataframe(session)
     if df.empty:
         return {}
-        
-    n_trials = len(df)
-    n_hits = df['is_hit'].sum()
-    n_miss = df['is_miss'].sum()
-    n_fa = df['is_fa'].sum()
-    n_abort = df['is_abort'].sum()
-    
-    # Hit Rate (excluding change size 1 if needed, but here we do global)
-    # User asked for "Hit rate without change size = 1" in manifest.
-    # We will calculate both here.
-    
-    n_go = n_hits + n_miss
-    hit_rate = n_hits / n_go if n_go > 0 else 0.0
-    miss_rate = n_miss / n_go if n_go > 0 else 0.0
-    
-    # Hit Rate (no size 1)
-    # Assuming change_size=1 is the smallest/hardest or largest/easiest? 
-    # Usually 1 is max contrast/size. If user wants to exclude it, maybe they want to see performance on harder trials?
-    # Or maybe 1 is a specific condition.
-    # Let's assume we filter out rows where change_size == 1.
-    df_no_1 = df[df['change_size'] != 1]
-    n_hits_no_1 = df_no_1['is_hit'].sum()
-    n_miss_no_1 = df_no_1['is_miss'].sum()
-    n_go_no_1 = n_hits_no_1 + n_miss_no_1
-    hit_rate_no_1 = n_hits_no_1 / n_go_no_1 if n_go_no_1 > 0 else 0.0
 
-    fa_rate_total = n_fa / n_trials if n_trials > 0 else 0.0
+    n_trials = len(df)
+
+    # --- Behavioral label counts (raw software labels, for QC & RT analysis) ---
+    n_hits_label = int(df['is_hit'].sum())
+    n_miss_label = int(df['is_miss'].sum())
+    n_fa_label = int(df['is_fa'].sum())       # early/anticipatory licks
+    n_abort = int(df['is_abort'].sum())
+    n_ref = int(df['is_ref'].sum()) if 'is_ref' in df.columns else 0
+
+    # --- SDT classification (change_size-based) ---
+    sdt_hits   = int(((df['is_go'])    & (df['outcome'] == 'hit')).sum())
+    sdt_misses = int(((df['is_go'])    & (df['outcome'] == 'miss')).sum())
+    sdt_fas    = int(((df['is_catch']) & (df['outcome'] == 'hit')).sum())
+    sdt_crs    = int(((df['is_catch']) & (df['outcome'] == 'miss')).sum())
+
+    n_go    = sdt_hits + sdt_misses
+    n_catch = sdt_fas  + sdt_crs
+
+    hit_rate  = sdt_hits   / n_go    if n_go    > 0 else 0.0
+    miss_rate = sdt_misses / n_go    if n_go    > 0 else 0.0
+    fa_rate   = sdt_fas    / n_catch if n_catch > 0 else 0.0
+
+    # hit_rate already excludes catch trials (change_size ≈ 1), so identical
+    hit_rate_no_1 = hit_rate
+
     abort_rate = n_abort / n_trials if n_trials > 0 else 0.0
-    
-    # Fractions of total trials
-    fraction_hit = n_hits / n_trials if n_trials > 0 else 0.0
-    fraction_miss = n_miss / n_trials if n_trials > 0 else 0.0
-    fraction_fa = n_fa / n_trials if n_trials > 0 else 0.0
-    fraction_abort = n_abort / n_trials if n_trials > 0 else 0.0
-    
-    # FA Split
-    # FA <= 3s (Early/Impulsive?) vs FA > 3s (Late?)
-    # Note: User said "FA>3 seconds - dark red, FA≤3 seconds -light red"
-    fas = df[df['is_fa']].copy()
-    n_fa_early = fas[fas['rt'] <= 3.0].shape[0]
-    n_fa_late = fas[fas['rt'] > 3.0].shape[0]
-    
-    mean_rt_fa_early = fas[fas['rt'] <= 3.0]['rt'].mean()
-    mean_rt_fa_late = fas[fas['rt'] > 3.0]['rt'].mean()
-    
-    # SEMs
-    sem_rt_hit = df[df['is_hit']]['rt'].sem()
-    sem_rt_fa_early = fas[fas['rt'] <= 3.0]['rt'].sem()
-    sem_rt_fa_late = fas[fas['rt'] > 3.0]['rt'].sem()
-    
-    # d'
-    d_prime = calculate_dprime(hit_rate, fa_rate_total)
+
+    # Behavioral label fractions (for QC rules — not SDT)
+    fraction_hit   = n_hits_label  / n_trials if n_trials > 0 else 0.0
+    fraction_miss  = n_miss_label  / n_trials if n_trials > 0 else 0.0
+    fraction_fa    = n_fa_label    / n_trials if n_trials > 0 else 0.0
+    fraction_abort = n_abort       / n_trials if n_trials > 0 else 0.0
+
+    # Early-lick (behavioral "FA") split by RT
+    fas_early_lick = df[df['is_fa']].copy()
+    n_fa_early = int(fas_early_lick[fas_early_lick['rt'] <= 3.0].shape[0])
+    n_fa_late  = int(fas_early_lick[fas_early_lick['rt'] > 3.0].shape[0])
+
+    mean_rt_fa_early = fas_early_lick[fas_early_lick['rt'] <= 3.0]['rt'].mean()
+    mean_rt_fa_late  = fas_early_lick[fas_early_lick['rt'] > 3.0]['rt'].mean()
+
+    sem_rt_fa_early = fas_early_lick[fas_early_lick['rt'] <= 3.0]['rt'].sem()
+    sem_rt_fa_late  = fas_early_lick[fas_early_lick['rt'] > 3.0]['rt'].sem()
+
+    # Hit RTs — only genuine SDT hits (go trials with 'hit' outcome)
+    hit_trials = df[(df['is_go']) & (df['outcome'] == 'hit')]
+    sem_rt_hit = hit_trials['rt'].sem()
+
+    # d-prime
+    d_prime = calculate_dprime(hit_rate, fa_rate)
 
     return {
         'n_trials': n_trials,
-        'hit_rate': hit_rate,
-        'miss_rate': miss_rate,
-        'hit_rate_no_size_1': hit_rate_no_1,
-        'fa_rate_total': fa_rate_total,
+        'hit_rate': hit_rate,                   # SDT hit rate
+        'miss_rate': miss_rate,                 # SDT miss rate
+        'hit_rate_no_size_1': hit_rate_no_1,    # same as hit_rate (go trials only)
+        'fa_rate_total': fa_rate,               # SDT FA rate
         'abort_rate': abort_rate,
-        'fraction_hit': fraction_hit,
+        'fraction_hit': fraction_hit,           # behavioral label fraction (for QC)
         'fraction_miss': fraction_miss,
         'fraction_fa': fraction_fa,
         'fraction_abort': fraction_abort,
         'd_prime': d_prime,
-        'n_hits': n_hits,
-        'n_miss': n_miss,
-        'n_fa': n_fa,
-        'n_fa_early': n_fa_early, # <= 3s
-        'n_fa_late': n_fa_late,   # > 3s
+        'n_hits': n_hits_label,                 # behavioral "Hit" label count
+        'n_miss': n_miss_label,                 # behavioral "Miss" label count
+        'n_fa': n_fa_label,                     # behavioral "FA" label count (early licks)
+        'n_fa_early': n_fa_early,               # early lick with RT ≤ 3s
+        'n_fa_late': n_fa_late,                 # early lick with RT > 3s
         'n_abort': n_abort,
-        'mean_rt_hit': df[df['is_hit']]['rt'].mean(),
-        'median_rt_hit': df[df['is_hit']]['rt'].median(),
+        'n_ref': n_ref,
+        'n_sdt_hits': sdt_hits,
+        'n_sdt_misses': sdt_misses,
+        'n_sdt_fas': sdt_fas,
+        'n_sdt_crs': sdt_crs,
+        'n_go': n_go,
+        'n_catch': n_catch,
+        'mean_rt_hit': hit_trials['rt'].mean(),
+        'median_rt_hit': hit_trials['rt'].median(),
         'mean_rt_fa_early': mean_rt_fa_early,
         'mean_rt_fa_late': mean_rt_fa_late,
         'sem_rt_hit': sem_rt_hit,
         'sem_rt_fa_early': sem_rt_fa_early,
-        'sem_rt_fa_late': sem_rt_fa_late
+        'sem_rt_fa_late': sem_rt_fa_late,
     }
 
 def compute_rolling_performance(session: Session, window: int = 30) -> pd.DataFrame:
@@ -228,9 +248,10 @@ def compute_psychometric_data(session: Session) -> pd.DataFrame:
     if df.empty or 'change_size' not in df.columns:
         return pd.DataFrame()
         
-    # Filter for Go trials (Hits + Misses)
-    go_df = df[df['is_go']]
-    
+    # SDT-valid go trials: 'hit' or 'miss' outcome on change_size > 1 trials.
+    # Excludes early licks ('fa'), reflex ('ref'), and aborts on go trials.
+    go_df = df[(df['is_go']) & (df['outcome'].isin(['hit', 'miss']))]
+
     if go_df.empty:
         return pd.DataFrame()
 
@@ -249,3 +270,125 @@ def compute_psychometric_data(session: Session) -> pd.DataFrame:
     stats['sem_hit_rate'] = np.sqrt(stats['hit_rate'] * (1 - stats['hit_rate']) / stats['n_trials'])
     
     return stats
+
+
+def filter_manifest_by_stage(
+    manifest_df: pd.DataFrame,
+    include_stages: Optional[List[str]] = None,
+    exclude_stages: Optional[List[str]] = None,
+    merge_naive_learning: bool = False,
+    min_trials: Optional[int] = None,
+    min_dprime: Optional[float] = None,
+    stage_specific_dprime: Optional[Dict[str, float]] = None,
+) -> pd.DataFrame:
+    """Filter and optionally regroup manifest by learning stage.
+    
+    Provides flexible filtering for comparing different learning phases
+    (e.g., Naive vs Expert, Learning + Naive as "Early", etc.). Does NOT
+    modify the original dataframe.
+    
+    Parameters
+    ----------
+    manifest_df : pd.DataFrame
+        Staging manifest with 'stage' column (from stage_sessions.py)
+    include_stages : list of str, optional
+        Stages to include (e.g., ['Learning', 'Expert']). If None, include all
+        non-Excluded stages.
+    exclude_stages : list of str, optional
+        Stages to explicitly exclude (applied after include_stages).
+    merge_naive_learning : bool, default=False
+        If True, create a 'stage_group' column where Naive sessions are
+        relabeled as 'Learning'. Useful for "Early vs Expert" comparisons.
+    min_trials : int, optional
+        Minimum total trials (n_go + n_catch) to include.
+    min_dprime : float, optional
+        Minimum d' threshold applied to all included stages.
+    stage_specific_dprime : dict, optional
+        Stage-specific d' thresholds (e.g., {'Learning': 1.0, 'Expert': 1.5}).
+        Overrides min_dprime for specified stages.
+    
+    Returns
+    -------
+    filtered_df : pd.DataFrame
+        Filtered manifest with optional 'stage_group' column.
+    
+    Examples
+    --------
+    # 1. Compare Learning vs Expert only:
+    >>> df = filter_manifest_by_stage(manifest, include_stages=['Learning', 'Expert'])
+    
+    # 2. Merge Naive into Learning, compare to Expert:
+    >>> df = filter_manifest_by_stage(
+    ...     manifest,
+    ...     include_stages=['Naive', 'Learning', 'Expert'],
+    ...     merge_naive_learning=True
+    ... )
+    >>> # Use df['stage_group'] for comparisons
+    
+    # 3. "Extremes" comparison (Naive vs Expert, high-quality only):
+    >>> df = filter_manifest_by_stage(
+    ...     manifest,
+    ...     include_stages=['Naive', 'Expert'],
+    ...     min_trials=200,
+    ...     stage_specific_dprime={'Naive': 0.5, 'Expert': 1.5}
+    ... )
+    
+    # 4. Learning trajectory with quality gate:
+    >>> df = filter_manifest_by_stage(
+    ...     manifest,
+    ...     exclude_stages=['Excluded', 'Disengaged'],
+    ...     min_dprime=0.8,
+    ...     min_trials=150
+    ... )
+    
+    Notes
+    -----
+    - Always excludes sessions with qc_fail=True (if that column exists)
+    - Filtering is applied in order: qc_fail → include → exclude → trials → dprime
+    - stage_group column is only created if merge_naive_learning=True
+    """
+    df = manifest_df.copy()
+    
+    # 1. Filter QC failures (if column exists)
+    if 'qc_fail' in df.columns:
+        df = df[df['qc_fail'] == False].reset_index(drop=True)
+    
+    # 2. Include stages
+    if include_stages is not None:
+        df = df[df['stage'].isin(include_stages)].reset_index(drop=True)
+    else:
+        # Default: include all except 'Excluded'
+        df = df[df['stage'] != 'Excluded'].reset_index(drop=True)
+    
+    # 3. Exclude stages
+    if exclude_stages is not None:
+        df = df[~df['stage'].isin(exclude_stages)].reset_index(drop=True)
+    
+    # 4. Minimum trial count filter
+    if min_trials is not None:
+        if 'n_go' in df.columns and 'n_catch' in df.columns:
+            df = df[(df['n_go'] + df['n_catch']) >= min_trials].reset_index(drop=True)
+    
+    # 5. d' filters
+    if 'd_prime' in df.columns:
+        # Stage-specific d' thresholds
+        if stage_specific_dprime is not None:
+            mask = pd.Series(True, index=df.index)
+            for stage, thresh in stage_specific_dprime.items():
+                stage_mask = df['stage'] == stage
+                mask &= ~stage_mask | (df['d_prime'] >= thresh)
+            df = df[mask].reset_index(drop=True)
+        # Global d' threshold
+        elif min_dprime is not None:
+            df = df[df['d_prime'] >= min_dprime].reset_index(drop=True)
+    
+    # 6. Merge Naive → Learning: overwrite 'stage' so all downstream code
+    #    (groupby, colors, legends) works without modification.  The
+    #    original label is preserved in 'stage_original'.
+    if merge_naive_learning:
+        df['stage_original'] = df['stage'].copy()
+        df.loc[df['stage'] == 'Naive', 'stage'] = 'Learning'
+        # Legacy alias kept for any code that reads stage_group
+        df['stage_group'] = df['stage']
+    
+    return df

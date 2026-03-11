@@ -8,11 +8,9 @@ def test_basic_imports():
     sys.path.insert(0, str(repo_root))
 
     importlib.import_module("visdetect.analysis.optotagging")
-    importlib.import_module("visdetect.analysis.tracking")
-    importlib.import_module("visdetect.analysis.responsive_analysis")
-    # ensure the runner script is syntactically valid
-    importlib.import_module("scripts.pipelines.run_demo_pipeline")
+    # Note: visdetect.analysis.tracking and responsive_analysis were removed/archived.
+    # Note: scripts.pipelines.run_demo_pipeline and run_bombcell_wrapper moved to
+    #       scripts/pipelines/archive/ and are no longer importable from the default path.
     importlib.import_module("visdetect.core.kilosort")
-
-    importlib.import_module("visdetect.integrations.bombcell_wrapper")
-    importlib.import_module("scripts.pipelines.run_bombcell_wrapper")
+    importlib.import_module("visdetect.core.session")
+    importlib.import_module("visdetect.analysis.behavior")

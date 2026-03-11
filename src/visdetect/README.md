@@ -5,28 +5,24 @@ This package contains the core logic for the visual change detection analysis.
 ## Structure
 
 - **core/**: Core data structures and I/O.
-  - `session.py`: `Session`, `Trial`, `Cluster` dataclasses.
+  - `session.py`: `Session`, `Trial`, `Cluster` dataclasses + unified pickle/MAT loader with full legacy format support.
   - `io.py`: MAT file loading.
-  - `legacy_io.py`: Pickle loading (legacy).
   - `qc.py`: Quality control functions.
   - `kilosort.py`: Kilosort data integration.
 
 - **analysis/**: Analysis modules.
+  - `behavior.py`: **Canonical** SDT metrics, d', psychometrics (single source of truth).
   - `align.py`: Event alignment and PETHs.
   - `decoding.py`: Population decoding.
   - `tuning.py`: Tuning curve analysis.
   - `responsiveness.py`: Unit responsiveness metrics.
   - `population.py`: Population dynamics.
-  - `tracking.py`: Unit tracking (UnitMatch).
   - `tf_pulse.py`: TF pulse analysis.
   - `lick_decoding.py`: Lick-aligned decoding.
   - `lick_responsiveness.py`: Lick responsiveness.
   - `optotagging.py`: Optotagging analysis.
   - `su_analysis.py`: Single unit analysis helpers.
   - `coding_direction.py`: Coding direction analysis.
-  - `responsive_analysis.py`: Responsive unit analysis.
-
-- **plotting/**: Visualization helpers (currently empty, logic in analysis modules).
 
 - **utils/**: Shared utilities.
   - `synthetic.py`: Synthetic data generation.

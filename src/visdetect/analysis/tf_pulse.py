@@ -37,7 +37,7 @@ class TFRespPulseConfig:
     post_window: Tuple[float, float] = (0.0, 0.5)
     # Smoothing for spike KDE
     dt: float = 0.001  # seconds per bin for smoothing grid
-    sigma_ms: float = 13.3  # Gaussian sigma in ms
+    sigma_ms: float = 17.0  # Gaussian sigma in ms (approx 40ms FWHM)
     # Trial constraints (enabled by default to match stricter legacy v2 script)
     use_constraints: bool = True
     min_after_baseline: float = 1.0

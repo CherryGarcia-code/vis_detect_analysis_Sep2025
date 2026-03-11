@@ -12,7 +12,8 @@ This project investigates neural dynamics in the medial striatum of mice perform
     - Baseline (drifting grating, 1 Hz, noisy)
     - Speed change (to 1.25, 1.35, 1.5, 2, or 4 Hz) after ≥6s
     - Mouse must lick within 2.15s of change for reward
-    - Outcomes: Hit, Miss, False Alarm (FA), Abort
+    - Outcomes: Hit, Miss, False Alarm (FA), Reflex (Ref), Abort
+    - **SDT note:** The behavioral software labels ANY lick as "Hit" regardless of trial type. For Signal Detection Theory, True Hit = lick on go trial (change\_size > 1), True FA = lick on catch trial (change\_size == 1), True Miss = no lick on go trial, True CR = no lick on catch trial. Software "FA" = early/anticipatory lick (excluded from SDT). "Ref" = reflex lick (excluded from SDT).
 - **Recording:**  
   - Neuropixels 2.0 4-shank probes (chronic)
   - Video (face, pupil, body)
