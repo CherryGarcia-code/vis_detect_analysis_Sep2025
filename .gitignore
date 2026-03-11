@@ -87,3 +87,8 @@ tmpclaude-*
 # Large external / exploratory directories
 AI_exploration/
 _DeepUnitMatch_repo/
+
+# Analysis suite cache and run logs (generated data)
+analysis_suite/cache/
+analysis_suite/*_log.txt
+analysis_suite/*_output.txt
