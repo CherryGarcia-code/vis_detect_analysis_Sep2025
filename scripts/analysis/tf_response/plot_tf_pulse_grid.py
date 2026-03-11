@@ -8,10 +8,9 @@ import argparse
 from pathlib import Path
 import sys
 
-# Ensure repo root on path
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+# Ensure repo root/src on path
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(_REPO_ROOT / 'src'))
 
 from visdetect.core.session import load_session
 from visdetect.analysis.tf_pulse import TFRespPulseConfig, plot_tf_pulse_grid

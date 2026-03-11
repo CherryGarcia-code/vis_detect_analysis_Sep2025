@@ -4,10 +4,18 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+import sys
+from pathlib import Path
 
-def plot_learning_curve(manifest_path, output_path):
-    df = pd.read_csv(manifest_path)
-    
+# Ensure repo root/src is in path
+repo_root = Path(__file__).resolve().parents[2]
+if str(repo_root / 'src') not in sys.path:
+    sys.path.insert(0, str(repo_root / 'src'))
+
+from visdetect.analysis.config import load_staging_manifest
+
+def plot_learning_curve(df, output_path):
+    """Plot d' learning curve from a pre-loaded manifest DataFrame."""
     # Sort by date
     # Format dates as strings with padding (d/m/y -> 0d/0m/y)
     df['date_str'] = df['date'].astype(str).str.zfill(8)
@@ -30,8 +38,5 @@ def plot_learning_curve(manifest_path, output_path):
     print(f"Saved learning curve to {output_path}")
 
 if __name__ == "__main__":
-    manifest = "data/BG_046_staging_manifest.csv"
-    if os.path.exists(manifest):
-        plot_learning_curve(manifest, "FIGURES/learning_curve_BG_046.png")
-    else:
-        print("Manifest missing.")
+    manifest = load_staging_manifest()
+    plot_learning_curve(manifest, "FIGURES/learning_curve_BG_046.png")

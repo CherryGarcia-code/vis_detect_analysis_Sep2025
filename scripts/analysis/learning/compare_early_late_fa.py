@@ -16,13 +16,13 @@ from tqdm import tqdm
 import sys
 import concurrent.futures
 
-# Ensure repo root is in path
+# Ensure repo root/src is in path
 repo_root = Path(__file__).resolve().parents[3]
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.core.session import load_session
 from visdetect.analysis.lick import MatlabLickAnalyzer, MatlabLickConfig
+from visdetect.analysis.config import load_staging_manifest
 
 # -------------------------------------------------------------------------
 # Custom Analyzer to reuse standard logic but split events
@@ -204,10 +204,13 @@ def process_single_session_traces(row_tuple, stats_root, cfg_dict):
 # -------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--manifest', default='data/BG_046_staging_manifest.csv')
+    parser.add_argument('--manifest', default=None,
+                        help='Path to manifest CSV (default: canonical)')
     parser.add_argument('--stats-root', default='FIGURES/lick/BG_046')
     parser.add_argument('--out-dir', default='FIGURES/learning_fa_split')
     parser.add_argument("--n_workers", type=int, default=4, help="Number of parallel workers")
+    parser.add_argument('--no-filter', action='store_true',
+                        help='Bypass SESSION_FILTER')
     args = parser.parse_args()
     
     # Configuration
@@ -240,15 +243,13 @@ def main():
         for s in ['Naive', 'Learning', 'Expert']
     }
     
-    manifest = pd.read_csv(args.manifest, dtype={'session_name': str, 'date': str})
+    manifest = load_staging_manifest(manifest_path=args.manifest,
+                                      apply_filter=not args.no_filter)
     
     # Prepare rows for workers
-    # filtering relevant stages only
     tasks = []
     for _, row in manifest.iterrows():
-        if row['stage'] in ['Naive', 'Learning', 'Expert']:
-            # Pass as dict to avoid serializing pandas Series/Index issues if any
-            tasks.append(row.to_dict())
+        tasks.append(row.to_dict())
             
     print(f"Processing {len(tasks)} sessions with {args.n_workers} workers...")
     

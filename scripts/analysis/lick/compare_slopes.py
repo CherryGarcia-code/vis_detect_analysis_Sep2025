@@ -21,6 +21,14 @@ from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
+
+# Ensure repo root/src is in path
+repo_root = Path(__file__).resolve().parents[3]
+if str(repo_root / 'src') not in sys.path:
+    sys.path.insert(0, str(repo_root / 'src'))
+
+from visdetect.analysis.config import load_staging_manifest
 
 # --- Helper Functions ---
 
@@ -124,7 +132,7 @@ def load_session_and_compute_metrics(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Compare early vs late pre-lick metrics.")
-    parser.add_argument('--manifest', required=True, help='Path to sessions manifest CSV')
+    parser.add_argument('--manifest', default=None, help='Path to sessions manifest CSV (default: canonical)')
     parser.add_argument('--figures-root', default='FIGURES/lick', help='Root directory for session outputs')
     parser.add_argument('--out', required=True, help='Output directory for plots')
     parser.add_argument('--workers', type=int, default=4, help='Parallel workers')
@@ -133,11 +141,13 @@ def main():
                         help='Early window (s) (default: -1.0 -0.5)')
     parser.add_argument('--late-window', nargs=2, type=float, default=[-0.4, -0.2], 
                         help='Late window (s) (default: -0.4 -0.2)')
+    parser.add_argument('--no-filter', action='store_true', help='Bypass SESSION_FILTER')
     
     args = parser.parse_args()
 
     # 1. Setup
-    manifest = pd.read_csv(args.manifest, dtype={'session_name': str})
+    manifest = load_staging_manifest(manifest_path=args.manifest,
+                                     apply_filter=not args.no_filter)
     subject = manifest.iloc[0]['subject']
     
     # Enforce formatting

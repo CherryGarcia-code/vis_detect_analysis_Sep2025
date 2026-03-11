@@ -17,8 +17,8 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-repo_root = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(repo_root))
+repo_root = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.core.session import load_session
 

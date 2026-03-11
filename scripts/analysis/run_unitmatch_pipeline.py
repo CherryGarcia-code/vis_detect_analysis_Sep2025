@@ -132,7 +132,7 @@ def main():
 
     print(f"Found {len(session_dirs)} sessions prepared.")
     if not session_dirs:
-        print("No prepared sessions found. Run prep_unitmatch_iti_waveforms.py first.")
+        print("No prepared sessions found. Run prep_unitmatch_full_trial_waveforms.py first.")
         sys.exit(1)
 
 def run_pipeline_batch(session_dirs, output_dir, label_suffix=""):
@@ -426,7 +426,7 @@ def main():
 
     print(f"Found {len(session_dirs)} sessions prepared.")
     if not session_dirs:
-        print("No prepared sessions found. Run prep_unitmatch_iti_waveforms.py first.")
+        print("No prepared sessions found. Run prep_unitmatch_full_trial_waveforms.py first.")
         sys.exit(1)
         
     # Check if we need batching

@@ -18,6 +18,14 @@ from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
+
+# Ensure repo root/src is in path
+repo_root = Path(__file__).resolve().parents[3]
+if str(repo_root / 'src') not in sys.path:
+    sys.path.insert(0, str(repo_root / 'src'))
+
+from visdetect.analysis.config import load_staging_manifest
 
 def parse_date(session_name):
     # Assumes format BG_046_DDMMYYYY
@@ -85,14 +93,16 @@ def load_session_data(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Compare lick responsiveness across sessions.")
-    parser.add_argument('--manifest', required=True, help='Path to sessions manifest CSV')
+    parser.add_argument('--manifest', default=None, help='Path to sessions manifest CSV (default: canonical)')
     parser.add_argument('--figures-root', default='FIGURES/lick', help='Root directory where session subfolders are located')
     parser.add_argument('--out', required=True, help='Output directory for comparison plots')
     parser.add_argument('--workers', type=int, default=4, help='Number of parallel workers for file loading')
+    parser.add_argument('--no-filter', action='store_true', help='Bypass SESSION_FILTER')
     args = parser.parse_args()
 
     # 1. Load Manifest and Sort
-    manifest = pd.read_csv(args.manifest, dtype={'session_name': str})
+    manifest = load_staging_manifest(manifest_path=args.manifest,
+                                     apply_filter=not args.no_filter)
     
     subject = manifest.iloc[0]['subject']
     # Ensure session_name is string and padded

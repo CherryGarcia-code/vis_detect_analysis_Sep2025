@@ -1,7 +1,13 @@
 """
 Filter sessions based on behavioral quality control criteria defined in a YAML config.
 
-Usage:
+.. deprecated::
+    This script is NOT part of the active analysis pipeline.  Session inclusion
+    is now determined by ``scripts/analysis/stage_sessions.py`` which writes the
+    staging manifest (``data/BG_046_staging_manifest.csv``).  The old
+    ``config/session_qc.yml`` config has been moved to ``archive/deprecated_modules/``.
+
+Usage (legacy):
     python scripts/data_management/filter_sessions.py --manifest data/BG_046_sessions_manifest.csv --out-dir data/filtered
 """
 import argparse

@@ -3,12 +3,14 @@
 Usage:
     python scripts/batch_processing/batch_plot_tf_grids.py --pkl-dir pkls --out-dir png_output/tf_pulse_grids_v2 --profile striatal_strict
 """
-from visdetect.core.session import load_session
 import argparse
 import subprocess
 import sys
 from pathlib import Path
 from tqdm import tqdm
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src'))
+
+from visdetect.core.session import load_session
 
 def main():
     ap = argparse.ArgumentParser()

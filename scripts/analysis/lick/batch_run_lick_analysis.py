@@ -46,6 +46,7 @@ def main():
     parser.add_argument('--out', required=True, help='Output directory for figures')
     parser.add_argument('--manifest', help='Optional: Path to manifest CSV to filter sessions (e.g. _clean.csv)')
     parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers (default: 4)")
+    parser.add_argument("--stats-only", action="store_true", help="Generate stats CSV/NPZ only, skip plots")
     args = parser.parse_args()
 
     # Define paths 
@@ -88,7 +89,7 @@ def main():
             if pkl_path and pkl_path.exists():
                 # Use the stem as session name for output consistency, or the manifest name?
                 # Let's use the manifest name to match the clean list
-                tasks.append((session_name, pkl_path, out_dir_base, repo_root))
+                tasks.append((session_name, pkl_path, out_dir_base, repo_root, args.stats_only))
             else:
                 print(f"Warning: Could not find pkl file for session {session_name}")
 

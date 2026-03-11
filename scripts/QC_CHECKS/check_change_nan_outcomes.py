@@ -1,7 +1,7 @@
 from pathlib import Path
 import numpy as np
 import sys
-repo_root = Path(__file__).resolve().parents[1]
+repo_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(repo_root))
 sys.path.insert(0, str(repo_root / 'src'))
 from visdetect.core.session import load_session

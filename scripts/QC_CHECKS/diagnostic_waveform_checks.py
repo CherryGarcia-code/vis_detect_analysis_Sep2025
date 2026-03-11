@@ -11,6 +11,7 @@ Saves outputs to notebooks/BG_031_260325/optotagging/diagnostics/
 
 
 import argparse
+import sys
 import numpy as np
 import csv
 import matplotlib
@@ -20,7 +21,8 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'src'))
 OUTDIR = ROOT / "notebooks" / "BG_031_260325" / "optotagging" / "diagnostics"
 OUTDIR.mkdir(parents=True, exist_ok=True)
 

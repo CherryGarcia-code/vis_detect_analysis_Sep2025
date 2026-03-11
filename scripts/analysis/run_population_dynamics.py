@@ -5,14 +5,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter1d
 
-# Ensure repo root is in path
+# Ensure repo root/src is in path
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
+sys.path.insert(0, os.path.join(repo_root, 'src'))
 
-from src.visdetect.core.session import load_session, Session
-from src.visdetect.analysis import align
-from src.visdetect.analysis import behavior
+from visdetect.core.session import load_session, Session
+from visdetect.analysis import align
+from visdetect.analysis import behavior
 
 def run_population_analysis(session_path: str, output_dir: str):
     """

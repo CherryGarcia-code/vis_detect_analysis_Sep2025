@@ -24,13 +24,13 @@ from tqdm import tqdm
 from scipy.ndimage import gaussian_filter1d
 import sys
 
-# Ensure repo root is in path
+# Ensure repo root/src is in path
 repo_root = Path(__file__).resolve().parents[3]
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.core.session import load_session
 from visdetect.analysis.behavior import get_trial_dataframe
+from visdetect.analysis.config import load_staging_manifest
 
 def parse_date(session_name):
     try:
@@ -283,16 +283,19 @@ def process_session(pkl_path, stats_root, session_name):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--manifest', required=True)
+    parser.add_argument('--manifest', default=None,
+                        help='Path to manifest CSV (default: canonical)')
     parser.add_argument('--out', required=True)
     parser.add_argument('--stats-root', required=True, help="Root folder where lick_responsiveness.csv are stored (e.g., FIGURES/lick/BG_046)")
     parser.add_argument('--pkl-dir', required=False)
+    parser.add_argument('--no-filter', action='store_true', help='Bypass SESSION_FILTER')
     args = parser.parse_args()
     
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     
-    manifest = pd.read_csv(args.manifest, dtype={'session_name': str})
+    manifest = load_staging_manifest(manifest_path=args.manifest,
+                                     apply_filter=not args.no_filter)
     # Restore zeros
     manifest['session_name'] = manifest['session_name'].apply(lambda x: x.zfill(8) if x.isdigit() and len(x)==7 else x)
     subject = manifest.iloc[0]['subject']

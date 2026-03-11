@@ -12,6 +12,14 @@ from datetime import datetime
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import matplotlib.cm as cm
+import sys
+
+# Ensure repo root/src is in path
+repo_root = Path(__file__).resolve().parents[3]
+if str(repo_root / 'src') not in sys.path:
+    sys.path.insert(0, str(repo_root / 'src'))
+
+from visdetect.analysis.config import load_staging_manifest
 
 # --- Helper Functions (Shared Logic) ---
 
@@ -82,7 +90,7 @@ def load_session_trace(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Plot chronological progression of lick responses.")
-    parser.add_argument('--manifest', required=True, help='Path to sessions manifest CSV')
+    parser.add_argument('--manifest', default=None, help='Path to sessions manifest CSV (default: canonical)')
     parser.add_argument('--figures-root', default='FIGURES/lick', help='Root directory for session outputs')
     parser.add_argument('--out', required=True, help='Output directory for plots')
     parser.add_argument('--workers', type=int, default=4, help='Parallel workers')
@@ -90,11 +98,13 @@ def main():
     # Peak detection parameters
     parser.add_argument('--peak-window', nargs=2, type=float, default=[-0.4, 0.0], 
                         help='Time window (s) to search for peak response (default: -0.4 0.0)')
+    parser.add_argument('--no-filter', action='store_true', help='Bypass SESSION_FILTER')
     
     args = parser.parse_args()
 
     # 1. Setup Paths and Manifest
-    manifest = pd.read_csv(args.manifest, dtype={'session_name': str})
+    manifest = load_staging_manifest(manifest_path=args.manifest,
+                                     apply_filter=not args.no_filter)
     subject = manifest.iloc[0]['subject']
     
     # Enforce formatting

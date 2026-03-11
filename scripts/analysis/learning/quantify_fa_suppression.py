@@ -22,13 +22,13 @@ import sys
 import concurrent.futures
 from tqdm import tqdm
 
-# Ensure repo root is in path
+# Ensure repo root/src is in path
 repo_root = Path(__file__).resolve().parents[3]
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.core.session import load_session
 from visdetect.analysis.lick import MatlabLickAnalyzer, MatlabLickConfig
+from visdetect.analysis.config import load_staging_manifest
 
 # -------------------------------------------------------------------------
 # Custom Analyzer (Mirrors compare_early_late_fa.py logic)
@@ -202,10 +202,13 @@ def process_session_metrics(task, stats_root, cfg_dict):
 # -------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--manifest', default='data/BG_046_staging_manifest.csv')
+    parser.add_argument('--manifest', default=None,
+                        help='Path to manifest CSV (default: canonical)')
     parser.add_argument('--stats-root', default='FIGURES/lick/BG_046')
     parser.add_argument('--out-dir', default='FIGURES/suppression_quantification')
     parser.add_argument('--n_workers', type=int, default=8)
+    parser.add_argument('--no-filter', action='store_true',
+                        help='Bypass SESSION_FILTER')
     args = parser.parse_args()
 
     cfg = MatlabLickConfig(
@@ -226,12 +229,12 @@ def main():
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     
-    manifest = pd.read_csv(args.manifest, dtype={'session_name': str, 'date': str})
+    manifest = load_staging_manifest(manifest_path=args.manifest,
+                                      apply_filter=not args.no_filter)
     
     tasks = []
     for _, row in manifest.iterrows():
-        if row['stage'] in ['Naive', 'Learning', 'Expert']:
-            tasks.append(row.to_dict())
+        tasks.append(row.to_dict())
             
     print(f"Quantifying metrics for {len(tasks)} sessions (Workers={args.n_workers})...")
     

@@ -7,10 +7,9 @@ import sys
 from sklearn.metrics import roc_auc_score
 from scipy.stats import sem
 
-# Ensure project root is in path
+# Ensure project root/src is in path
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
+sys.path.insert(0, os.path.join(repo_root, 'src'))
 
 from visdetect.core.session import load_session
 

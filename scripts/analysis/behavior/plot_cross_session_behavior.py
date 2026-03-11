@@ -24,6 +24,7 @@ repo_root = Path(__file__).resolve().parents[3]
 if str(repo_root / 'src') not in sys.path:
     sys.path.insert(0, str(repo_root / 'src'))
 
+from visdetect.analysis.config import load_staging_manifest
 from visdetect.analysis.behavior import calculate_dprime
 from visdetect.viz.plotting import set_style, despine
 
@@ -37,19 +38,16 @@ def parse_date(session_name):
 
 def main():
     parser = argparse.ArgumentParser(description="Plot cross-session behavior.")
-    parser.add_argument('--manifest', required=True, help='Path to sessions manifest CSV')
+    parser.add_argument('--manifest', default=None, help='Path to sessions manifest CSV (default: canonical)')
     parser.add_argument('--out', required=True, help='Output directory')
+    parser.add_argument('--no-filter', action='store_true', help='Bypass SESSION_FILTER')
     args = parser.parse_args()
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     
-    # Load Manifest
-    df = pd.read_csv(args.manifest)
-    
-    # Ensure session_name is string and padded if necessary (pandas might read 01072025 as 1072025)
-    df['session_name'] = df['session_name'].astype(str)
-    df['session_name'] = df['session_name'].apply(lambda x: x.zfill(8) if x.isdigit() and len(x) == 7 else x)
+    # Load Manifest (centralized: applies SESSION_FILTER, sorts chronologically)
+    df = load_staging_manifest(manifest_path=args.manifest, apply_filter=not args.no_filter)
     
     # Sort by date
     subject = df.iloc[0]['subject']

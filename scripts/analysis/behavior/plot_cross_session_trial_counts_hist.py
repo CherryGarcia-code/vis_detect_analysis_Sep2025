@@ -20,18 +20,20 @@ if str(repo_root / 'src') not in sys.path:
     sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.viz.plotting import set_style, despine
+from visdetect.analysis.config import load_staging_manifest
 
 def main():
     parser = argparse.ArgumentParser(description="Plot cross-session trial count histograms.")
-    parser.add_argument('--manifest', required=True, help='Path to sessions manifest CSV')
+    parser.add_argument('--manifest', default=None, help='Path to sessions manifest CSV (default: canonical)')
     parser.add_argument('--out', required=True, help='Output directory')
+    parser.add_argument('--no-filter', action='store_true', help='Bypass SESSION_FILTER')
     args = parser.parse_args()
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     
-    # Load Manifest
-    df = pd.read_csv(args.manifest)
+    # Load Manifest (centralized: applies SESSION_FILTER, sorts chronologically)
+    df = load_staging_manifest(manifest_path=args.manifest, apply_filter=not args.no_filter)
     subject = df.iloc[0]['subject'] if 'subject' in df.columns else "Unknown Subject"
 
     # Use 'talk' context

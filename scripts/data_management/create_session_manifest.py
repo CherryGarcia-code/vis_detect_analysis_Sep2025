@@ -1,7 +1,11 @@
 """
 Create a session manifest CSV from a directory of session .pkl files.
 
-Usage:
+.. deprecated::
+    This script is NOT part of the active analysis pipeline.  Session inclusion
+    is now handled by ``scripts/analysis/stage_sessions.py``.  Kept for reference.
+
+Usage (legacy):
     python scripts/misc_utils/create_session_manifest.py --pkl-dir pkls/BG_046
 """
 import argparse
@@ -11,10 +15,9 @@ from tqdm import tqdm
 from datetime import datetime
 import sys
 
-# Ensure repo root is in path to import visdetect
+# Ensure repo root/src is in path to import visdetect
 repo_root = Path(__file__).resolve().parents[2]
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.core.session import load_session
 from visdetect.analysis.behavior import compute_session_performance
