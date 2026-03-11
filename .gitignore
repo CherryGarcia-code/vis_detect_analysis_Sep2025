@@ -2,6 +2,11 @@
 __pycache__/
 *.py[cod]
 *.so
+*.egg-info/
+src/visdetect.egg-info/
+
+# Virtual env
+.venv/
 
 # Data files
 *.pkl
@@ -9,6 +14,9 @@ __pycache__/
 *.h5
 *.hdf5
 *.7z
+*.zip
+*.tar.gz
+*.tgz
 pkls/
 pkls/previous_runs/
 
@@ -21,42 +29,61 @@ nohup.out
 .vscode/
 .idea/
 
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+
 # Archives
 archive/
 
-# Additional data & outputs to reduce working-tree noise
-# raw data and matlab session files
+# Raw data and matlab session files
 data/
-# pickles and previous run outputs
-pkls/
-pkls/previous_runs/
-*.pkl
-*.npz
-*.7z
-*.zip
-*.tar.gz
-*.tgz
-# notebook outputs and generated images
-group_meeting_*/
+
+# Notebook outputs, generated images, and tables
 FIGURES/
 png_output/
+table_output/
 notebooks/png_output/
 notebooks/aggregated/
 notebooks/batch_outputs/
-table_output/
-# runtime/logs
-nohup.out
-*.log
-# notebook checkpoints
+group_meeting_*/
+
+# Runtime artifacts
 .ipynb_checkpoints/
-# Additional ignores for notebooks, databases, and temp folders
+
+# Notebooks (outputs tracked separately)
 notebooks/
-database/
-cleanup_archive/
+
+# Reference material
 paper_references/
+database/
+
+# Legacy / archive directories
+cleanup_archive/
 tmp_demo_qc/
-src/visdetect.egg-info/
-chanMap_*.mat
-*.png
-chanMap_related/
 scripts/scripts_archive/
+
+# Channel map files
+chanMap_*.mat
+chanMap_related/
+*.png
+
+# Claude Code temp files
+tmpclaude-*
+
+# Scratch / debug files (underscore-prefixed in root)
+/_*.txt
+/_*.py
+
+# Windows artifacts
+*.stackdump
+/nul
+
+# One-off root files
+/inspect_temp.py
+/show_pastel_palettes.py
+/run_split_resume.bat
+
+# Large external / exploratory directories
+AI_exploration/
+_DeepUnitMatch_repo/
