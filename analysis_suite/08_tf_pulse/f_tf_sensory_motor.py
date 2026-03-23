@@ -1,4 +1,4 @@
-"""08f – TF sensory vs. motor: compare TF-responsive units to change/lick signals.
+"""Fig40: TF sensory vs. motor — cross-referencing TF responsiveness with change/lick signals.
 
 Uses NPZ cache for TF classification (eliminates collect_tf_pulse_traces()),
 but REQUIRES session pickles for change-aligned and lick-aligned PSTHs.
@@ -7,7 +7,7 @@ Cross-references TF responsiveness with change-detection signals and
 pre-lick ramping to test whether TF-responsive neurons carry sensory
 and/or motor information.
 
-Produces fig29_tf_sensory_motor.png:
+Produces fig40_tf_sensory_motor.png:
   - Panel A: Change PSTH of TF-responsive vs. non-responsive units
   - Panel B: Lick PSTH of TF-responsive vs. non-responsive units
   - Panel C: TF responsiveness vs. change selectivity (scatter)
@@ -341,8 +341,8 @@ def main():
         "TF Pulse Responsive Units: Sensory & Motor Overlap\n"
         "(Change-detection, lick-responsiveness, TF modulation)",
         fontsize=13, fontweight="bold", y=0.98)
-    save_figure(fig, "fig29_tf_sensory_motor", "08_tf_pulse")
-    print("\n  ✓ Saved fig29_tf_sensory_motor.png")
+    save_figure(fig, "fig40_tf_sensory_motor", "08_tf_pulse")
+    print("\n  Saved fig40_tf_sensory_motor.png")
 
     # Summary
     print("\n  Overlap summary:")

@@ -1,4 +1,4 @@
-"""02d - HMM state modulation of neural responses.
+"""Fig 11: State modulation — HMM state modulation of neural responses.
 
 Condition neural responses on the behavioral state (Disengaged, Engaged,
 Impulsive) to ask: does the striatal population response to visual changes
@@ -31,7 +31,7 @@ import matplotlib.gridspec as gridspec
 
 from config import (
     STAGE_ORDER, STAGE_COLORS, HMM_STATE_ORDER, HMM_STATE_COLORS,
-    CELLTYPE_COLORS, CACHE_DIR,
+    CELLTYPE_COLORS, CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import (
     load_staging_manifest, load_session,
@@ -46,7 +46,7 @@ from plotting import setup_style, save_figure
 setup_style()
 
 WINDOW = (-0.5, 1.0)
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 BASELINE_WIN = (-0.4, -0.05)
 RESP_WIN = (0.0, 0.25)
 MIN_TRIALS_PER_STATE = 5
@@ -327,7 +327,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig07_state_modulation", "02_single_unit")
+    save_figure(fig, "fig11_state_modulation", "02_single_unit")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "02_single_unit", "state_modulation_stats.csv"

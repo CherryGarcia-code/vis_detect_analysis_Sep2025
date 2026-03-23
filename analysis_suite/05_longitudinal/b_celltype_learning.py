@@ -1,13 +1,13 @@
-"""05b - FSI vs MSN differential learning trajectories.
+"""Fig22: Cell-Type Learning — FSI vs MSN differential learning trajectories.
 
 Compares how Narrow (FSI) and Broad (MSN/Proj) cell types differ
 in their response properties across learning stages.
 
 Produces:
-  - Fig 14A: Mean response magnitude (delta FR) across sessions by cell type
-  - Fig 14B: Fraction responsive by stage and cell type
-  - Fig 14C: Response latency by cell type across stages
-  - Fig 14D: Cell-type ratio (FSI/MSN) of responsive neurons across sessions
+  - Fig 22A: Mean response magnitude (delta FR) across sessions by cell type
+  - Fig 22B: Fraction responsive by stage and cell type
+  - Fig 22C: Response latency by cell type across stages
+  - Fig 22D: Cell-type ratio (FSI/MSN) of responsive neurons across sessions
 
 Saves: figures/05_longitudinal/celltype_learning_stats.csv
 """
@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
 from config import (
-    STAGE_ORDER, STAGE_COLORS, CELLTYPE_COLORS, CACHE_DIR,
+    STAGE_ORDER, STAGE_COLORS, CELLTYPE_COLORS, CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import (
     load_staging_manifest, load_session, load_waveform_labels,
@@ -41,7 +41,7 @@ from visdetect.analysis.align import align_spikes_to_events, get_event_times_by_
 setup_style()
 
 WINDOW = (-0.5, 0.5)
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 BASELINE_WIN = (-0.5, -0.05)
 RESP_WIN = (0.0, 0.25)
 Z_THRESH = 2.0
@@ -306,7 +306,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig16_celltype_learning", "05_longitudinal")
+    save_figure(fig, "fig22_celltype_learning", "05_longitudinal")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "05_longitudinal", "celltype_learning_stats.csv"

@@ -1,4 +1,4 @@
-"""01c - Reaction time analysis across learning, change size, and HMM state.
+"""Fig03: Reaction time analysis across learning, change size, and HMM state.
 
 Reaction times are computed differently per outcome:
   - Hit:   rt["RT"]    – time from Change_ON   to first lick
@@ -8,12 +8,12 @@ Reaction times are computed differently per outcome:
   - Ref:   rt["Ref"]   – time from Baseline_ON  to lick on catch trial
 
 Produces:
-  - Fig 3A: Hit RT distributions by learning stage (violin)
-  - Fig 3B: Hit RT vs change size (speed-accuracy, per stage)
-  - Fig 3C: FA & abort RT distributions by learning stage
-  - Fig 3D: Hit RT by HMM state (Expert sessions)
-  - Fig 3E: Median Hit RT trajectory across sessions
-  - Fig 3F: FA RT (from baseline) trajectory across sessions
+  - Fig 03A: Hit RT distributions by learning stage (violin)
+  - Fig 03B: Hit RT vs change size (speed-accuracy, per stage)
+  - Fig 03C: FA & abort RT distributions by learning stage
+  - Fig 03D: Hit RT by HMM state (Expert sessions)
+  - Fig 03E: Median Hit RT trajectory across sessions
+  - Fig 03F: FA RT (from baseline) trajectory across sessions
 
 Saves: figures/01_behavior/reaction_time_stats.csv
 """

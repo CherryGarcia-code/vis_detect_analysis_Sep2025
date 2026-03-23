@@ -1,10 +1,10 @@
-"""02a - Responsiveness screen: population-wide responsiveness to Change_ON.
+"""Fig 08: Responsiveness screen — population-wide responsiveness to Change_ON.
 
 Produces:
-  - Fig 3A: Volcano plot (d' vs -log10 p) colored by responsive/non-responsive
-  - Fig 3B: Fraction responsive by stage (bar chart)
-  - Fig 3C: Population PSTH heatmap sorted by peak latency (Expert sessions)
-  - Fig 3D: Distribution of response magnitudes (delta_FR) by cell type
+  - Fig 08A: Volcano plot (d' vs -log10 p) colored by responsive/non-responsive
+  - Fig 08B: Fraction responsive by stage (bar chart)
+  - Fig 08C: Population PSTH heatmap sorted by peak latency (Expert sessions)
+  - Fig 08D: Distribution of response magnitudes (delta_FR) by cell type
 
 Caches: cache/responsiveness_all_sessions.csv
 Saves statistics to figures/02_single_unit/responsiveness_stats.csv
@@ -33,6 +33,7 @@ from loader import load_staging_manifest, load_session, load_waveform_labels
 from utils import (
     get_good_cluster_ids, build_population_tensor,
     smooth_psth, compute_zscore_normalized, compute_auroc,
+    fdr_correct,
 )
 from plotting import setup_style, save_figure
 
@@ -200,6 +201,15 @@ def main():
         print("  No data. Exiting.")
         return
 
+    # Step 1b: Apply FDR correction across all units
+    valid_mask = resp_df["p_value"].notna()
+    if valid_mask.sum() > 0:
+        fdr_sig = fdr_correct(resp_df.loc[valid_mask, "p_value"].values)
+        resp_df.loc[valid_mask, "is_responsive"] = fdr_sig
+        n_before = resp_df["p_value"].notna().sum()
+        n_after = resp_df["is_responsive"].sum()
+        print(f"  FDR correction: {n_after}/{n_before} units responsive (alpha=0.05)")
+
     # Merge cell-type labels
     try:
         wf = load_waveform_labels()
@@ -283,6 +293,7 @@ def main():
                 cids = expert_resp[expert_resp["session_name"] == sname]["cluster_id"].tolist()
                 if not cids:
                     del sess
+                    gc.collect()
                     continue
                 tensor, bc, _ = build_population_tensor(
                     sess, cids, event_name="Change_ON",
@@ -375,7 +386,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig04_responsiveness_screen", "02_single_unit")
+    save_figure(fig, "fig08_responsiveness_screen", "02_single_unit")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "02_single_unit", "responsiveness_stats.csv"

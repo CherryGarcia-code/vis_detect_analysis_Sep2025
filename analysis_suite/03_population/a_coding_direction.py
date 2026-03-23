@@ -1,4 +1,4 @@
-"""03a - Time-resolved coding direction: Hit vs Miss.
+"""Fig 13: Coding direction — time-resolved Hit vs Miss.
 
 The most publishable population analysis: demonstrates that striatal
 populations encode a decision-related signal that emerges with learning
@@ -165,7 +165,7 @@ os.makedirs(CD_CACHE_DIR, exist_ok=True)
 
 # Analysis parameters
 WINDOW = (-0.5, 1.0)      # relative to Change_ON
-BIN_SIZE = 0.025           # 25 ms
+BIN_SIZE = DEFAULT_BIN_SIZE
 MIN_UNITS = 10             # minimum units per session
 MIN_TRIALS_PER_CLASS = 8   # minimum hit or miss trials
 N_PERM = 200
@@ -920,7 +920,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig09_coding_direction", "03_population")
+    save_figure(fig, "fig13_coding_direction", "03_population")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "03_population", "coding_direction_stats.csv"

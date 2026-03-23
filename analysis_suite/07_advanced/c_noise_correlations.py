@@ -1,4 +1,4 @@
-"""07c - Pairwise noise correlations by learning stage and HMM state.
+"""Fig29: Pairwise noise correlations — by learning stage and cell-type pair.
 
 Noise correlations (r_noise) quantify shared trial-to-trial variability
 between neuron pairs, a key measure of population coding efficiency.
@@ -7,10 +7,10 @@ Computes r_noise for simultaneously-recorded pairs within sessions,
 conditioned on learning stage and HMM behavioral state.
 
 Produces:
-  - Fig 15A: r_noise distribution by stage
-  - Fig 15B: Mean r_noise across sessions (learning trajectory)
-  - Fig 15C: r_noise by HMM state (Expert sessions)
-  - Fig 15D: r_noise vs inter-unit distance or cell-type pair
+  - Fig 29A: r_noise distribution by stage
+  - Fig 29B: Mean r_noise across sessions (learning trajectory)
+  - Fig 29C: r_noise by HMM state (Expert sessions)
+  - Fig 29D: r_noise vs inter-unit distance or cell-type pair
 
 Saves: figures/07_advanced/noise_correlation_stats.csv
 """
@@ -33,7 +33,7 @@ import matplotlib.gridspec as gridspec
 
 from config import (
     STAGE_ORDER, STAGE_COLORS, HMM_STATE_ORDER, HMM_STATE_COLORS,
-    CELLTYPE_COLORS, CACHE_DIR,
+    CELLTYPE_COLORS, CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import (
     load_staging_manifest, load_session,
@@ -47,7 +47,7 @@ from plotting import setup_style, save_figure, add_stage_background
 setup_style()
 
 WINDOW = (0.0, 0.5)      # Only use post-change response window
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 MIN_UNITS = 5
 MIN_TRIALS = 10
 MAX_PAIRS_PER_SESSION = 500  # cap to avoid memory issues
@@ -318,7 +318,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig23_noise_correlations", "07_advanced")
+    save_figure(fig, "fig29_noise_correlations", "07_advanced")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "07_advanced", "noise_correlation_stats.csv"

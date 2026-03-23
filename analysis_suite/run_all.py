@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run all 29 analysis scripts in sequence, with timing and error tracking.
+"""Run all analysis scripts in sequence, with timing and error tracking.
 
 Usage:
   python run_all.py                  # sequential (default)
@@ -18,35 +18,59 @@ ROOT_DIR = os.path.dirname(SUITE_DIR)
 PYTHON = os.path.join(ROOT_DIR, ".venv", "Scripts", "python.exe")
 
 SCRIPTS = [
+    # ── 01_behavior (Figs 01-07) ──────────────────────────────────────
     ("01_behavior/a_learning_curve.py",            "Fig01 Learning Curve"),
     ("01_behavior/b_hmm_state_dynamics.py",        "Fig02 HMM State Dynamics"),
     ("01_behavior/c_reaction_time_analysis.py",    "Fig03 Reaction Times"),
-    ("02_single_unit/a_responsiveness_screen.py",  "Fig04 Responsiveness Screen"),
-    ("02_single_unit/b_outcome_selectivity.py",    "Fig05 Outcome Selectivity"),
-    ("02_single_unit/c_change_size_tuning.py",     "Fig06 Change-Size Tuning"),
-    ("02_single_unit/d_state_modulation.py",       "Fig07 State Modulation"),
-    ("02_single_unit/e_cell_type_comparison.py",   "Fig08 Cell-Type Comparison"),
-    ("03_population/a_coding_direction.py",        "Fig09 Coding Direction"),
-    ("03_population/b_population_psth_heatmap.py", "Fig10 Population Heatmap"),
-    ("03_population/c_dimensionality_reduction.py","Fig11 PCA Dimensionality"),
-    ("04_decoding/a_hit_miss_decoding.py",         "Fig12 Hit/Miss Decoding"),
-    ("04_decoding/b_change_size_decoding.py",      "Fig13 Change-Size Decoding"),
-    ("04_decoding/c_state_decoding.py",            "Fig14 State Decoding"),
-    ("05_longitudinal/a_neural_learning_curves.py","Fig15 Neural Learning"),
-    ("05_longitudinal/b_celltype_learning.py",     "Fig16 Cell-Type Learning"),
-    ("05_longitudinal/c_population_geometry_shift.py","Fig17 Geometry Shift"),
-    ("06_lick_motor/a_fa_neural_signatures.py",    "Fig18 FA Neural Signatures"),
-    ("06_lick_motor/b_pre_lick_ramping.py",        "Fig19 Pre-Lick Ramping"),
-    ("06_lick_motor/c_motor_vs_sensory.py",        "Fig20 Motor vs Sensory"),
-    ("07_advanced/a_glm_encoding.py",              "Fig21 GLM Encoding"),
-    ("07_advanced/b_dpca.py",                      "Fig22 dPCA"),
-    ("07_advanced/c_noise_correlations.py",        "Fig23 Noise Correlations"),
-    ("08_tf_pulse/a_tf_responsiveness.py",         "Fig24 TF Responsiveness"),
-    ("08_tf_pulse/b_tf_response_properties.py",    "Fig25 TF Response Properties"),
-    ("08_tf_pulse/c_tf_pulse_integration.py",      "Fig26 Two-Pulse Integration"),
-    ("08_tf_pulse/d_tf_learning_emergence.py",     "Fig27 TF Learning Emergence"),
-    ("08_tf_pulse/e_tf_state_modulation.py",       "Fig28 TF × HMM State"),
-    ("08_tf_pulse/f_tf_sensory_motor.py",          "Fig29 TF Sensory-Motor"),
+    ("01_behavior/d_post_error_psychometric.py",   "Fig04 Post-Error Psychometric"),
+    ("01_behavior/e_post_error_dynamics.py",       "Fig05 Post-Error Dynamics"),
+    ("01_behavior/f_post_error_controls.py",       "Fig06 Post-Error Controls"),
+    ("01_behavior/g_post_error_streak_controls.py","Fig07 Post-Error Streak Controls"),
+    # ── 02_single_unit (Figs 08-12) ───────────────────────────────────
+    ("02_single_unit/a_responsiveness_screen.py",  "Fig08 Responsiveness Screen"),
+    ("02_single_unit/b_outcome_selectivity.py",    "Fig09 Outcome Selectivity"),
+    ("02_single_unit/c_change_size_tuning.py",     "Fig10 Change-Size Tuning"),
+    ("02_single_unit/d_state_modulation.py",       "Fig11 State Modulation"),
+    ("02_single_unit/e_cell_type_comparison.py",   "Fig12 Cell-Type Comparison"),
+    # ── 03_population (Figs 13-17) ────────────────────────────────────
+    ("03_population/a_coding_direction.py",        "Fig13 Coding Direction"),
+    ("03_population/b_population_psth_heatmap.py", "Fig14 Population Heatmap"),
+    ("03_population/c_dimensionality_reduction.py","Fig15 PCA Dimensionality"),
+    ("03_population/d_state_matched_cd.py",        "Fig16 State-Matched CD"),
+    ("03_population/e_sensory_dose_response.py",   "Fig17 Sensory Dose-Response"),
+    # ── 04_decoding (Figs 18-20) ──────────────────────────────────────
+    ("04_decoding/a_hit_miss_decoding.py",         "Fig18 Hit/Miss Decoding"),
+    ("04_decoding/b_change_size_decoding.py",      "Fig19 Change-Size Decoding"),
+    ("04_decoding/c_state_decoding.py",            "Fig20 State Decoding"),
+    # ── 05_longitudinal (Figs 21-23) ──────────────────────────────────
+    ("05_longitudinal/a_neural_learning_curves.py","Fig21 Neural Learning"),
+    ("05_longitudinal/b_celltype_learning.py",     "Fig22 Cell-Type Learning"),
+    ("05_longitudinal/c_population_geometry_shift.py","Fig23 Geometry Shift"),
+    # ── 06_lick_motor (Figs 24-26) ────────────────────────────────────
+    ("06_lick_motor/a_fa_neural_signatures.py",    "Fig24 FA Neural Signatures"),
+    ("06_lick_motor/b_pre_lick_ramping.py",        "Fig25 Pre-Lick Ramping"),
+    ("06_lick_motor/c_motor_vs_sensory.py",        "Fig26 Motor vs Sensory"),
+    # ── 07_advanced (Figs 27-34) ──────────────────────────────────────
+    ("07_advanced/a_glm_encoding.py",              "Fig27 GLM Encoding"),
+    ("07_advanced/b_dpca.py",                      "Fig28 dPCA"),
+    ("07_advanced/c_noise_correlations.py",        "Fig29 Noise Correlations"),
+    ("07_advanced/d_impulsivity_regression.py",    "Fig30 Impulsivity Regression"),
+    ("07_advanced/e_trial_outcome_prediction.py",  "Fig31 Trial Outcome Prediction"),
+    ("07_advanced/f_fa_subtype_lick_triggered_tf.py","Fig32 FA Subtype Lick-Triggered TF"),
+    ("07_advanced/g_fa_subtype_prediction.py",     "Fig33 FA Subtype Prediction"),
+    ("07_advanced/h_second_pulse_analysis.py",     "Fig34 Second Pulse Analysis"),
+    # ── 08_tf_pulse (Figs 35-42) ──────────────────────────────────────
+    ("08_tf_pulse/a_tf_responsiveness.py",         "Fig35 TF Responsiveness"),
+    ("08_tf_pulse/b_tf_response_properties.py",    "Fig36 TF Response Properties"),
+    ("08_tf_pulse/c_tf_pulse_integration.py",      "Fig37 Two-Pulse Integration"),
+    ("08_tf_pulse/d_tf_learning_emergence.py",     "Fig38 TF Learning Emergence"),
+    ("08_tf_pulse/e_tf_state_modulation.py",       "Fig39 TF × HMM State"),
+    ("08_tf_pulse/f_tf_sensory_motor.py",          "Fig40 TF Sensory-Motor"),
+    ("08_tf_pulse/g_tf_cell_classifier.py",        "Fig41 TF Cell Classifier"),
+    ("08_tf_pulse/g2_tf_tier_gallery.py",          "Fig41g TF Tier Gallery"),
+    ("08_tf_pulse/h_tf_post_error_modulation.py",  "Fig42 TF Post-Error Modulation"),
+    # ── 09_optotagging (Fig 43) ───────────────────────────────────────
+    ("09_optotagging/a_optotagging_identification.py","Fig43 Optotagging Identification"),
 ]
 
 # Scripts that accept --n_workers (session-level parallelism)
@@ -58,7 +82,7 @@ PARALLEL_SCRIPTS = {
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run all 29 analysis scripts.")
+    parser = argparse.ArgumentParser(description="Run all analysis scripts.")
     parser.add_argument("--n_workers", type=int, default=1,
                         help="Worker processes forwarded to heavy scripts "
                              "(03a coding direction, 04a hit/miss decoding, "

@@ -1,13 +1,13 @@
-"""05a - Neural learning curves: how neural responses change with learning.
+"""Fig21: Neural Learning Curves — how neural responses change with learning.
 
 Ties together neural metrics (response magnitude, selectivity, population
 coding) with behavioral performance across the learning trajectory.
 
 Produces:
-  - Fig 11A: Per-session mean FR change (response - baseline) vs session index
-  - Fig 11B: Per-session fraction responsive vs d' (neural-behavioral correlation)
-  - Fig 11C: Population response magnitude by stage (boxplot)
-  - Fig 11D: Neural metric summary table across stages
+  - Fig 21A: Per-session mean FR change (response - baseline) vs session index
+  - Fig 21B: Per-session fraction responsive vs d' (neural-behavioral correlation)
+  - Fig 21C: Population response magnitude by stage (boxplot)
+  - Fig 21D: Neural metric summary table across stages
 
 Saves: figures/05_longitudinal/neural_learning_stats.csv
 """
@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
 from config import (
-    STAGE_ORDER, STAGE_COLORS, CACHE_DIR,
+    STAGE_ORDER, STAGE_COLORS, CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import load_staging_manifest, load_session, load_glt
 from utils import (
@@ -40,7 +40,7 @@ from plotting import setup_style, save_figure, add_stage_background
 setup_style()
 
 WINDOW = (-0.5, 1.0)
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 BASELINE_WIN = (-0.4, -0.05)
 RESP_WIN = (0.0, 0.25)
 
@@ -271,7 +271,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig15_neural_learning", "05_longitudinal")
+    save_figure(fig, "fig21_neural_learning", "05_longitudinal")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "05_longitudinal", "neural_learning_stats.csv"

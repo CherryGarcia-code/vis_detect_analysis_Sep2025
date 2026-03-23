@@ -1,10 +1,11 @@
-"""Batch convert all BG_046 .mat files to .pkl format.
+"""Batch convert .mat files to .pkl format.
 
-This script processes all BG_046 session .mat files in the data/ directory,
+This script processes all session .mat files matching a subject pattern,
 converts them to normalized Session pickles, and logs progress/errors.
 
 Usage:
-    python scripts/batch_convert_bg046.py [--data-dir data/] [--force]
+    python scripts/batch_processing/batch_convert_MatToPkl.py --data-dir data/mat/BG_046 --out-dir data/pkls/BG_046
+    python scripts/batch_processing/batch_convert_MatToPkl.py --data-dir data/mat/BG_046 --out-dir data/pkls/BG_046 --force
 """
 
 import argparse
@@ -90,8 +91,8 @@ def main(argv=None):
     parser.add_argument(
         '--out-dir',
         type=Path,
-        default=repo_root / 'data',
-        help='Directory to save .pkl files (default: data/)'
+        default=None,
+        help='Directory to save .pkl files (default: same as --data-dir)'
     )
     parser.add_argument(
         '--force',
@@ -117,6 +118,9 @@ def main(argv=None):
     
     args = parser.parse_args(argv)
     setup_logging(args.verbose)
+
+    out_dir = args.out_dir if args.out_dir else args.data_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
     
     # Find all matching .mat files
     pattern = f"{args.subject}_*.mat"
@@ -129,11 +133,12 @@ def main(argv=None):
     
     logging.info(f"Found {len(mat_files)} .mat files for {args.subject}")
     logging.info(f"Data directory: {args.data_dir.resolve()}")
-    
+    logging.info(f"Output directory: {out_dir.resolve()}")
+
     if args.dry_run:
         logging.info("\n=== DRY RUN MODE ===")
         for mat_file in mat_files:
-            pkl_file = mat_file.with_suffix('.pkl')
+            pkl_file = out_dir / (mat_file.stem + '.pkl')
             status = "EXISTS" if pkl_file.exists() else "NEEDS CONVERSION"
             logging.info(f"  {status}: {mat_file.name}")
         logging.info(f"\nTotal files: {len(mat_files)}")
@@ -145,7 +150,7 @@ def main(argv=None):
     failed_files = []
     
     for mat_file in tqdm(mat_files, desc="Converting sessions", unit="file"):
-        pkl_file = mat_file.with_suffix('.pkl')
+        pkl_file = out_dir / (mat_file.stem + '.pkl')
         # logging.info(f"Processing {mat_file.name}") # Reduced verbosity for tqdm
         
         if convert_single_session(mat_file, pkl_file, args.force):

@@ -19,8 +19,9 @@ if _src not in sys.path:
     sys.path.insert(0, _src)
 
 from visdetect.analysis.align import align_spikes_to_events, get_event_times_by_trial
+from visdetect.analysis.constants import EVENT_VALID_OUTCOMES
 
-from config import DEFAULT_BIN_SIZE, DEFAULT_ANALYSIS_WINDOW
+from config import DEFAULT_BIN_SIZE, DEFAULT_ANALYSIS_WINDOW, DEFAULT_SIGMA_MS
 
 
 # ── Population tensor builder ─────────────────────────────────────────
@@ -50,6 +51,11 @@ def build_population_tensor(
         Bin width in seconds.
     outcome_filter : set of str, optional
         If provided, only include trials with trialoutcome in this set.
+        **Safety**: If ``None`` and ``event_name`` has an entry in
+        ``EVENT_VALID_OUTCOMES``, the canonical filter is applied
+        automatically (e.g. Change_ON → hit/miss only).  Pass an empty
+        set ``set()`` to explicitly include no trials, or pass the
+        desired outcomes to override.
     trial_indices : list of int, optional
         If provided, only include these trial indices.
 
@@ -61,20 +67,27 @@ def build_population_tensor(
     used_trial_indices : list of int
         Which trial indices were actually used.
     """
+    # Auto-apply EVENT_VALID_OUTCOMES when no explicit filter is provided
+    if outcome_filter is None and event_name in EVENT_VALID_OUTCOMES:
+        outcome_filter = EVENT_VALID_OUTCOMES[event_name]
+
     trials = getattr(session, "trials", []) or []
     n_trials = len(trials)
 
-    # Get per-trial event times
+    # get_event_times_by_trial now auto-filters by valid outcomes
     event_times = get_event_times_by_trial(session, event_name)
 
     # Determine which trials to use
     valid_indices = []
+    # Normalize outcome_filter to lowercase for case-insensitive matching,
+    # since EVENT_VALID_OUTCOMES uses lowercase but Session.trialoutcome is capitalized.
+    _oc_filter_lower = {o.lower() for o in outcome_filter} if outcome_filter is not None else None
     for i in range(n_trials):
         if trial_indices is not None and i not in trial_indices:
             continue
-        if outcome_filter is not None:
+        if _oc_filter_lower is not None:
             outcome = getattr(trials[i], "trialoutcome", None)
-            if outcome not in outcome_filter:
+            if outcome is None or outcome.lower() not in _oc_filter_lower:
                 continue
         if i < len(event_times) and np.isfinite(event_times[i]):
             valid_indices.append(i)
@@ -115,7 +128,7 @@ def build_population_tensor(
 
 # ── Smoothing ─────────────────────────────────────────────────────────
 
-def smooth_psth(psth: np.ndarray, bin_size: float, sigma_ms: float = 25.0) -> np.ndarray:
+def smooth_psth(psth: np.ndarray, bin_size: float, sigma_ms: float = DEFAULT_SIGMA_MS) -> np.ndarray:
     """Gaussian-smooth a PSTH array (1D or 2D along axis=1)."""
     sigma_bins = (sigma_ms / 1000.0) / bin_size
     if psth.ndim == 1:

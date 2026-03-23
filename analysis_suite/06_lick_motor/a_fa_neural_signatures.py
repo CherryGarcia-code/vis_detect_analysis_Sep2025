@@ -1,4 +1,4 @@
-"""06a - FA neural signatures: pre-FA vs pre-Miss population activity.
+"""Fig24: FA Neural Signatures — pre-FA vs pre-Miss population activity.
 
 Compares the pre-event population activity on false-alarm (FA) trials to
 pre-change activity on Miss trials.  A ramp in pre-FA firing that is absent
@@ -10,10 +10,10 @@ a wide window (-2.0, 0.5 s) and are z-scored against a distant baseline
 (-2.0, -1.5 s).
 
 Produces:
-  - Fig 16A: Population average PSTH (FA vs Miss, Expert sessions)
-  - Fig 16B: Pre-event activity difference heatmap (FA - Miss) per unit
-  - Fig 16C: Pre-FA ramp magnitude across sessions
-  - Fig 16D: Pre-FA ramp split by HMM behavioral state
+  - Fig 24A: Population average PSTH (FA vs Miss, Expert sessions)
+  - Fig 24B: Pre-event activity difference heatmap (FA - Miss) per unit
+  - Fig 24C: Pre-FA ramp magnitude across sessions
+  - Fig 24D: Pre-FA ramp split by HMM behavioral state
 
 Saves: figures/06_lick_motor/fa_neural_signatures_stats.csv
        cache/fa_neural_signatures.csv
@@ -36,7 +36,7 @@ import matplotlib.gridspec as gridspec
 
 from config import (
     STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS,
-    HMM_STATE_ORDER, HMM_STATE_COLORS, CACHE_DIR,
+    HMM_STATE_ORDER, HMM_STATE_COLORS, CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import (
     load_staging_manifest, load_session, load_hmm_assignments,
@@ -52,7 +52,7 @@ setup_style()
 # ── Parameters ────────────────────────────────────────────────────────
 FA_WINDOW = (-2.0, 0.5)
 MISS_WINDOW = (-2.0, 0.5)
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 BASELINE_WIN = (-2.0, -1.5)
 EARLY_WIN = (-1.5, -1.0)
 LATE_WIN = (-0.5, 0.0)
@@ -395,7 +395,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig18_fa_neural_signatures", "06_lick_motor")
+    save_figure(fig, "fig24_fa_neural_signatures", "06_lick_motor")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "06_lick_motor", "fa_neural_signatures_stats.csv",

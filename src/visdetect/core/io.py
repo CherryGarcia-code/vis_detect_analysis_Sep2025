@@ -1,11 +1,12 @@
 """I/O helpers for loading session MAT files and normalizing fields.
 
 This module provides a safe loader for MATLAB session files (using
-scipy.io.loadmat) and small helper utilities like `parse_good_cluster_ids`
-to normalize different MAT -> Python representations.
+scipy.io.loadmat for v5-v7.2 and h5py for v7.3 HDF5 files) and small
+helper utilities like `parse_good_cluster_ids` to normalize different
+MAT -> Python representations.
 """
 
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 import numpy as np
 import scipy.io
 from .session import Session, Trial, Cluster
@@ -93,11 +94,21 @@ def parse_good_cluster_ids(raw: Any) -> Optional[List[int]]:
 def load_mat_file_to_session(mat_path: str) -> Session:
     """Load a MATLAB session file and convert to a `Session` dataclass.
 
-    This function implements the same loading logic that existed in the
-    legacy helper script, but returns the typed dataclasses in `session.py`.
-    It intentionally leaves aggressive error handling to callers so issues
-    are visible during development.
+    Supports both older MATLAB formats (v5-v7.2 via scipy) and v7.3
+    HDF5 files (via h5py). Tries scipy first; falls back to h5py.
     """
+    try:
+        return _load_mat_scipy(mat_path)
+    except NotImplementedError:
+        return _load_mat_h5py(mat_path)
+    except Exception as exc:
+        if "HDF" in str(exc) or "hdf" in str(exc):
+            return _load_mat_h5py(mat_path)
+        raise
+
+
+def _load_mat_scipy(mat_path: str) -> Session:
+    """Load a MATLAB v5-v7.2 session file via scipy.io.loadmat."""
     data = scipy.io.loadmat(mat_path, struct_as_record=False, squeeze_me=True)
     data = mat_struct_to_dict(data)
     if "data" in data:
@@ -156,6 +167,149 @@ def load_mat_file_to_session(mat_path: str) -> Session:
     parts = session_name_str.split("_")
     subject = "_".join(parts[:2]) if len(parts) >= 3 else session_name_str
     session_name = parts[2] if len(parts) >= 3 else "unknown"
+
+    return Session(
+        trials=trials,
+        clusters=clusters,
+        subject=subject,
+        session_name=session_name,
+        good_cluster_ids=good_cluster_ids,
+        good_and_stable_ids=good_and_stable_ids,
+        ni_events=ni_events,
+    )
+
+
+# ---------------------------------------------------------------------------
+# HDF5 (MATLAB v7.3) loader
+# ---------------------------------------------------------------------------
+
+def _h5_deref_scalar(f, ref):
+    """Dereference an HDF5 object reference and return a Python scalar."""
+    obj = f[ref]
+    if isinstance(obj, h5py.Group):
+        # Struct → return as dict of scalars
+        out = {}
+        for k in obj.keys():
+            v = obj[k]
+            if isinstance(v, h5py.Dataset):
+                arr = v[()].flatten()
+                out[k] = float(arr[0]) if arr.size == 1 else arr
+        return out
+    data = obj[()]
+    if obj.dtype == np.uint16:
+        return "".join(chr(c) for c in data.flatten())
+    arr = data.flatten()
+    if arr.size == 1:
+        return float(arr[0])
+    return arr
+
+
+def _h5_read_ni_events(ni_group, f) -> Dict[str, Any]:
+    """Read NI_events from an HDF5 group into a dict."""
+    ni_events: Dict[str, Any] = {}
+    for key in ni_group.keys():
+        obj = ni_group[key]
+        if isinstance(obj, h5py.Group):
+            if "rise_t" in obj:
+                ni_events[key] = obj["rise_t"][()].flatten()
+            else:
+                # Sub-struct (e.g. frame_times_tr) → read each field
+                sub = {}
+                for k2 in obj.keys():
+                    v = obj[k2]
+                    if isinstance(v, h5py.Dataset):
+                        if v.dtype == object:
+                            # Array of object references → dereference each
+                            sub[k2] = np.array([
+                                f[v[i, 0]][()].flatten()
+                                for i in range(v.shape[0])
+                            ], dtype=object)
+                        else:
+                            sub[k2] = v[()].flatten()
+                ni_events[key] = sub
+        elif isinstance(obj, h5py.Dataset):
+            if obj.dtype == np.uint16:
+                ni_events[key] = "".join(chr(c) for c in obj[()].flatten())
+            else:
+                ni_events[key] = obj[()].flatten()
+    return ni_events
+
+
+def _load_mat_h5py(mat_path: str) -> Session:
+    """Load a MATLAB v7.3 (HDF5) session file via h5py."""
+    import h5py as _h5py
+    global h5py
+    h5py = _h5py
+
+    with h5py.File(mat_path, "r") as f:
+        # Navigate: data / <subject> / <session_name> /
+        root = f["data"] if "data" in f else f["ans"] if "ans" in f else f
+        subject_key = [k for k in root.keys() if k != "#refs#"][0]
+        session_key = list(root[subject_key].keys())[0]
+        sd = root[subject_key][session_key]
+
+        # --- Trials ---
+        tde = sd["behav_data"]["trials_data_exp"]
+        n_trials = tde["trialoutcome"].shape[0]
+
+        trials = []
+        for i in range(n_trials):
+            trialoutcome = _h5_deref_scalar(f, tde["trialoutcome"][i, 0])
+            reactiontimes = _h5_deref_scalar(f, tde["reactiontimes"][i, 0])
+            if not isinstance(reactiontimes, dict):
+                reactiontimes = {}
+            change_size = _h5_deref_scalar(f, tde["Stim2TF"][i, 0])
+            orientation = _h5_deref_scalar(f, tde["Stim2Ori"][i, 0])
+            ITI = _h5_deref_scalar(f, tde["stimD"][i, 0])
+            change_time = _h5_deref_scalar(f, tde["stimT"][i, 0])
+            baseline_raw = _h5_deref_scalar(f, tde["St1TrialVector"][i, 0])
+            baseline_values = baseline_raw if isinstance(baseline_raw, np.ndarray) else None
+
+            trials.append(Trial(
+                trialoutcome=str(trialoutcome) if trialoutcome else "",
+                reactiontimes=reactiontimes,
+                change_size=change_size,
+                orientation=orientation,
+                ITI=ITI,
+                change_time=change_time,
+                baseline_values=baseline_values,
+            ))
+
+        # --- Clusters ---
+        npx = sd["NPX_probes"]
+        all_clu = npx["clu"][()].flatten()
+        all_st = npx["st"][()].flatten()
+        cluster_ids = np.unique(all_clu)
+        clusters = []
+        for cid in cluster_ids:
+            mask = all_clu == cid
+            clusters.append(Cluster(
+                cluster_id=int(cid),
+                spike_times=all_st[mask],
+                quality=None,
+            ))
+
+        # --- Good cluster IDs ---
+        good_cluster_ids = None
+        if "cluster_id_KS_good" in npx:
+            good_cluster_ids = parse_good_cluster_ids(npx["cluster_id_KS_good"][()].flatten())
+
+        good_and_stable_ids = None
+        if "cluster_id_good_and_stable" in npx:
+            good_and_stable_ids = parse_good_cluster_ids(npx["cluster_id_good_and_stable"][()].flatten())
+        elif "cluster_id_KS_good_and_stable" in npx:
+            good_and_stable_ids = parse_good_cluster_ids(npx["cluster_id_KS_good_and_stable"][()].flatten())
+
+        # --- NI events ---
+        ni_events = _h5_read_ni_events(sd["NI_events"], f)
+
+        # --- Subject / session name ---
+        session_name_str = ni_events.get("session_name", "unknown")
+        if not isinstance(session_name_str, str):
+            session_name_str = "unknown"
+        parts = session_name_str.split("_")
+        subject = "_".join(parts[:2]) if len(parts) >= 3 else session_name_str
+        session_name = parts[2] if len(parts) >= 3 else "unknown"
 
     return Session(
         trials=trials,

@@ -1,4 +1,4 @@
-"""03d - State-matched sensory evidence on the coding direction.
+"""Fig 16: State-matched CD — state-matched sensory evidence on the coding direction.
 
 Projects all SDT trial types onto the coding direction axis, matched
 by HMM behavioral state and stratified by change size.  This dissociates
@@ -49,7 +49,7 @@ import matplotlib.gridspec as gridspec
 from config import (
     STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS,
     HMM_STATE_ORDER, HMM_STATE_COLORS,
-    CACHE_DIR, SMALL_CHANGE_SIZES, BIG_CHANGE_SIZES,
+    CACHE_DIR, SMALL_CHANGE_SIZES, BIG_CHANGE_SIZES, DEFAULT_BIN_SIZE,
 )
 from loader import load_staging_manifest, load_session, load_hmm_assignments
 from utils import get_good_cluster_ids, build_population_tensor, smooth_psth
@@ -62,7 +62,7 @@ setup_style()
 
 # ── Parameters ────────────────────────────────────────────────────────
 WINDOW = (-0.5, 1.0)
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 RESP_WIN = (0.0, 0.25)          # response window for scalar projection
 MIN_UNITS = 10
 MIN_TRIALS = 3                   # minimum trials per group for projection
@@ -567,7 +567,7 @@ def main():
             results[sname] = r
             # Count how many state×category groups we got
             n_groups = sum(1 for k in r if isinstance(k, tuple))
-            print(f"{n_groups} state×category groups")
+            print(f"{n_groups} state x category groups")
         else:
             print("insufficient data")
         del sess
@@ -604,7 +604,7 @@ def main():
         "hit_big":   "#2E7D32",
         "hit_all":   OUTCOME_COLORS["Hit"],
         "miss":      OUTCOME_COLORS["Miss"],
-        "cr":        "#2196F3",
+        "cr":        OUTCOME_COLORS["CR"],
     }
     CAT_LABELS = {
         "fa":        "True FA",
@@ -948,7 +948,7 @@ def main():
     )
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig10_state_matched_cd", "03_population")
+    save_figure(fig, "fig16_state_matched_cd", "03_population")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "03_population", "state_matched_cd_stats.csv",

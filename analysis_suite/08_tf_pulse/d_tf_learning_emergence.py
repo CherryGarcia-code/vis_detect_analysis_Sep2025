@@ -1,4 +1,4 @@
-"""08d – TF responsiveness emergence across learning stages.
+"""Fig38: TF responsiveness emergence — tracking across learning stages.
 
 Loads pre-computed NPZ caches (no session pickles needed).
 Tracks how TF responsiveness fraction, amplitude, and latency evolve
@@ -7,7 +7,7 @@ across learning stages (Naive → Learning → Expert).
 Can also consume the cached tf_responsiveness.csv from script (a) when
 available.
 
-Produces fig27_tf_learning_emergence.png:
+Produces fig38_tf_learning_emergence.png:
   - Panel A: TF-responsive fraction per session across learning
   - Panel B: Mean z-score amplitude vs. session index
   - Panel C: Fraction responsive by stage (bar chart with stats)
@@ -213,8 +213,8 @@ def main():
         "TF Pulse Responsiveness Across Learning Stages\n"
         "(Naive → Learning → Expert)",
         fontsize=13, fontweight="bold", y=0.98)
-    save_figure(fig, "fig27_tf_learning_emergence", "08_tf_pulse")
-    print("\n  ✓ Saved fig27_tf_learning_emergence.png")
+    save_figure(fig, "fig38_tf_learning_emergence", "08_tf_pulse")
+    print("\n  Saved fig38_tf_learning_emergence.png")
 
     # Summary
     print("\n  Summary:")

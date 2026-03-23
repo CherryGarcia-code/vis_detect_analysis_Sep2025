@@ -1,4 +1,4 @@
-"""03e - Sensory dose-response on the coding direction (all go trials).
+"""Fig 17: Sensory dose-response — coding direction dose-response (all go trials).
 
 Companion to 03d (Hit-only dose-response).  Instead of conditioning on
 detection at each change size, this script uses ALL go trials (Hit + Miss)
@@ -459,7 +459,7 @@ def main():
     )
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig11_sensory_dose_response", "03_population")
+    save_figure(fig, "fig17_sensory_dose_response", "03_population")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "03_population", "sensory_dose_response_stats.csv",

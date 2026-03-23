@@ -1,4 +1,4 @@
-"""07b - Demixed PCA (dPCA) for population activity.
+"""Fig28: Demixed PCA (dPCA) — variance decomposition by marginalization.
 
 Applies demixed PCA to decompose population activity into components
 driven by stimulus (change size), decision (hit/miss), time, and
@@ -8,10 +8,10 @@ Uses a manual implementation of dPCA since the dPCA package may not
 be installed. The approach follows Kobak et al., 2016 eLife.
 
 Produces:
-  - Fig 20A: Variance explained by each marginalization
-  - Fig 20B: Top dPC for stimulus marginalization (time course)
-  - Fig 20C: Top dPC for decision marginalization (time course)
-  - Fig 20D: Variance partition pie charts by stage
+  - Fig 28A: Variance explained by each marginalization
+  - Fig 28B: Top dPC for stimulus marginalization (time course)
+  - Fig 28C: Top dPC for decision marginalization (time course)
+  - Fig 28D: Variance partition pie charts by stage
 
 Saves: figures/07_advanced/dpca_stats.csv
 """
@@ -35,7 +35,7 @@ from sklearn.decomposition import PCA
 from config import (
     STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS,
     SMALL_CHANGE_SIZES, BIG_CHANGE_SIZES,
-    CACHE_DIR,
+    CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import load_staging_manifest, load_session
 from utils import (
@@ -47,7 +47,7 @@ from plotting import setup_style, save_figure
 setup_style()
 
 WINDOW = (-0.5, 1.0)
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 BASELINE_WIN = (-0.5, -0.05)
 MIN_UNITS = 10
 MIN_TRIALS_PER_COND = 5
@@ -382,7 +382,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig22_dpca", "07_advanced")
+    save_figure(fig, "fig28_dpca", "07_advanced")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "07_advanced", "dpca_stats.csv"

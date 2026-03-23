@@ -1,4 +1,4 @@
-"""02e - Cell-type comparison: FSI vs MSN response profiles.
+"""Fig 12: Cell-type comparison — FSI vs MSN response profiles.
 
 Compares narrow-spiking (putative FSI) and broad-spiking (putative MSN/Proj)
 neurons across multiple response dimensions using the pre-computed
@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
 from config import (
-    STAGE_ORDER, STAGE_COLORS, CELLTYPE_COLORS, CACHE_DIR,
+    STAGE_ORDER, STAGE_COLORS, CELLTYPE_COLORS, CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import (
     load_staging_manifest, load_session, load_glt, load_waveform_labels,
@@ -43,7 +43,7 @@ from plotting import setup_style, save_figure
 setup_style()
 
 WINDOW = (-0.5, 1.0)
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 BASELINE_WIN = (-0.4, -0.05)
 RESP_WIN = (0.0, 0.25)
 
@@ -299,7 +299,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig08_celltype_comparison", "02_single_unit")
+    save_figure(fig, "fig12_celltype_comparison", "02_single_unit")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "02_single_unit", "celltype_comparison_stats.csv"

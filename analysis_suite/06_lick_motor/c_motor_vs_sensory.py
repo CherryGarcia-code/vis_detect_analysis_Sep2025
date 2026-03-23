@@ -1,4 +1,4 @@
-"""06c - Motor vs sensory dissociation: Hit (Change_ON) vs FA contrast.
+"""Fig26: Motor vs Sensory — Hit (Change_ON) vs FA contrast.
 
 Computes a Sensory Index (SI) per unit by comparing the post-event
 response on Hit trials (sensory stimulus change present) to FA trials
@@ -11,10 +11,10 @@ SI > 0 indicates a sensory-driven (change-responsive) unit.
 SI < 0 indicates a motor/lick-driven unit.
 
 Produces:
-  - Fig 18A: Population PSTH -- Hit vs FA (Expert sessions)
-  - Fig 18B: Scatter of Hit response vs FA response per unit
-  - Fig 18C: Sensory Index histogram colored by cell type
-  - Fig 18D: Sensory Index by learning stage (boxplot)
+  - Fig 26A: Population PSTH -- Hit vs FA (Expert sessions)
+  - Fig 26B: Scatter of Hit response vs FA response per unit
+  - Fig 26C: Sensory Index histogram colored by cell type
+  - Fig 26D: Sensory Index by learning stage (boxplot)
 
 Saves: figures/06_lick_motor/motor_vs_sensory_stats.csv
        cache/motor_vs_sensory.csv
@@ -36,7 +36,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
 from config import (
-    STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS, CELLTYPE_COLORS, CACHE_DIR,
+    STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS, CELLTYPE_COLORS, CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import (
     load_staging_manifest, load_session, load_waveform_labels,
@@ -52,7 +52,7 @@ setup_style()
 # ── Parameters ────────────────────────────────────────────────────────
 HIT_WINDOW = (-0.5, 1.0)
 FA_WINDOW = (-0.5, 1.0)
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 BASELINE_WIN = (-0.4, -0.05)
 RESP_WIN = (0.0, 0.25)
 MIN_TRIALS = 5
@@ -384,7 +384,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig20_motor_vs_sensory", "06_lick_motor")
+    save_figure(fig, "fig26_motor_vs_sensory", "06_lick_motor")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "06_lick_motor", "motor_vs_sensory_stats.csv",

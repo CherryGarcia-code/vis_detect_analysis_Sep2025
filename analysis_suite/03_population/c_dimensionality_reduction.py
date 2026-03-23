@@ -1,4 +1,4 @@
-"""03c - Population dimensionality reduction (PCA).
+"""Fig 15: PCA dimensionality — population dimensionality reduction.
 
 Applies PCA to population activity tensors to visualize neural
 state-space trajectories for Hit vs Miss trials and quantify
@@ -30,7 +30,7 @@ import matplotlib.gridspec as gridspec
 from sklearn.decomposition import PCA
 
 from config import (
-    STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS, CACHE_DIR,
+    STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS, CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import load_staging_manifest, load_session
 from utils import (
@@ -42,7 +42,7 @@ from plotting import setup_style, save_figure, add_stage_background
 setup_style()
 
 WINDOW = (-0.5, 1.0)
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 BASELINE_WIN = (-0.5, -0.05)
 MIN_UNITS = 10
 MIN_TRIALS_PER_CLASS = 5
@@ -376,7 +376,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig11_pca_dimensionality", "03_population")
+    save_figure(fig, "fig15_pca_dimensionality", "03_population")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "03_population", "dimensionality_stats.csv"

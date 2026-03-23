@@ -1,4 +1,4 @@
-"""04c - Cross-validated decoding of HMM behavioral state from pre-trial activity.
+"""Fig20: State Decoding — HMM behavioral state from pre-trial activity.
 
 Decode HMM behavioral state (Disengaged / Engaged / Impulsive) from
 pre-trial population firing rates using multinomial logistic regression
@@ -8,10 +8,10 @@ Pre-trial window: mean firing rate per unit in [-1.5, -0.5) relative to
 Change_ON captures tonic activity before the visual change.
 
 Produces:
-  - Fig 11A: Decoding accuracy across sessions (scatter + stage background)
-  - Fig 11B: Accuracy by learning stage (boxplot)
-  - Fig 11C: Confusion matrix (Expert sessions, pooled across folds)
-  - Fig 11D: Feature importance (histogram of mean |LR coefficients|)
+  - Fig 20A: Decoding accuracy across sessions (scatter + stage background)
+  - Fig 20B: Accuracy by learning stage (boxplot)
+  - Fig 20C: Confusion matrix (Expert sessions, pooled across folds)
+  - Fig 20D: Feature importance (histogram of mean |LR coefficients|)
 
 Saves: figures/04_decoding/state_decoding_stats.csv
 """
@@ -37,7 +37,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix
 
 from config import (
-    STAGE_ORDER, STAGE_COLORS, HMM_STATE_ORDER, HMM_STATE_COLORS, CACHE_DIR,
+    STAGE_ORDER, STAGE_COLORS, HMM_STATE_ORDER, HMM_STATE_COLORS, CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import load_staging_manifest, load_session, load_hmm_assignments
 from utils import get_good_cluster_ids, build_population_tensor
@@ -48,7 +48,7 @@ setup_style()
 # ── Parameters ────────────────────────────────────────────────────────
 TENSOR_WINDOW = (-1.5, 0.0)   # full pre-trial window for tensor
 FEATURE_WIN = (-1.5, -0.5)    # sub-window for mean FR feature extraction
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 MIN_UNITS = 5
 MIN_TRIALS_PER_STATE = 5
 N_FOLDS = 5
@@ -88,9 +88,12 @@ def decode_state_session(sess, sname, trial_states, stage, sidx):
     if len(hmm_trial_list) < len(HMM_STATE_ORDER) * MIN_TRIALS_PER_STATE:
         return None
 
-    # Build population tensor aligned to Change_ON over pre-trial window
+    # Build population tensor aligned to Baseline_ON over pre-trial window.
+    # NOTE: We use Baseline_ON (not Change_ON) because HMM state labels
+    # are assigned to ALL trial types, including FA/abort where the change
+    # stimulus was never presented.
     tensor, bin_centers, used = build_population_tensor(
-        sess, good_ids, event_name="Change_ON",
+        sess, good_ids, event_name="Baseline_ON",
         window=TENSOR_WINDOW, bin_size=BIN_SIZE,
         trial_indices=hmm_trial_list,
     )
@@ -379,7 +382,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig14_state_decoding", "04_decoding")
+    save_figure(fig, "fig20_state_decoding", "04_decoding")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "04_decoding", "state_decoding_stats.csv"

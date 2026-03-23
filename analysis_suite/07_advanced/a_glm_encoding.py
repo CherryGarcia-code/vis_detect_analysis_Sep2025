@@ -1,4 +1,4 @@
-"""07a - Poisson GLM encoding model.
+"""Fig27: Poisson GLM encoding model — partial deviance explained by predictor.
 
 Fits a Poisson GLM per unit with predictors: stimulus (change size),
 choice (hit/miss), HMM behavioral state, and pre-event baseline FR.
@@ -7,10 +7,10 @@ Quantifies partial deviance explained (PDE) by each predictor to
 understand what information striatal neurons encode.
 
 Produces:
-  - Fig 19A: Distribution of total deviance explained across units
-  - Fig 19B: PDE by predictor (stacked bars)
-  - Fig 19C: PDE by predictor across stages
-  - Fig 19D: PDE by predictor for FSI vs MSN
+  - Fig 27A: Distribution of total deviance explained across units
+  - Fig 27B: PDE by predictor (stacked bars)
+  - Fig 27C: PDE by predictor across stages
+  - Fig 27D: PDE by predictor for FSI vs MSN
 
 Saves: figures/07_advanced/glm_encoding_stats.csv
        cache/glm_results.csv
@@ -514,7 +514,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig21_glm_encoding", "07_advanced")
+    save_figure(fig, "fig27_glm_encoding", "07_advanced")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "07_advanced", "glm_encoding_stats.csv"

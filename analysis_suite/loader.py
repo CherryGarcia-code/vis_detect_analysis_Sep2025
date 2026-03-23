@@ -48,6 +48,7 @@ from visdetect.analysis.config import (   # noqa: F401
     load_valid_sessions,
 )
 
+from visdetect.analysis.constants import DEFAULT_Z_THRESH_TF
 from visdetect.core.session import load_session as _load_session_raw
 
 
@@ -270,7 +271,7 @@ def build_unit_table(qc_only: bool = True) -> pd.DataFrame:
     tf_cols = ["tf_z_max_fast", "tf_z_min_fast", "tf_z_max_slow", "tf_z_min_slow"]
     if all(c in glt.columns for c in tf_cols):
         glt["tf_z_abs_max"] = glt[tf_cols].abs().max(axis=1)
-        glt["is_tf_responsive"] = glt["tf_z_abs_max"] >= 3.0
+        glt["is_tf_responsive"] = glt["tf_z_abs_max"] >= DEFAULT_Z_THRESH_TF
     else:
         glt["tf_z_abs_max"] = np.nan
         glt["is_tf_responsive"] = False

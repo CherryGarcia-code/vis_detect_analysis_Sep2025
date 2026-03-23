@@ -1,10 +1,10 @@
-"""01b - HMM behavioral state dynamics across learning.
+"""Fig02: HMM behavioral state dynamics across learning.
 
 Produces:
-  - Fig 2A: Stacked area plot of HMM state fractions across sessions
-  - Fig 2B: Per-state d' trajectories across sessions
-  - Fig 2C: State transition matrices for each learning stage
-  - Fig 2D: Per-state psychometric curves (Expert sessions)
+  - Fig 02A: Stacked area plot of HMM state fractions across sessions
+  - Fig 02B: Per-state d' trajectories across sessions
+  - Fig 02C: State transition matrices for each learning stage
+  - Fig 02D: Per-state psychometric curves (Expert sessions)
 
 Saves statistics to figures/01_behavior/hmm_state_stats.csv.
 """

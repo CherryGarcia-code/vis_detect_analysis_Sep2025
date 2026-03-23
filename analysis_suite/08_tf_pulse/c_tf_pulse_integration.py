@@ -1,4 +1,4 @@
-"""08c – TF pulse temporal integration: IPI-conditioned PSTHs.
+"""Fig37: TF pulse temporal integration — IPI-conditioned PSTHs.
 
 This script REQUIRES session pickles because it needs raw spike times
 and raw baseline TF pulse event times to build inter-pulse-interval
@@ -8,7 +8,7 @@ Uses `_collect_pulses()` from `visdetect.analysis.tf_pulse` to extract
 fast/slow pulse times per session, then aligns spikes to those pulses
 conditioned on IPI (short vs. long).
 
-Produces fig26_tf_pulse_integration.png:
+Produces fig37_tf_pulse_integration.png:
   - Panel A: Example IPI-conditioned PSTHs (short vs. long IPI)
   - Panel B: Population mean PSTHs by IPI tertile
   - Panel C: Integration index (short-IPI amplitude / long-IPI amplitude) distribution
@@ -35,6 +35,7 @@ from config import (
     STAGE_ORDER, STAGE_COLORS, CELLTYPE_COLORS, CACHE_DIR,
     DEFAULT_Z_THRESH_TF,
 )
+from visdetect.analysis.constants import TF_PULSE_PRE_WINDOW, TF_PULSE_POST_WINDOW
 from loader import (
     load_staging_manifest, load_waveform_labels, load_tf_traces_npz,
     session_iterator,
@@ -53,8 +54,8 @@ Z_THRESH = DEFAULT_Z_THRESH_TF
 # ── Helper: fast pulse-aligned traces (simplified) ───────────────────
 DT = 0.001          # 1 ms bins
 SIGMA_MS = 17.0     # Gaussian smoothing
-PRE_WIN = (-0.4, 0.0)
-POST_WIN = (0.0, 0.5)
+PRE_WIN = TF_PULSE_PRE_WINDOW
+POST_WIN = TF_PULSE_POST_WINDOW
 
 
 def _smooth(rel_times, t_vec, sigma_bins):
@@ -329,8 +330,8 @@ def main():
         "TF Pulse Temporal Integration\n"
         "(IPI = inter-pulse interval; fast pulses only)",
         fontsize=13, fontweight="bold", y=0.98)
-    save_figure(fig, "fig26_tf_pulse_integration", "08_tf_pulse")
-    print("\n  ✓ Saved fig26_tf_pulse_integration.png")
+    save_figure(fig, "fig37_tf_pulse_integration", "08_tf_pulse")
+    print("\n  Saved fig37_tf_pulse_integration.png")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""02c - Change-size tuning curves per unit.
+"""Fig 10: Change-size tuning — tuning curves per unit.
 
 For each unit, computes firing rates in the response window for each
 change size, tests for tuning (Kruskal-Wallis across change sizes),
@@ -327,7 +327,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig06_change_size_tuning", "02_single_unit")
+    save_figure(fig, "fig10_change_size_tuning", "02_single_unit")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "02_single_unit", "change_size_tuning_stats.csv"

@@ -2,16 +2,26 @@
 
 Functions:
 - compute_true_reaction_time(trial, ni_events, trial_idx, shift_fa_hit_ms)
-- get_event_times(session, event_name, outcomes=None)
+- get_event_times(session, event_name, outcomes=None, enforce_valid_outcomes=True)
+- get_event_times_by_trial(session, event_name, enforce_valid_outcomes=True)
 - align_spikes_to_events(spike_times, event_times, window, bin_size)
 - compute_peth_for_session(session, event_name, window, bin_size, good_cluster_ids=None)
+
+Safety: By default, ``get_event_times`` and ``get_event_times_by_trial`` auto-apply
+the outcome filters defined in ``EVENT_VALID_OUTCOMES`` (from constants.py).
+For example, Change_ON alignment automatically excludes FA/abort trials because the
+change stimulus was never presented on those trials. Pass
+``enforce_valid_outcomes=False`` to override (with care).
 """
 
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional, Dict, Any, Set
 import numpy as np
 from pathlib import Path
 from scipy.ndimage import gaussian_filter1d
 import h5py
+import warnings
+
+from visdetect.analysis.constants import EVENT_VALID_OUTCOMES
 
 
 def compute_true_reaction_time(
@@ -124,23 +134,41 @@ def compute_true_reaction_time(
 
 
 def get_event_times(
-    session, event_name: str, outcomes: Optional[List[str]] = None
+    session, event_name: str, outcomes: Optional[List[str]] = None,
+    enforce_valid_outcomes: bool = True,
 ) -> List[float]:
     """Get event times for alignment.
 
     For event_name in ['Baseline_ON', 'Change_ON'] this returns the per-trial event times
     from session.ni_events. For behavioral outcomes like 'Hit', 'FA', it computes reaction times
     using compute_true_reaction_time across trials.
+
+    Safety
+    ------
+    When ``enforce_valid_outcomes=True`` (default), the function automatically
+    applies the outcome filter from ``EVENT_VALID_OUTCOMES`` for known events
+    (e.g. Change_ON → hit/miss only).  An explicit ``outcomes`` parameter
+    overrides the automatic filter.  Pass ``enforce_valid_outcomes=False``
+    to disable automatic filtering entirely.
     """
+    # Resolve outcome filter: explicit > auto > none
+    if outcomes is not None:
+        # Caller explicitly provided outcomes — use them
+        _outcome_filter: Optional[Set[str]] = set(o.lower() for o in outcomes)
+    elif enforce_valid_outcomes and event_name in EVENT_VALID_OUTCOMES:
+        _outcome_filter = EVENT_VALID_OUTCOMES[event_name]  # may be None (e.g. Baseline_ON)
+    else:
+        _outcome_filter = None
+
     ni_events = getattr(session, "ni_events", {}) or {}
+    trials = getattr(session, "trials", []) or []
+
     if event_name in ["Baseline_ON", "Change_ON"]:
         ev = ni_events.get(event_name, [])
         if isinstance(ev, dict) and "rise_t" in ev:
             arr = np.array(ev["rise_t"]).flatten()
         else:
             arr = np.array(ev).flatten()
-        # Filter NaNs for baseline and change events. For Change_ON, try to
-        # fill missing (NaN) entries from per-trial `change_time` when present.
         try:
             nan_mask = np.isnan(arr)
         except Exception:
@@ -148,7 +176,6 @@ def get_event_times(
             nan_mask = np.isnan(arr)
 
         if event_name == "Change_ON":
-            trials = getattr(session, "trials", []) or []
             # attempt to obtain baseline times to convert per-trial change_time
             baseline = ni_events.get("Baseline_ON", None)
             if isinstance(baseline, dict) and "rise_t" in baseline:
@@ -159,6 +186,15 @@ def get_event_times(
             n_fill = min(len(arr), len(trials))
             for idx in range(n_fill):
                 if nan_mask[idx]:
+                    # SAFETY: Only fill NaN Change_ON times for valid outcomes.
+                    # On FA/abort trials the change was never presented, so filling
+                    # from trial.change_time would create a scientifically invalid
+                    # alignment reference.
+                    if _outcome_filter is not None:
+                        t_obj = trials[idx]
+                        oc = getattr(t_obj, "trialoutcome", "").lower() if not isinstance(t_obj, dict) else t_obj.get("trialoutcome", "").lower()
+                        if oc not in _outcome_filter:
+                            continue
                     t = trials[idx]
                     ct = None
                     if isinstance(t, dict):
@@ -180,11 +216,18 @@ def get_event_times(
                                 pass
                         # Otherwise, use ct as-is (best effort)
                         arr[idx] = ct_val
-            # Drop any remaining NaNs
-            arr = arr[~np.isnan(arr)]
-        else:
-            # For Baseline_ON just drop NaNs
-            arr = arr[~np.isnan(arr)]
+
+        # Apply outcome filter: NaN-out entries for invalid trial outcomes
+        if _outcome_filter is not None:
+            n_check = min(len(arr), len(trials))
+            for idx in range(n_check):
+                t_obj = trials[idx]
+                oc = getattr(t_obj, "trialoutcome", "").lower() if not isinstance(t_obj, dict) else t_obj.get("trialoutcome", "").lower()
+                if oc not in _outcome_filter:
+                    arr[idx] = np.nan
+
+        # Drop NaNs
+        arr = arr[~np.isnan(arr)]
 
         return list(map(float, arr))
 
@@ -215,6 +258,7 @@ def get_event_times(
 def get_event_times_by_trial(
     session,
     event_name: str,
+    enforce_valid_outcomes: bool = True,
 ) -> List[float]:
     """Return per-trial event times aligned to trial indices.
 
@@ -226,8 +270,21 @@ def get_event_times_by_trial(
     For behavioral outcomes like 'Hit', 'Miss', 'FA', returns per-trial reaction
     times computed via compute_true_reaction_time for trials whose outcome matches;
     non-matching trials are NaN.
+
+    Safety
+    ------
+    When ``enforce_valid_outcomes=True`` (default), entries for trials whose
+    outcome is not in ``EVENT_VALID_OUTCOMES[event_name]`` are set to NaN.
+    For Change_ON this means FA/abort trials get NaN (the change was never
+    presented).  Pass ``enforce_valid_outcomes=False`` to disable.
     """
     import numpy as _np
+
+    # Resolve outcome filter
+    if enforce_valid_outcomes and event_name in EVENT_VALID_OUTCOMES:
+        _outcome_filter: Optional[Set[str]] = EVENT_VALID_OUTCOMES[event_name]  # may be None
+    else:
+        _outcome_filter = None
 
     n_trials = len(getattr(session, "trials", []) or [])
     if n_trials == 0:
@@ -256,6 +313,13 @@ def get_event_times_by_trial(
             trials = getattr(session, "trials", []) or []
             for idx in range(n_trials):
                 if _np.isnan(out[idx]):
+                    # SAFETY: Only fill NaN Change_ON times for valid outcomes.
+                    # On FA/abort trials the change was never presented.
+                    if _outcome_filter is not None:
+                        t_obj = trials[idx]
+                        oc = getattr(t_obj, "trialoutcome", "").lower() if not isinstance(t_obj, dict) else t_obj.get("trialoutcome", "").lower()
+                        if oc not in _outcome_filter:
+                            continue
                     t = trials[idx]
                     ct = getattr(t, "change_time", None) if not isinstance(t, dict) else t.get("change_time", None)
                     if ct is None:
@@ -273,6 +337,16 @@ def get_event_times_by_trial(
                             pass
                     # fallback to absolute ct if baseline not available
                     out[idx] = ct_val
+
+        # Apply outcome filter: NaN-out entries for invalid trial outcomes
+        if _outcome_filter is not None:
+            trials = getattr(session, "trials", []) or []
+            for idx in range(min(len(out), len(trials))):
+                t_obj = trials[idx]
+                oc = getattr(t_obj, "trialoutcome", "").lower() if not isinstance(t_obj, dict) else t_obj.get("trialoutcome", "").lower()
+                if oc not in _outcome_filter:
+                    out[idx] = _np.nan
+
         # return as list of floats (with NaNs retained)
         return out.tolist()
 
@@ -358,7 +432,7 @@ def compute_peth_for_session(
         else:
             cluster_id_list = [c.cluster_id for c in session.clusters]
 
-    event_times = get_event_times(session, event_name)
+    event_times = get_event_times(session, event_name, enforce_valid_outcomes=True)
     out = {}
     for c in session.clusters:
         if c.cluster_id not in cluster_id_list:

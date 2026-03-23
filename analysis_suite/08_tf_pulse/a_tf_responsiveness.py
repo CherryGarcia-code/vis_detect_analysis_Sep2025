@@ -1,4 +1,4 @@
-"""08a – TF pulse responsiveness screening across medial striatum.
+"""Fig35: TF pulse responsiveness screening — responsive fraction and z-score distributions.
 
 Loads pre-computed TF trace caches (NPZ files in data/cache/tf_traces/BG_046/).
 No session pickles are loaded — all TF z-score data comes from the cache.
@@ -6,7 +6,7 @@ No session pickles are loaded — all TF z-score data comes from the cache.
 A unit is TF-responsive if its post-pulse z-score exceeds ±3.0 for either
 fast or slow pulses.
 
-Produces fig24_tf_responsiveness.png:
+Produces fig35_tf_responsiveness.png:
   - Panel A: Example TF-responsive unit PSTHs (fast + slow overlaid)
   - Panel B: Heatmap of fast TF pulse responses (all TF-responsive units)
   - Panel C: Distribution of z-scores; pie chart of responsive fraction
@@ -248,8 +248,8 @@ def main():
         "TF Pulse Responsiveness in Medial Striatum\n"
         "(Baseline TF fluctuations | Khilkevich & Lohse, Nature 2024 framework)",
         fontsize=13, fontweight="bold", y=0.98)
-    save_figure(fig, "fig24_tf_responsiveness", "08_tf_pulse")
-    print("\n  ✓ Saved fig24_tf_responsiveness.png")
+    save_figure(fig, "fig35_tf_responsiveness", "08_tf_pulse")
+    print("\n  Saved fig35_tf_responsiveness.png")
 
     print("\n  Summary by stage:")
     for s in stages:

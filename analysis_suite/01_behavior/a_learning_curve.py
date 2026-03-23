@@ -1,10 +1,10 @@
-"""01a - Learning curve and behavioral performance overview.
+"""Fig01: Learning curve and behavioral performance overview.
 
 Produces the foundational behavioral summary:
-  - Fig 1A: d' trajectory across sessions with stage bands
-  - Fig 1B: Hit rate and FA rate across sessions
-  - Fig 1C: Psychometric curves (hit rate vs change size) per stage
-  - Fig 1D: Reaction time distributions by outcome
+  - Fig 01A: d' trajectory across sessions with stage bands
+  - Fig 01B: Hit rate and FA rate across sessions
+  - Fig 01C: Psychometric curves (hit rate vs change size) per stage
+  - Fig 01D: Reaction time distributions by outcome
 
 Saves statistics to figures/01_behavior/learning_curve_stats.csv.
 """

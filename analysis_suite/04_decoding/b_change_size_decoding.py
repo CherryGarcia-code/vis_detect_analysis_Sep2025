@@ -1,14 +1,14 @@
-"""04b - Big vs Small change-size decoding from population activity.
+"""Fig19: Change-Size Decoding — Big vs Small from population activity.
 
 Cross-validated logistic regression to decode whether the change is
 Big (2.0, 4.0 Hz) vs Small (1.25, 1.35, 1.5 Hz) from population
 activity in the response window.
 
 Produces:
-  - Fig 10A: Time-resolved decoding accuracy (Expert grand-average)
-  - Fig 10B: Peak decoding accuracy across sessions
-  - Fig 10C: Decoding by stage (boxplot)
-  - Fig 10D: Confusion matrix (Expert pooled)
+  - Fig 19A: Time-resolved decoding accuracy (Expert grand-average)
+  - Fig 19B: Peak decoding accuracy across sessions
+  - Fig 19C: Decoding by stage (boxplot)
+  - Fig 19D: Confusion matrix (Expert pooled)
 
 Saves: figures/04_decoding/change_size_decoding_stats.csv
 """
@@ -292,7 +292,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig13_change_size_decoding", "04_decoding")
+    save_figure(fig, "fig19_change_size_decoding", "04_decoding")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "04_decoding", "change_size_decoding_stats.csv"

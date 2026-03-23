@@ -1,4 +1,4 @@
-"""03b - Population PSTH heatmaps sorted by peak latency.
+"""Fig 14: Population heatmap — PSTH heatmaps sorted by peak latency.
 
 Produces sorted heatmaps showing all responsive units' activity aligned
 to different events that cover key aspects of behavior.
@@ -361,7 +361,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig10_population_heatmap", "03_population")
+    save_figure(fig, "fig14_population_heatmap", "03_population")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "03_population", "population_heatmap_stats.csv"

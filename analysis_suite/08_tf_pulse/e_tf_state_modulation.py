@@ -1,4 +1,4 @@
-"""08e – TF state modulation: TF responses split by HMM behavioral state.
+"""Fig39: TF state modulation — TF responses split by HMM behavioral state.
 
 REQUIRES session pickles for raw spike times + trial structure.
 Uses the NPZ cache to identify TF-responsive units (avoids recomputing
@@ -8,7 +8,7 @@ standard CSV file.
 Groups fast TF pulses by the HMM state of the trial they belong to,
 then builds state-conditioned PSTHs per unit.
 
-Produces fig28_tf_state_modulation.png:
+Produces fig39_tf_state_modulation.png:
   - Panel A: Population TF PSTHs split by HMM state
   - Panel B: Heatmap of state modulation index per unit
   - Panel C: Distribution of state modulation index
@@ -35,6 +35,7 @@ from config import (
     STAGE_ORDER, STAGE_COLORS, HMM_STATE_ORDER, HMM_STATE_COLORS,
     CELLTYPE_COLORS, CACHE_DIR, DEFAULT_Z_THRESH_TF,
 )
+from visdetect.analysis.constants import TF_PULSE_PRE_WINDOW, TF_PULSE_POST_WINDOW
 from loader import (
     load_staging_manifest, load_waveform_labels, load_hmm_assignments,
     load_tf_traces_npz, session_iterator,
@@ -53,8 +54,8 @@ Z_THRESH = DEFAULT_Z_THRESH_TF
 # ── Parameters ─────────────────────────────────────────────────────
 DT = 0.001
 SIGMA_MS = 17.0
-PRE_WIN = (-0.4, 0.0)
-POST_WIN = (0.0, 0.5)
+PRE_WIN = TF_PULSE_PRE_WINDOW
+POST_WIN = TF_PULSE_POST_WINDOW
 
 
 def _vectorized_psth(spike_times, pulses, t_vec, sigma_bins):
@@ -323,8 +324,8 @@ def main():
         "TF Pulse State Modulation\n"
         "(HMM behavioral states: Engaged vs. Disengaged)",
         fontsize=13, fontweight="bold", y=0.98)
-    save_figure(fig, "fig28_tf_state_modulation", "08_tf_pulse")
-    print("\n  ✓ Saved fig28_tf_state_modulation.png")
+    save_figure(fig, "fig39_tf_state_modulation", "08_tf_pulse")
+    print("\n  Saved fig39_tf_state_modulation.png")
 
 
 if __name__ == "__main__":

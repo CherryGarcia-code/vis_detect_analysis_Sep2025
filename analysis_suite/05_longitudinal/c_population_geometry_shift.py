@@ -1,13 +1,13 @@
-"""05c - Population geometry shifts across learning.
+"""Fig23: Geometry Shift — Population geometry shifts across learning.
 
 Tracks how the coding direction (CD) angle and neural state-space
 geometry change across learning stages.
 
 Produces:
-  - Fig 16A: CD magnitude (Hit vs Miss separation) across sessions
-  - Fig 16B: CD angle stability (cosine similarity between consecutive sessions)
-  - Fig 16C: CD angle relative to first Expert session
-  - Fig 16D: Variance along vs orthogonal to CD across stages
+  - Fig 23A: CD magnitude (Hit vs Miss separation) across sessions
+  - Fig 23B: CD angle stability (cosine similarity between consecutive sessions)
+  - Fig 23C: CD angle relative to first Expert session
+  - Fig 23D: Variance along vs orthogonal to CD across stages
 
 Saves: figures/05_longitudinal/geometry_shift_stats.csv
 """
@@ -27,7 +27,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-from config import STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS, CACHE_DIR
+from config import STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS, CACHE_DIR, DEFAULT_BIN_SIZE
 from loader import load_staging_manifest, load_session
 from utils import (
     get_good_cluster_ids, build_population_tensor,
@@ -38,7 +38,7 @@ from plotting import setup_style, save_figure, add_stage_background
 setup_style()
 
 WINDOW = (-0.5, 1.0)
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 BASELINE_WIN = (-0.5, -0.05)
 RESP_WIN = (0.0, 0.25)
 MIN_UNITS = 10
@@ -453,7 +453,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig17_geometry_shift", "05_longitudinal")
+    save_figure(fig, "fig23_geometry_shift", "05_longitudinal")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "05_longitudinal", "geometry_shift_stats.csv"

@@ -1,4 +1,4 @@
-"""02b - Outcome selectivity: Hit vs Miss auROC per unit.
+"""Fig 09: Outcome selectivity — Hit vs Miss auROC per unit.
 
 For each unit, computes auROC comparing firing rates on Hit vs Miss trials
 in a response window (0–250ms post-Change_ON).  This quantifies whether
@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
 from config import (
-    STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS, CACHE_DIR,
+    STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS, CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import load_staging_manifest, load_session, load_waveform_labels
 from utils import (
@@ -43,7 +43,7 @@ setup_style()
 
 # Parameters
 WINDOW = (-0.5, 1.0)
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 RESP_WIN = (0.0, 0.25)       # response window for auROC
 BASE_WIN = (-0.4, -0.05)     # baseline window
 MIN_TRIALS_PER_CLASS = 5
@@ -473,7 +473,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig05_outcome_selectivity", "02_single_unit")
+    save_figure(fig, "fig09_outcome_selectivity", "02_single_unit")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "02_single_unit", "outcome_selectivity_stats.csv"

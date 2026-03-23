@@ -1,4 +1,4 @@
-"""06b - Pre-lick ramping: units with firing rate ramps before FA events.
+"""Fig25: Pre-Lick Ramping — units with firing rate ramps before FA events.
 
 Identifies units whose firing rate ramps up (or down) in the one-second
 window preceding false-alarm licks.  For each unit, a Spearman correlation
@@ -7,10 +7,10 @@ as "ramping" when rho > 0 and p < 0.05.  A minimum of 5 FA trials per
 session is required.
 
 Produces:
-  - Fig 17A: Example ramping unit PSTHs (top 3 by rho)
-  - Fig 17B: Distribution of ramp rho values (all units)
-  - Fig 17C: Fraction of ramping units by cell type (FSI vs MSN)
-  - Fig 17D: Fraction ramping by learning stage
+  - Fig 25A: Example ramping unit PSTHs (top 3 by rho)
+  - Fig 25B: Distribution of ramp rho values (all units)
+  - Fig 25C: Fraction of ramping units by cell type (FSI vs MSN)
+  - Fig 25D: Fraction ramping by learning stage
 
 Saves: figures/06_lick_motor/pre_lick_ramping_stats.csv
        cache/pre_lick_ramping.csv
@@ -32,7 +32,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
 from config import (
-    STAGE_ORDER, STAGE_COLORS, CELLTYPE_COLORS, CACHE_DIR,
+    STAGE_ORDER, STAGE_COLORS, CELLTYPE_COLORS, CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import (
     load_staging_manifest, load_session, load_waveform_labels,
@@ -46,7 +46,7 @@ setup_style()
 
 # ── Parameters ────────────────────────────────────────────────────────
 FA_WINDOW = (-2.0, 0.5)
-BIN_SIZE = 0.025
+BIN_SIZE = DEFAULT_BIN_SIZE
 RAMP_WIN = (-1.0, 0.0)     # window for ramp analysis
 MIN_FA_TRIALS = 5
 RAMP_P_THRESH = 0.05
@@ -340,7 +340,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig19_pre_lick_ramping", "06_lick_motor")
+    save_figure(fig, "fig25_pre_lick_ramping", "06_lick_motor")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "06_lick_motor", "pre_lick_ramping_stats.csv",

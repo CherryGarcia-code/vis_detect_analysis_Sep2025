@@ -7,8 +7,11 @@ choices are copied from that script:
 * Only first-lick false alarms (FA trials) are considered.
 * Licks must occur at least 3 s after `Baseline_ON` to count (late baseline).
 * Spike matrices are computed with 1 ms bins over [-2 s, +0.75 s].
-* Responsiveness is quantified via an unpaired two-sample t-test comparing
-    the preparatory window [-1.75, -1.25] s to the pre-movement window [-0.3, -0.15] s.
+* Responsiveness is quantified via a Wilcoxon signed-rank test (paired,
+    non-parametric) comparing the preparatory window [-1.75, -1.25] s to the
+    pre-movement window [-0.3, -0.15] s.  (Legacy MATLAB used an unpaired
+    t-test; the paired non-parametric test is more appropriate because the
+    two windows come from the same trials and spike counts are rarely Gaussian.)
 * Only "good" clusters (per `session.good_cluster_ids`) are analyzed, matching the MATLAB script.
 * PSTHs are smoothed with a Gaussian (window 50 samples) before plotting.
 
@@ -28,6 +31,7 @@ from scipy import ndimage
 from scipy import stats
 
 from visdetect.core.session import Session, load_session
+from visdetect.analysis.constants import FA_RT_SPLIT
 from visdetect.utils.progress import Progress
 
 
@@ -36,7 +40,7 @@ class MatlabLickConfig:
     pre_event_window: float = 2.0
     post_event_window: float = 0.75
     bin_size: float = 0.001
-    min_fa_delay: float = 3.0
+    min_fa_delay: float = FA_RT_SPLIT
     baseline_window: Tuple[float, float] = (-1.75, -1.25)
     post_window: Tuple[float, float] = (-0.3, -0.15)
     smooth_bins: int = 50
@@ -219,8 +223,18 @@ class MatlabLickAnalyzer:
                 "p_value": np.nan,
                 "is_significant": False,
             }
-        _, p_val = stats.ttest_ind(post, base, equal_var=False, nan_policy="omit")
-        delta = float(np.nanmean(post - base))
+        # Paired non-parametric test: baseline vs pre-movement from the SAME
+        # trials.  (Legacy MATLAB used ttest_ind — kept for reference.)
+        diff = post - base
+        # Drop NaN pairs and check for enough non-zero differences for wilcoxon
+        finite_mask = np.isfinite(diff)
+        diff_clean = diff[finite_mask]
+        n_nonzero = int(np.count_nonzero(diff_clean))
+        if diff_clean.size < 2 or n_nonzero < 1:
+            p_val = np.nan
+        else:
+            _, p_val = stats.wilcoxon(diff_clean, zero_method="wilcox")
+        delta = float(np.nanmean(diff))
         return {
             "cluster_id": cluster_id,
             "n_events": int(matrix.shape[0]),

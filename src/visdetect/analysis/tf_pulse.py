@@ -17,6 +17,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from visdetect.analysis.constants import (
+    TF_PULSE_PRE_WINDOW,
+    TF_PULSE_POST_WINDOW,
+    DEFAULT_Z_THRESH_TF,
+)
 from visdetect.analysis.su_analysis import load_kept_ids
 from scipy.ndimage import gaussian_filter1d
 from visdetect.utils.progress import Progress
@@ -33,8 +38,8 @@ class TFRespPulseConfig:
     baseline_stride: int = 3  # sample every 3rd element (legacy convention)
     sample_period: float = 0.05  # seconds per baseline sample (50 ms)
     # Time windows around pulses
-    pre_window: Tuple[float, float] = (-0.4, 0.0)
-    post_window: Tuple[float, float] = (0.0, 0.5)
+    pre_window: Tuple[float, float] = TF_PULSE_PRE_WINDOW
+    post_window: Tuple[float, float] = TF_PULSE_POST_WINDOW
     # Smoothing for spike KDE
     dt: float = 0.001  # seconds per bin for smoothing grid
     sigma_ms: float = 17.0  # Gaussian sigma in ms (approx 40ms FWHM)
@@ -46,7 +51,7 @@ class TFRespPulseConfig:
     # Unit selection
     kept_only: bool = True
     # Z-score threshold
-    z_thresh: float = 3.0
+    z_thresh: float = DEFAULT_Z_THRESH_TF
     # Plotting aggregation filter
     min_mean_rate_for_plot: float = 0.01
 
@@ -719,7 +724,7 @@ def plot_tf_pulse_high_z_summary(
     selection_csv: Optional[str] = None,
     n_cols: int = 8,
     which: str = "both",
-    min_abs_z: float = 3.0,
+    min_abs_z: float = DEFAULT_Z_THRESH_TF,
 ) -> Optional[str]:
     """Plot only the units exceeding |z| >= min_abs_z and add a summary subplot.
 

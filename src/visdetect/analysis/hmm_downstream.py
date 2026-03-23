@@ -300,29 +300,6 @@ def compute_learning_trajectory(
 # 4.  State-Conditioned Neural Analysis
 # =====================================================================
 
-def smooth_psth(
-    psth: np.ndarray,
-    bin_size: float = 0.01,
-    sigma_ms: float = 25.0,
-) -> np.ndarray:
-    """Gaussian-smooth a PSTH (1-D firing rate array).
-
-    Parameters
-    ----------
-    psth : 1-D array of firing rates (Hz).
-    bin_size : bin width in seconds.
-    sigma_ms : Gaussian kernel sigma in milliseconds.
-
-    Returns
-    -------
-    Smoothed 1-D array, same length as input.
-    """
-    from scipy.ndimage import gaussian_filter1d
-    sigma_bins = (sigma_ms / 1000.0) / bin_size
-    if sigma_bins < 0.5 or len(psth) == 0:
-        return psth
-    return gaussian_filter1d(psth.astype(float), sigma=sigma_bins)
-
 
 def get_state_trial_indices(
     assignments_df: pd.DataFrame,

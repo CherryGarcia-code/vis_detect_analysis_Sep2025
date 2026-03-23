@@ -1,14 +1,14 @@
-"""04a - Cross-validated Hit vs Miss decoding over time.
+"""Fig18: Hit vs Miss Decoding — Cross-validated decoding over time.
 
 Complements the coding direction analysis with a standard classifier
 framework: at each time bin, train/test logistic regression with
 stratified 5-fold CV to decode trial outcome.
 
 Produces:
-  - Fig 5A: Decoding accuracy over time for a single Expert session
-  - Fig 5B: Grand-average decoding accuracy across Expert sessions
-  - Fig 5C: Decoding onset latency (first above-chance bin) vs session index
-  - Fig 5D: Peak decoding accuracy by stage
+  - Fig 18A: Decoding accuracy over time for a single Expert session
+  - Fig 18B: Grand-average decoding accuracy across Expert sessions
+  - Fig 18C: Decoding onset latency (first above-chance bin) vs session index
+  - Fig 18D: Peak decoding accuracy by stage
 
 Saves statistics to figures/04_decoding/hit_miss_decoding_stats.csv
 """
@@ -486,7 +486,7 @@ def main():
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig12_hit_miss_decoding", "04_decoding")
+    save_figure(fig, "fig18_hit_miss_decoding", "04_decoding")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", "04_decoding", "hit_miss_decoding_stats.csv"

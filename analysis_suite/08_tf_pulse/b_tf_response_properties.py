@@ -1,9 +1,9 @@
-"""08b – TF pulse response properties: latency, width, amplitude.
+"""Fig36: TF pulse response properties — latency, width, amplitude.
 
 Loads pre-computed TF trace caches (NPZ). For every TF-responsive unit,
 measures peak latency, half-width, and amplitude from the *fast_z* trace.
 
-Produces fig25_tf_response_properties.png:
+Produces fig36_tf_response_properties.png:
   - Panel A: Distribution of peak latency
   - Panel B: Distribution of half-width (FWHM)
   - Panel C: Latency vs. amplitude scatter by cell type
@@ -227,8 +227,8 @@ def main():
     fig.suptitle(
         "TF Pulse Response Properties\n(Measured from cached fast-pulse z-scored PSTHs)",
         fontsize=13, fontweight="bold", y=0.98)
-    save_figure(fig, "fig25_tf_response_properties", "08_tf_pulse")
-    print("\n  ✓ Saved fig25_tf_response_properties.png")
+    save_figure(fig, "fig36_tf_response_properties", "08_tf_pulse")
+    print("\n  Saved fig36_tf_response_properties.png")
 
     # Summary statistics
     print("\n  Summary by stage:")

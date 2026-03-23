@@ -7,6 +7,7 @@ import pandas as pd
 from scipy.stats import norm
 from typing import List, Dict, Any, Optional, Tuple
 from visdetect.core.session import Session, Trial
+from visdetect.analysis.constants import FA_RT_SPLIT
 
 def calculate_dprime(hit_rate, fa_rate):
     """Calculate d' (sensitivity index) with log-linear correction for 0/1 rates."""
@@ -78,7 +79,7 @@ def classify_fa_type(rt):
     """Classify FA based on RT."""
     if np.isnan(rt):
         return 'unknown'
-    return 'early' if rt <= 3.0 else 'late'
+    return 'early' if rt <= FA_RT_SPLIT else 'late'
 
 def identify_session_state(row):
     """
@@ -154,14 +155,14 @@ def compute_session_performance(session: Session) -> Dict[str, float]:
 
     # Early-lick (behavioral "FA") split by RT
     fas_early_lick = df[df['is_fa']].copy()
-    n_fa_early = int(fas_early_lick[fas_early_lick['rt'] <= 3.0].shape[0])
-    n_fa_late  = int(fas_early_lick[fas_early_lick['rt'] > 3.0].shape[0])
+    n_fa_early = int(fas_early_lick[fas_early_lick['rt'] <= FA_RT_SPLIT].shape[0])
+    n_fa_late  = int(fas_early_lick[fas_early_lick['rt'] > FA_RT_SPLIT].shape[0])
 
-    mean_rt_fa_early = fas_early_lick[fas_early_lick['rt'] <= 3.0]['rt'].mean()
-    mean_rt_fa_late  = fas_early_lick[fas_early_lick['rt'] > 3.0]['rt'].mean()
+    mean_rt_fa_early = fas_early_lick[fas_early_lick['rt'] <= FA_RT_SPLIT]['rt'].mean()
+    mean_rt_fa_late  = fas_early_lick[fas_early_lick['rt'] > FA_RT_SPLIT]['rt'].mean()
 
-    sem_rt_fa_early = fas_early_lick[fas_early_lick['rt'] <= 3.0]['rt'].sem()
-    sem_rt_fa_late  = fas_early_lick[fas_early_lick['rt'] > 3.0]['rt'].sem()
+    sem_rt_fa_early = fas_early_lick[fas_early_lick['rt'] <= FA_RT_SPLIT]['rt'].sem()
+    sem_rt_fa_late  = fas_early_lick[fas_early_lick['rt'] > FA_RT_SPLIT]['rt'].sem()
 
     # Hit RTs — only genuine SDT hits (go trials with 'hit' outcome)
     hit_trials = df[(df['is_go']) & (df['outcome'] == 'hit')]

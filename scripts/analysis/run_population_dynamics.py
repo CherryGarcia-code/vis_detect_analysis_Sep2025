@@ -29,18 +29,17 @@ def run_population_analysis(session_path: str, output_dir: str):
         print("Behavior dataframe empty.")
         return
 
-    # 2. Get Event Times (Change_ON)
+    # 2. Get Event Times (Change_ON) — only hit/miss trials are valid
+    #    (FA/abort trials never saw the change stimulus)
     change_times_all = align.get_event_times_by_trial(session, 'Change_ON')
-    
+
     # Define Groups based on State + Outcome
-    # We focus on Hits and Misses as they have Change_ON times
+    # Only Hit and Miss trials have valid Change_ON times
     groups = {
         'Balanced_Hit': [],
         'Balanced_Miss': [],
-        'Balanced_Fa': [],
         'Impulsive_Hit': [],
         'Impulsive_Miss': [],
-        'Impulsive_Fa': [],
         'Disengaged_Miss': [],
         'Disengaged_Hit': []
     }
@@ -74,9 +73,14 @@ def run_population_analysis(session_path: str, output_dir: str):
              print("Cannot define CD. Aborting.")
              return
 
-    # 3. Select Units (Good Clusters)
-    cluster_ids = session.good_cluster_ids if session.good_cluster_ids else [c.cluster_id for c in session.clusters]
-    units = [c for c in session.clusters if c.cluster_id in cluster_ids]
+    # 3. Select Units (Good Clusters) — prefer stable > good > all, with FR filter
+    if getattr(session, "good_and_stable_ids", None):
+        candidates = set(int(x) for x in session.good_and_stable_ids)
+    elif session.good_cluster_ids:
+        candidates = set(int(x) for x in session.good_cluster_ids)
+    else:
+        candidates = {int(c.cluster_id) for c in session.clusters}
+    units = [c for c in session.clusters if int(c.cluster_id) in candidates]
     
     print(f"Analyzing {len(units)} units.")
     if len(units) == 0: return
