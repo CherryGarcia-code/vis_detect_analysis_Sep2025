@@ -25,7 +25,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from visdetect.core.session import load_session
-from visdetect.core.qc import run_qc, run_unit_selection
+from visdetect.core.qc import run_qc
+from visdetect.analysis.unit_selection import run_unit_selection
 
 # ── Paths ─────────────────────────────────────────────────────────────
 SUBJECT = "BG_046"

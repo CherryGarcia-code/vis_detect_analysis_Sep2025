@@ -16,7 +16,8 @@ sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.core.session import load_session
 from visdetect.analysis.tf_pulse import TFRespPulseConfig, plot_tf_pulse_grid
-from visdetect.core.qc import compute_unit_selection_table, apply_unit_filters, load_qc_profile
+from visdetect.analysis.unit_selection import compute_unit_selection_table
+from visdetect.core.qc import apply_unit_filters, load_qc_profile
 
 def process_session(pkl_path, out_dir, profile_name, which="both", sort=True):
     try:

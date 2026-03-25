@@ -14,7 +14,8 @@ sys.path.insert(0, str(_REPO_ROOT / 'src'))
 
 from visdetect.core.session import load_session
 from visdetect.analysis.tf_pulse import TFRespPulseConfig, plot_tf_pulse_grid
-from visdetect.core.qc import compute_unit_selection_table, apply_unit_filters, load_qc_profile
+from visdetect.analysis.unit_selection import compute_unit_selection_table
+from visdetect.core.qc import apply_unit_filters, load_qc_profile
 import pandas as pd
 import visdetect.analysis.tf_pulse as tf_pulse_mod
 

@@ -1,31 +1,40 @@
-"""QC utilities for sessions: trial-level and cluster-level checks, plus unit selection.
+"""QC utilities for sessions: trial-level and cluster-level checks.
 
 Functions
 ---------
+- cluster_qc_stats(cluster, session_duration): QC statistics for a single cluster.
+- trial_qc_stats(session): QC statistics for all trials in a session.
 - run_qc(session, outdir): runs QC and writes JSON summary and a couple of PNG plots.
-- compute_unit_selection_table(session, ...): per-cluster metrics helpful for filtering.
 - apply_unit_filters(df, ...): apply threshold rules; returns a DataFrame with pass flags and 'keep'.
-- run_unit_selection(session, outdir, ...): convenience to compute, filter, and save CSVs.
+- load_qc_profile(name, ...): load a QC profile dict from YAML.
+- read_kept_cluster_ids(path): return kept cluster IDs from a unit_selection.csv.
+- find_good_stable_units(clusters, good_cluster_ids): stability filter (port of MATLAB).
+
+Note
+----
+Higher-level functions that depend on spike-event alignment (``compute_unit_selection_table``,
+``run_unit_selection``, ``plot_kept_vs_dropped_distributions``) live in
+``visdetect.analysis.unit_selection`` to avoid a core -> analysis dependency.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Dict, Any, Tuple, Optional, List
-import numpy as np
+from typing import Any, Dict, List, Optional, Tuple
+
 import json
 import matplotlib
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import yaml
 
-# Import alignment helpers for per-trial metrics
-from visdetect.analysis import align as align_mod
 
-
-def _session_duration_from_spikes(session):
-    starts = []
-    ends = []
+def _session_duration_from_spikes(session: Any) -> float:
+    """Estimate session duration (seconds) from the span of spike times."""
+    starts: list[float] = []
+    ends: list[float] = []
     for c in session.clusters:
         st = np.array(c.spike_times).flatten()
         if st.size > 0:
@@ -39,7 +48,8 @@ def _session_duration_from_spikes(session):
     return max(dur, 1e-3)
 
 
-def cluster_qc_stats(cluster, session_duration: float) -> Dict[str, Any]:
+def cluster_qc_stats(cluster: Any, session_duration: float) -> Dict[str, Any]:
+    """Compute QC statistics for a single cluster."""
     st = np.array(cluster.spike_times).flatten()
     n_spikes = int(st.size)
     mean_rate = float(n_spikes / session_duration) if session_duration > 0 else 0.0
@@ -55,8 +65,9 @@ def cluster_qc_stats(cluster, session_duration: float) -> Dict[str, Any]:
     }
 
 
-def trial_qc_stats(session) -> Dict[str, Any]:
-    outcomes = {}
+def trial_qc_stats(session: Any) -> Dict[str, Any]:
+    """Compute QC statistics for all trials in a session."""
+    outcomes: Dict[str, int] = {}
     missing_change_time = 0
     missing_rt = 0
     for t in session.trials:
@@ -86,7 +97,8 @@ def trial_qc_stats(session) -> Dict[str, Any]:
     }
 
 
-def run_qc(session, outdir: str):
+def run_qc(session: Any, outdir: str) -> Dict[str, Any]:
+    """Run QC checks and save JSON summaries and diagnostic plots."""
     out = Path(outdir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -152,91 +164,8 @@ def run_qc(session, outdir: str):
 
 
 # -------------------------------
-# Unit selection helpers
+# Unit filter helpers
 # -------------------------------
-
-def compute_unit_selection_table(
-    session,
-    event_name: str = "Change_ON",
-    window: Tuple[float, float] = (-0.5, 1.0),
-    bin_size: float = 0.02,
-) -> pd.DataFrame:
-    """Compute per-cluster metrics to guide early filtering.
-
-    Metrics:
-      - cluster_id
-      - n_spikes (total)
-      - mean_rate_hz (approx total_spikes / session_duration)
-      - isi_violations_frac (fraction of ISIs < 2 ms)
-      - n_trials_used (for alignment to event)
-      - median_spikes_per_trial (within the alignment window)
-      - is_good_cluster (from session.good_cluster_ids)
-
-    Notes:
-      - Session duration is estimated from spike-time span if not inferable from NI events.
-      - Trial-aligned metrics depend on the chosen event/window.
-    """
-    # Estimate session duration (seconds)
-    sess_dur = None
-    ni = getattr(session, "ni_events", {}) or {}
-    # Prefer NI Baseline/Change timing to get an upper bound (+ small buffer)
-    for k in ("Baseline_ON", "Change_ON"):
-        if k in ni and np.asarray(ni[k]).size > 0:
-            arr = np.asarray(ni[k]).flatten()
-            try:
-                sess_dur = float(np.nanmax(arr) + 10.0)
-                break
-            except Exception:
-                pass
-    if sess_dur is None:
-        # Fallback to max spike time across clusters
-        max_sp = 0.0
-        for c in session.clusters:
-            st = np.asarray(c.spike_times).flatten()
-            if st.size:
-                try:
-                    max_sp = max(max_sp, float(np.nanmax(st)))
-                except Exception:
-                    pass
-        sess_dur = max(max_sp, 1.0)
-
-    good_ids = set(getattr(session, "good_cluster_ids", []) or [])
-    event_times = align_mod.get_event_times(session, event_name)
-
-    rows = []
-    for c in session.clusters:
-        cid = int(c.cluster_id)
-        st = np.asarray(c.spike_times).flatten()
-        n_spikes = int(st.size)
-        mean_rate = float(n_spikes / sess_dur) if sess_dur > 0 else np.nan
-        # ISI violations (< 2 ms)
-        isi = np.diff(np.sort(st)) if st.size > 1 else np.array([])
-        if isi.size > 0:
-            isi_viol = float((isi < 0.002).sum()) / isi.size
-        else:
-            isi_viol = np.nan
-
-        # Trial-aligned counts within window
-        trials_mat, _ = align_mod.align_spikes_to_events(st, event_times, window=window, bin_size=bin_size)
-        n_trials = int(trials_mat.shape[0]) if trials_mat is not None else 0
-        spikes_per_trial = trials_mat.sum(axis=1) if n_trials > 0 else np.array([])
-        med_spt = float(np.median(spikes_per_trial)) if spikes_per_trial.size > 0 else np.nan
-
-        rows.append(
-            {
-                "cluster_id": cid,
-                "n_spikes": n_spikes,
-                "mean_rate_hz": mean_rate,
-                "isi_violations_frac": isi_viol,
-                "n_trials_used": n_trials,
-                "median_spikes_per_trial": med_spt,
-                "is_good_cluster": (cid in good_ids) if good_ids else None,
-            }
-        )
-
-    df = pd.DataFrame(rows).sort_values("cluster_id").reset_index(drop=True)
-    return df
-
 
 def apply_unit_filters(
     df: pd.DataFrame,
@@ -277,165 +206,6 @@ def apply_unit_filters(
     return out
 
 
-def run_unit_selection(
-    session,
-    outdir: str,
-    *,
-    event_name: str = "Baseline_ON",
-    window: Tuple[float, float] = (-0.5, 1.0),
-    bin_size: float = 0.02,
-    require_good_cluster: bool = True,
-    min_total_spikes: int = 500,
-    min_mean_rate_hz: float = 0.1,
-    max_isi_viol_frac: float = 0.2,
-    min_median_spikes_per_trial: float = 0.1,
-    max_median_spikes_per_trial: Optional[float] = None,
-    make_plots: bool = True,
-    plot_metrics: Optional[List[str]] = None,
-    profile: Optional[str] = None,
-    profiles_path: Optional[str] = None,
-    params: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Compute unit metrics, apply filters, and save CSV tables.
-
-    Returns dict with paths and the list of kept cluster IDs.
-    """
-    out = Path(outdir)
-    out.mkdir(parents=True, exist_ok=True)
-
-    # Resolve parameters: defaults -> profile (if provided) -> explicit args/params
-    used_params = {
-        "require_good_cluster": require_good_cluster,
-        "min_total_spikes": min_total_spikes,
-        "min_mean_rate_hz": min_mean_rate_hz,
-        "max_isi_viol_frac": max_isi_viol_frac,
-        "min_median_spikes_per_trial": min_median_spikes_per_trial,
-        "max_median_spikes_per_trial": max_median_spikes_per_trial,
-        "event_name": event_name,
-        "window": list(window),
-        "bin_size": float(bin_size),
-    }
-    # Merge in profile
-    if profile is not None:
-        prof = load_qc_profile(profile, profiles_path=profiles_path)
-        used_params.update({k: v for k, v in prof.items() if v is not None})
-    # Merge in ad-hoc params
-    if params:
-        used_params.update({k: v for k, v in params.items() if v is not None})
-
-    base_df = compute_unit_selection_table(
-        session, event_name=used_params["event_name"], window=tuple(used_params["window"]), bin_size=used_params["bin_size"]
-    )
-    filt_df = apply_unit_filters(
-        base_df,
-        require_good_cluster=bool(used_params["require_good_cluster"]),
-        min_total_spikes=int(used_params["min_total_spikes"]),
-        min_mean_rate_hz=float(used_params["min_mean_rate_hz"]),
-        max_isi_viol_frac=float(used_params["max_isi_viol_frac"]),
-        min_median_spikes_per_trial=float(used_params["min_median_spikes_per_trial"]),
-        max_median_spikes_per_trial=used_params.get("max_median_spikes_per_trial"),
-    )
-
-    # Save
-    base_path = out / "unit_metrics.csv"
-    filt_path = out / "unit_selection.csv"
-    base_df.to_csv(base_path, index=False)
-    filt_df.to_csv(filt_path, index=False)
-    # Save params used for reproducibility
-    with (out / "unit_selection_params.json").open("w") as f:
-        json.dump(used_params, f, indent=2)
-
-    keep_ids = filt_df.loc[filt_df["keep"], "cluster_id"].astype(int).tolist()
-
-    plot_paths: List[str] = []
-    if make_plots:
-        plot_paths = plot_kept_vs_dropped_distributions(
-            filt_df, outdir=str(out), metrics=plot_metrics
-        )
-
-    return {
-        "unit_metrics_csv": str(base_path),
-        "unit_selection_csv": str(filt_path),
-        "kept_cluster_ids": keep_ids,
-        "n_kept": len(keep_ids),
-        "n_total": int(len(filt_df)),
-        "plots": plot_paths,
-    }
-
-
-def _safe_hist(ax, data_keep, data_drop, label_keep: str, label_drop: str, xlabel: str, bins: int = 50):
-    ax.hist(data_drop, bins=bins, alpha=0.5, color="C3", label=label_drop)
-    ax.hist(data_keep, bins=bins, alpha=0.5, color="C0", label=label_keep)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel("Units")
-    ax.legend(fontsize="small")
-
-
-def plot_kept_vs_dropped_distributions(
-    filt_df: pd.DataFrame,
-    outdir: str,
-    metrics: Optional[List[str]] = None,
-) -> List[str]:
-    """Generate quick comparison plots for kept vs dropped units.
-
-    Creates:
-      - Overlaid histograms for selected metrics (single multi-panel figure)
-      - Scatter of mean_rate_hz vs isi_violations_frac colored by keep
-
-    Returns list of saved plot file paths.
-    """
-    if metrics is None:
-        metrics = [
-            "mean_rate_hz",
-            "isi_violations_frac",
-            "median_spikes_per_trial",
-            "n_spikes",
-        ]
-
-    out = Path(outdir)
-    out.mkdir(parents=True, exist_ok=True)
-
-    kept = filt_df[filt_df["keep"]]
-    dropped = filt_df[~filt_df["keep"]]
-
-    # Multi-panel hist figure
-    n = len(metrics)
-    ncols = min(2, n)
-    nrows = int(np.ceil(n / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 3.5 * nrows))
-    axes = np.atleast_1d(axes).ravel()
-    for i, m in enumerate(metrics):
-        ax = axes[i]
-        k = kept[m].dropna().to_numpy()
-        d = dropped[m].dropna().to_numpy()
-        _safe_hist(ax, k, d, "kept", "dropped", xlabel=m)
-        ax.set_title(m)
-    # hide any unused axes
-    for j in range(i + 1, len(axes)):
-        axes[j].axis("off")
-    fig.suptitle("Kept vs Dropped: distributions", y=1.02)
-    fig.tight_layout()
-    p1 = out / "unit_selection_dists.png"
-    fig.savefig(p1, dpi=140, bbox_inches="tight")
-    plt.close(fig)
-
-    # Scatter: mean_rate vs ISI violations
-    x = filt_df["mean_rate_hz"].to_numpy()
-    y = filt_df["isi_violations_frac"].to_numpy()
-    c = np.where(filt_df["keep"].to_numpy(), "C0", "C3")
-    fig2, ax2 = plt.subplots(figsize=(5.5, 4))
-    ax2.scatter(x, y, c=c, s=10, alpha=0.7)
-    ax2.set_xlabel("mean_rate_hz")
-    ax2.set_ylabel("isi_violations_frac")
-    ax2.set_title("Scatter: mean_rate vs ISI (blue=kept, red=dropped)")
-    fig2.tight_layout()
-    p2 = out / "unit_selection_scatter.png"
-    fig2.savefig(p2, dpi=140, bbox_inches="tight")
-    plt.close(fig2)
-
-    return [str(p1), str(p2)]
-
-
 def load_qc_profile(name: str, profiles_path: Optional[str] = None) -> Dict[str, Any]:
     """Load a QC profile dict by name from YAML (config/qc_profiles.yml by default).
 
@@ -473,6 +243,122 @@ def read_kept_cluster_ids(selection_csv_path: str) -> List[int]:
         )
     except Exception:
         return []
+
+
+# ── Stability filter (port of find_good_stable_units_PaperVersion.m) ──
+
+def _movmean(x: np.ndarray, k: int) -> np.ndarray:
+    """Moving mean matching MATLAB's movmean with 'shrink' endpoints.
+
+    MATLAB's movmean uses a centered window that shrinks at the edges so
+    that only available samples are averaged.  This replicates that behavior
+    using a cumulative-sum approach (O(n), fully vectorized).
+    """
+    n = len(x)
+    if k >= n:
+        return np.full(n, x.mean())
+    cs = np.concatenate(([0.0], np.cumsum(x)))
+    half = k // 2
+    # Build lo/hi index arrays for each position
+    idx = np.arange(n)
+    lo = np.maximum(0, idx - half)
+    hi = np.minimum(n, idx - half + k)
+    return (cs[hi] - cs[lo]) / (hi - lo)
+
+
+def find_good_stable_units(clusters: list, good_cluster_ids: list) -> list[int]:
+    """Keep only stable units from KS-good units.
+
+    Python port of find_good_stable_units_PaperVersion.m
+    (Khilkevich & Lohse 2024 criteria):
+      - Average firing rate >= 0.5 Hz
+      - Rate in 20 / 10 / 5-min sliding window never drops below
+        30% / 20% / 10% of the session average
+      - ISI distribution peak in first 5 ms is at >= 2 ms
+      - ISI distribution is smooth (tallest bin < 4x second-tallest)
+
+    Parameters
+    ----------
+    clusters : list of Cluster
+        All clusters (not just good ones).
+    good_cluster_ids : list of int
+        Cluster IDs labeled "good" by Kilosort.
+
+    Returns
+    -------
+    list of int
+        Sorted list of cluster IDs that are both good and stable.
+    """
+    BIN_SEC = 0.01  # 10 ms bins, matching MATLAB
+    # Window sizes in bins: 20 min, 10 min, 5 min
+    WIN_20 = int(20 * 60 / BIN_SEC)  # 120 000
+    WIN_10 = int(10 * 60 / BIN_SEC)  #  60 000
+    WIN_5  = int( 5 * 60 / BIN_SEC)  #  30 000
+
+    # Recording duration = latest spike across ALL clusters
+    max_t = max(
+        (c.spike_times[-1] if len(c.spike_times) > 0 else 0)
+        for c in clusters
+    )
+    rec_dur = max_t if max_t > 0 else 1.0
+
+    good_set = set(good_cluster_ids)
+    stable_ids: list[int] = []
+
+    for c in clusters:
+        if c.cluster_id not in good_set:
+            continue
+        sp = c.spike_times
+        if len(sp) < 2:
+            continue
+
+        avg_fr = len(sp) / rec_dur
+        if avg_fr < 0.5:
+            continue
+
+        # ── Firing-rate stability ────────────────────────────
+        n_bins = int(np.ceil(rec_dur / BIN_SEC))
+        counts, _ = np.histogram(sp, bins=n_bins, range=(0, rec_dur))
+        fr = counts.astype(np.float64) / BIN_SEC
+
+        # movmean matching MATLAB's default 'shrink' endpoint behavior:
+        # at the edges the window shrinks so only available samples are used.
+        if n_bins >= WIN_5:  # need at least a 5-min recording
+            fr_20 = _movmean(fr, min(WIN_20, n_bins))
+            fr_10 = _movmean(fr, min(WIN_10, n_bins))
+            fr_5  = _movmean(fr, min(WIN_5,  n_bins))
+
+            if fr_20.min() < 0.3 * avg_fr:
+                continue
+            if fr_10.min() < 0.2 * avg_fr:
+                continue
+            if fr_5.min() < 0.1 * avg_fr:
+                continue
+
+        # ── ISI quality ──────────────────────────────────────
+        isi = np.diff(sp)
+        # 50 bins from 0-50 ms (edges: 0, 0.001, ..., 0.050)
+        isi_counts, _ = np.histogram(isi, bins=np.arange(0, 0.051, 0.001))
+
+        # Peak among first 5 bins must be at >= 2 ms
+        # (MATLAB 1-indexed > 2 <-> Python 0-indexed >= 2)
+        first5 = isi_counts[:5]
+        if first5.max() == 0:
+            continue
+        peak_positions = np.where(first5 == first5.max())[0]
+        if peak_positions.min() < 2:
+            continue
+
+        # Smoothness: tallest bin < 4x second-tallest (all 50 bins)
+        top2 = np.sort(isi_counts)[-2:]  # [second, first]
+        if top2[0] == 0:  # only one non-zero bin -> not smooth
+            continue
+        if top2[1] >= 4 * top2[0]:
+            continue
+
+        stable_ids.append(c.cluster_id)
+
+    return sorted(stable_ids)
 
 
 if __name__ == "__main__":

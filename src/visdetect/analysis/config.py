@@ -169,6 +169,14 @@ OUTCOME_COLORS: Dict[str, str] = {
 }
 
 # =====================================================================
+# FA subtype colors (Stimulus-driven vs Impulsive false alarms)
+# =====================================================================
+FA_SUBTYPE_COLORS: Dict[str, str] = {
+    "Stimulus-driven": "#e74c3c",
+    "Impulsive":       "#3498db",
+}
+
+# =====================================================================
 # Change-size groupings (derived from constants)
 # =====================================================================
 CHANGE_SIZES: List[float]  = sorted(ALL_GO_CHANGE_SIZES)   # [1.25, 1.35, 1.5, 2.0, 4.0]

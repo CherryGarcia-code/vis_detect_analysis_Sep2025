@@ -33,30 +33,12 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from scipy.ndimage import uniform_filter1d
 from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-# Import session module directly to avoid heavy transitive deps
-# (visdetect/__init__ → core/__init__ → qc → align → h5py).
-import types
-import importlib.util
-_spec = importlib.util.spec_from_file_location(
-    "visdetect.core.session",
-    REPO_ROOT / "src" / "visdetect" / "core" / "session.py",
-)
-_session_mod = importlib.util.module_from_spec(_spec)
-# Register in sys.modules so pickle can resolve the class paths
-sys.modules.setdefault("visdetect", types.ModuleType("visdetect"))
-sys.modules.setdefault("visdetect.core", types.ModuleType("visdetect.core"))
-sys.modules["visdetect.core.session"] = _session_mod
-_spec.loader.exec_module(_session_mod)
-Session = _session_mod.Session
-Cluster = _session_mod.Cluster
-load_session = _session_mod.load_session
-save_session = _session_mod.save_session
+from visdetect.core.session import Session, Cluster, load_session, save_session
 
 # ── Constants ─────────────────────────────────────────────────────────
 SUBJECT = "BG_046"
@@ -197,88 +179,10 @@ def load_shank_spikes(session_name, shank_id, registry_df=None):
     }
 
 
-# ── Stability filter (port of find_good_stable_units_PaperVersion.m) ──
-
-def find_good_stable_units(clusters, good_cluster_ids):
-    """Keep only stable units from KS4 good units.
-
-    Python port of find_good_stable_units_PaperVersion.m
-    (Khilkevich & Lohse 2024 criteria):
-      - Average firing rate >= 0.5 Hz
-      - Rate in 20 / 10 / 5-min sliding window never drops below
-        30% / 20% / 10% of the session average
-      - ISI distribution peak in first 5 ms is at >= 2 ms
-      - ISI distribution is smooth (tallest bin < 4x second-tallest)
-    """
-    BIN_SEC = 0.01  # 10 ms bins, matching MATLAB
-    # Window sizes in bins: 20 min, 10 min, 5 min
-    WIN_20 = int(20 * 60 / BIN_SEC)  # 120 000
-    WIN_10 = int(10 * 60 / BIN_SEC)  #  60 000
-    WIN_5  = int( 5 * 60 / BIN_SEC)  #  30 000
-
-    # Recording duration = latest spike across ALL clusters
-    max_t = max(
-        (c.spike_times[-1] if len(c.spike_times) > 0 else 0)
-        for c in clusters
-    )
-    rec_dur = max_t if max_t > 0 else 1.0
-
-    good_set = set(good_cluster_ids)
-    stable_ids = []
-
-    for c in clusters:
-        if c.cluster_id not in good_set:
-            continue
-        sp = c.spike_times
-        if len(sp) < 2:
-            continue
-
-        avg_fr = len(sp) / rec_dur
-        if avg_fr < 0.5:
-            continue
-
-        # ── Firing-rate stability ────────────────────────────
-        n_bins = int(np.ceil(rec_dur / BIN_SEC))
-        counts, _ = np.histogram(sp, bins=n_bins, range=(0, rec_dur))
-        fr = counts.astype(np.float64) / BIN_SEC
-
-        # uniform_filter1d with mode='nearest' ≈ MATLAB movmean
-        if n_bins >= WIN_5:  # need at least a 5-min recording
-            fr_20 = uniform_filter1d(fr, size=min(WIN_20, n_bins), mode="nearest")
-            fr_10 = uniform_filter1d(fr, size=min(WIN_10, n_bins), mode="nearest")
-            fr_5  = uniform_filter1d(fr, size=min(WIN_5,  n_bins), mode="nearest")
-
-            if fr_20.min() < 0.3 * avg_fr:
-                continue
-            if fr_10.min() < 0.2 * avg_fr:
-                continue
-            if fr_5.min() < 0.1 * avg_fr:
-                continue
-
-        # ── ISI quality ──────────────────────────────────────
-        isi = np.diff(sp)
-        # 50 bins from 0-50 ms (edges: 0, 0.001, ..., 0.050)
-        isi_counts, _ = np.histogram(isi, bins=np.arange(0, 0.051, 0.001))
-
-        # Peak among first 5 bins must be at >= 2 ms
-        # (MATLAB 1-indexed > 2 ↔ Python 0-indexed >= 2)
-        first5 = isi_counts[:5]
-        if first5.max() == 0:
-            continue
-        peak_positions = np.where(first5 == first5.max())[0]
-        if peak_positions.min() < 2:
-            continue
-
-        # Smoothness: tallest bin < 4x second-tallest (all 50 bins)
-        top2 = np.sort(isi_counts)[-2:]  # [second, first]
-        if top2[0] == 0:  # only one non-zero bin -> not smooth
-            continue
-        if top2[1] >= 4 * top2[0]:
-            continue
-
-        stable_ids.append(c.cluster_id)
-
-    return sorted(stable_ids)
+# ── Stability filter ─────────────────────────────────────────────────
+# Imported from the library (canonical location).
+# Originally defined here, now lives in visdetect.core.qc.
+from visdetect.core.qc import find_good_stable_units
 
 
 # ── Session builder ──────────────────────────────────────────────────
@@ -416,6 +320,9 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
 
     # Discover concat-sort sessions
+    if not FINAL_OUTPUT.exists():
+        print(f"ERROR: {FINAL_OUTPUT} does not exist")
+        sys.exit(1)
     sessions = sorted(
         d.name
         for d in FINAL_OUTPUT.iterdir()
