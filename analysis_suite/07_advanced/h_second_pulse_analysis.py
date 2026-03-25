@@ -49,18 +49,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
-from scipy.stats import mannwhitneyu
-from scipy.ndimage import gaussian_filter1d
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-from config import CACHE_DIR, ROOT, SUBJECT
+from config import CACHE_DIR, ROOT, SUBJECT, FA_SUBTYPE_COLORS, TF_PULSE_WINDOW
 from loader import load_staging_manifest, load_session
-from utils import get_good_cluster_ids, compute_zscore_normalized
+from utils import get_good_cluster_ids, compute_zscore_normalized, smooth_psth
 from plotting import setup_style, save_figure
+from _fa_helpers import compute_timeresolved_auc, _find_clusters, grand_auc_cluster_test
 
 from visdetect.analysis.align import (
     align_spikes_to_events,
@@ -77,7 +76,7 @@ setup_style()
 warnings.filterwarnings("ignore")
 
 # ── Parameters ────────────────────────────────────────────────────────
-PULSE_WINDOW = (-0.4, 0.5)       # seconds relative to pulse onset
+PULSE_WINDOW = TF_PULSE_WINDOW   # combines TF_PULSE_PRE_WINDOW + TF_PULSE_POST_WINDOW
 BIN_SIZE = 0.010                  # 10 ms bins (finer for pulse-locked)
 SMOOTH_SIGMA_MS = 30.0            # Gaussian smoothing sigma (ms)
 ZSCORE_BASELINE = (-0.4, -0.05)  # pre-pulse baseline for z-score
@@ -143,92 +142,6 @@ def find_second_to_last_pulse(fast_times, baseline_on, lick_time):
     if n >= 2:
         return float(pulses_in_window[-2]), n
     return None, n
-
-
-# =====================================================================
-# Time-resolved AUC
-# =====================================================================
-def compute_timeresolved_auc(tensor_tf, tensor_imp):
-    """AUC at each time bin via Mann-Whitney U on population-mean FR."""
-    pop_tf = np.nanmean(tensor_tf, axis=2)    # (n_tf, n_bins)
-    pop_imp = np.nanmean(tensor_imp, axis=2)  # (n_imp, n_bins)
-    n_bins = pop_tf.shape[1]
-    auc = np.full(n_bins, np.nan)
-
-    for b in range(n_bins):
-        vals_tf = pop_tf[:, b]
-        vals_imp = pop_imp[:, b]
-        vals_tf = vals_tf[~np.isnan(vals_tf)]
-        vals_imp = vals_imp[~np.isnan(vals_imp)]
-        if len(vals_tf) < 5 or len(vals_imp) < 5:
-            continue
-        try:
-            U, _ = mannwhitneyu(vals_tf, vals_imp, alternative="two-sided")
-            auc[b] = U / (len(vals_tf) * len(vals_imp))
-        except ValueError:
-            pass
-    return auc
-
-
-# =====================================================================
-# Cluster-based permutation test
-# =====================================================================
-def _find_clusters(vals, thresh):
-    above = np.abs(vals) > thresh
-    clusters = []
-    in_cluster = False
-    start = 0
-    for i in range(len(above)):
-        if above[i] and not in_cluster:
-            in_cluster = True
-            start = i
-        elif not above[i] and in_cluster:
-            clusters.append((start, i))
-            in_cluster = False
-    if in_cluster:
-        clusters.append((start, len(above)))
-    return clusters
-
-
-def grand_auc_cluster_test(auc_arr, n_perm=N_PERM, cluster_alpha=CLUSTER_P_THRESH):
-    """Cluster-based permutation test on grand-average AUC."""
-    n_sess, n_bins = auc_arr.shape
-    dev = auc_arr - 0.5
-    mean_dev = np.nanmean(dev, axis=0)
-    se = np.nanstd(dev, axis=0) / np.sqrt(n_sess)
-    se[se == 0] = 1e-10
-    t_obs = mean_dev / se
-
-    thresh = 2.0
-    obs_clusters = _find_clusters(t_obs, thresh)
-    obs_cluster_stats = [np.sum(np.abs(t_obs[s:e])) for s, e in obs_clusters]
-
-    max_cluster_null = np.zeros(n_perm)
-    rng = np.random.default_rng(42)
-
-    for p in range(n_perm):
-        signs = rng.choice([-1, 1], size=n_sess)
-        perm_dev = dev * signs[:, None]
-        perm_mean = np.nanmean(perm_dev, axis=0)
-        perm_se = np.nanstd(perm_dev, axis=0) / np.sqrt(n_sess)
-        perm_se[perm_se == 0] = 1e-10
-        perm_t = perm_mean / perm_se
-        perm_clusters = _find_clusters(perm_t, thresh)
-        if perm_clusters:
-            max_cluster_null[p] = max(np.sum(np.abs(perm_t[s:e]))
-                                       for s, e in perm_clusters)
-
-    sig_mask = np.zeros(n_bins, dtype=bool)
-    p_clusters = []
-    for i, (s, e) in enumerate(obs_clusters):
-        stat = obs_cluster_stats[i]
-        p_val = (np.sum(max_cluster_null >= stat) + 1) / (n_perm + 1)
-        p_clusters.append((s, e, stat, p_val))
-        if p_val < cluster_alpha:
-            sig_mask[s:e] = True
-
-    mean_auc = np.nanmean(auc_arr, axis=0)
-    return mean_auc, sig_mask, p_clusters
 
 
 # =====================================================================
@@ -447,32 +360,46 @@ def compute_grand_average(all_summaries, group_name):
 
 
 def smooth(arr, sigma_ms=SMOOTH_SIGMA_MS):
-    sigma_bins = (sigma_ms / 1000.0) / BIN_SIZE
-    return gaussian_filter1d(arr, sigma=sigma_bins)
+    """Gaussian-smooth a 1D array (delegates to shared smooth_psth)."""
+    return smooth_psth(arr, BIN_SIZE, sigma_ms)
 
 
 # =====================================================================
 # Main
 # =====================================================================
+CLASSIFICATION_FILES = {
+    "original": "fa_subtype_classification.csv",
+    "circular_shuffle": "fa_classification_circular_shuffle.csv",
+    "matched_null": "fa_classification_matched_null.csv",
+}
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_workers", type=int, default=1,
                         help="Parallel workers (default: 1 = sequential)")
+    parser.add_argument("--classification", type=str, default="original",
+                        choices=list(CLASSIFICATION_FILES.keys()),
+                        help="Which FA classification to use (default: original)")
     args = parser.parse_args()
+
+    cls_name = args.classification
+    cls_suffix = "" if cls_name == "original" else f"_{cls_name}"
 
     print("=" * 60)
     print("[07h] 2nd-to-last TF pulse before FA lick")
-    print("       Neural divergence: TF-triggered vs Impulsive")
+    print(f"       Classification: {cls_name}")
     print("=" * 60)
 
     # Load FA subtype classification
-    fa_path = os.path.join(CACHE_DIR, "fa_subtype_classification.csv")
+    fa_path = os.path.join(CACHE_DIR, CLASSIFICATION_FILES[cls_name])
     if not os.path.exists(fa_path):
-        print("  ERROR: fa_subtype_classification.csv not found.")
-        print("  Run f_fa_subtype_lick_triggered_tf.py first.")
+        print(f"  ERROR: {CLASSIFICATION_FILES[cls_name]} not found.")
+        print("  Run the corresponding classification script first.")
         return
     fa_df = pd.read_csv(fa_path)
-    print(f"  {len(fa_df)} classified FA trials loaded")
+    # Remap labels so downstream logic (which uses "TF-triggered") works unchanged
+    fa_df["fa_subtype"] = fa_df["fa_subtype"].replace("Stimulus-driven", "TF-triggered")
+    print(f"  {len(fa_df)} classified FA trials loaded ({cls_name})")
 
     # Check pulse cache
     if not os.path.isdir(PULSE_CACHE_DIR):
@@ -559,7 +486,7 @@ def main():
                     "n_imp": data["n_imp"],
                 })
     results_df = pd.DataFrame(rows)
-    cache_path = os.path.join(CACHE_DIR, "second_pulse_divergence.csv")
+    cache_path = os.path.join(CACHE_DIR, f"second_pulse_divergence{cls_suffix}.csv")
     results_df.to_csv(cache_path, index=False)
     print(f"  Saved: {cache_path}")
 
@@ -630,12 +557,14 @@ def main():
         sem_tf_sm = smooth(ga["sem_psth_tf"])
         sem_imp_sm = smooth(ga["sem_psth_imp"])
 
-        ax.plot(bc, psth_tf_sm, color="#e74c3c", lw=2, label="TF-triggered")
+        ax.plot(bc, psth_tf_sm, color=FA_SUBTYPE_COLORS["Stimulus-driven"],
+                lw=2, label="TF-triggered")
         ax.fill_between(bc, psth_tf_sm - sem_tf_sm, psth_tf_sm + sem_tf_sm,
-                        color="#e74c3c", alpha=0.2)
-        ax.plot(bc, psth_imp_sm, color="#3498db", lw=2, label="Impulsive")
+                        color=FA_SUBTYPE_COLORS["Stimulus-driven"], alpha=0.2)
+        ax.plot(bc, psth_imp_sm, color=FA_SUBTYPE_COLORS["Impulsive"],
+                lw=2, label="Impulsive")
         ax.fill_between(bc, psth_imp_sm - sem_imp_sm, psth_imp_sm + sem_imp_sm,
-                        color="#3498db", alpha=0.2)
+                        color=FA_SUBTYPE_COLORS["Impulsive"], alpha=0.2)
 
         ax.axvline(0, color="k", ls="--", lw=1, alpha=0.5, label="Pulse onset")
 
@@ -813,7 +742,7 @@ def main():
                         edgecolor="grey", alpha=0.8))
 
     # Save figure
-    save_figure(fig, "fig34_second_pulse_divergence", "07_advanced")
+    save_figure(fig, f"fig34_second_pulse_divergence{cls_suffix}", "07_advanced")
     plt.close(fig)
 
     # Save stats
@@ -821,7 +750,7 @@ def main():
         stats_df = pd.DataFrame(stats_rows)
         stats_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "figures", "07_advanced", "second_pulse_divergence_stats.csv",
+            "figures", "07_advanced", f"second_pulse_divergence{cls_suffix}_stats.csv",
         )
         stats_df.to_csv(stats_path, index=False)
         print(f"  Saved stats: {stats_path}")

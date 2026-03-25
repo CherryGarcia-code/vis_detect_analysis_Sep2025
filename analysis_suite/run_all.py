@@ -59,6 +59,8 @@ SCRIPTS = [
     ("07_advanced/f_fa_subtype_lick_triggered_tf.py","Fig32 FA Subtype Lick-Triggered TF"),
     ("07_advanced/g_fa_subtype_prediction.py",     "Fig33 FA Subtype Prediction"),
     ("07_advanced/h_second_pulse_analysis.py",     "Fig34 Second Pulse Analysis"),
+    ("07_advanced/i_fa_circular_shuffle_classification.py", "Fig32i FA Circular Shuffle"),
+    ("07_advanced/j_fa_matched_null_classification.py",     "Fig32j FA Matched Null"),
     # ── 08_tf_pulse (Figs 35-42) ──────────────────────────────────────
     ("08_tf_pulse/a_tf_responsiveness.py",         "Fig35 TF Responsiveness"),
     ("08_tf_pulse/b_tf_response_properties.py",    "Fig36 TF Response Properties"),
