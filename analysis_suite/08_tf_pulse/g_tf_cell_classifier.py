@@ -47,7 +47,11 @@ from config import (
     STAGE_ORDER, STAGE_COLORS, CELLTYPE_COLORS, CACHE_DIR,
     DEFAULT_Z_THRESH_TF,
 )
-from visdetect.analysis.constants import TF_PULSE_PRE_WINDOW, TF_PULSE_POST_WINDOW
+from visdetect.analysis.constants import (
+    TF_PULSE_PRE_WINDOW, TF_PULSE_POST_WINDOW,
+    TF_DETREND_BASELINE, TF_DETREND_POST_WINDOW,
+)
+from visdetect.analysis.tf_pulse import detrend_tf_traces
 from loader import (
     load_staging_manifest, load_session, load_waveform_labels,
     load_tf_traces_npz,
@@ -127,6 +131,14 @@ def _signed_peak(z_post):
     return float(z_post[idx])
 
 
+def _peak_latency_ms(z_post, t_post):
+    """Time (ms) of peak absolute z-score in the post window."""
+    if z_post.size == 0 or np.all(np.isnan(z_post)):
+        return np.nan
+    idx = np.nanargmax(np.abs(z_post))
+    return float(t_post[idx]) * 1000.0
+
+
 def _half_width_ms(z_trace, t_vec, post_win):
     """FWHM of the dominant response peak in ms."""
     post_mask = (t_vec >= post_win[0]) & (t_vec < post_win[1])
@@ -177,19 +189,29 @@ def _classify_single_unit(args):
     Returns dict of scalar metrics for one unit.
     """
     (cid, spike_times, fast_pulses, slow_pulses, t_vec, sigma_bins,
-     pre_win, post_win, n_perms, rec_duration, seed) = args
+     pre_win, post_win, n_perms, rec_duration, seed, do_detrend,
+     detrend_bl, detrend_pw) = args
 
     post_mask = (t_vec >= post_win[0]) & (t_vec < post_win[1])
     t_post = t_vec[post_mask]
     spike_times = np.sort(spike_times)
 
+    def _maybe_detrend(z_trace):
+        """Apply linear detrend if active, via library wrapper."""
+        if not do_detrend:
+            return z_trace
+        dt, _, _ = detrend_tf_traces(
+            t_vec, z_trace[np.newaxis, :],
+            baseline_window=detrend_bl, post_window=detrend_pw)
+        return dt[0]
+
     # ── Real PSTHs ───────────────────────────────────────────────
-    real_fast_z = _zscore_simple(
+    real_fast_z = _maybe_detrend(_zscore_simple(
         _vectorized_psth(spike_times, fast_pulses, t_vec, sigma_bins),
-        t_vec, pre_win)
-    real_slow_z = _zscore_simple(
+        t_vec, pre_win))
+    real_slow_z = _maybe_detrend(_zscore_simple(
         _vectorized_psth(spike_times, slow_pulses, t_vec, sigma_bins),
-        t_vec, pre_win)
+        t_vec, pre_win))
 
     fz_post = real_fast_z[post_mask]
     sz_post = real_slow_z[post_mask]
@@ -231,12 +253,12 @@ def _classify_single_unit(args):
         for pi in range(n_perms):
             shifted = np.sort((spike_times + shifts[pi]) % rec_duration)
 
-            sf_z = _zscore_simple(
+            sf_z = _maybe_detrend(_zscore_simple(
                 _vectorized_psth(shifted, fast_pulses, t_vec, sigma_bins),
-                t_vec, pre_win)
-            ss_z = _zscore_simple(
+                t_vec, pre_win))
+            ss_z = _maybe_detrend(_zscore_simple(
                 _vectorized_psth(shifted, slow_pulses, t_vec, sigma_bins),
-                t_vec, pre_win)
+                t_vec, pre_win))
 
             sf_post = sf_z[post_mask]
             ss_post = ss_z[post_mask]
@@ -255,10 +277,16 @@ def _classify_single_unit(args):
         p_peak_fast = p_peak_slow = np.nan
         p_auc_fast = p_auc_slow = np.nan
 
+    # Peak latencies
+    lat_fast = _peak_latency_ms(fz_post, t_post)
+    lat_slow = _peak_latency_ms(sz_post, t_post)
+
     return {
         "cluster_id": int(cid),
         "peak_fast": signed_peak_fast,
         "peak_slow": signed_peak_slow,
+        "peak_latency_fast_ms": lat_fast,
+        "peak_latency_slow_ms": lat_slow,
         "auc_fast": signed_auc_fast,
         "auc_slow": signed_auc_slow,
         "half_width_fast_ms": hw_fast,
@@ -273,7 +301,8 @@ def _classify_single_unit(args):
 
 # ── Reclassify helper (reads existing CSV, re-applies Phase 3+4) ─────
 
-def _reclassify(df, alpha, alpha_conj, z_thresh, has_perm):
+def _reclassify(df, alpha, alpha_conj, z_thresh, has_perm,
+                skip_trend_filter=False):
     """Re-classify from existing CSV with new alpha/alpha_conj, regenerate figure."""
     # Phase 3: Classification
     print("\n-- Phase 3: Classification --")
@@ -378,12 +407,15 @@ def _reclassify(df, alpha, alpha_conj, z_thresh, has_perm):
         trend_ratios[i] = abs(trend_at_250ms) / max(actual_peak, 0.01)
 
     df["trend_ratio"] = trend_ratios
-    trend_flagged = (df["tier"] != TIER_NONE) & (df["trend_ratio"] > TREND_RATIO_THRESH)
-    n_trend = int(trend_flagged.sum())
-    if n_trend > 0:
-        df.loc[trend_flagged, "tier"] = TIER_NONE
-        df.loc[trend_flagged, "sub_type"] = "Trend-excluded"
-        print(f"  Trend filter: {n_trend} units excluded (trend_ratio > {TREND_RATIO_THRESH})")
+    if skip_trend_filter:
+        print("  Trend filter: SKIPPED (detrend mode — linear drift already removed)")
+    else:
+        trend_flagged = (df["tier"] != TIER_NONE) & (df["trend_ratio"] > TREND_RATIO_THRESH)
+        n_trend = int(trend_flagged.sum())
+        if n_trend > 0:
+            df.loc[trend_flagged, "tier"] = TIER_NONE
+            df.loc[trend_flagged, "sub_type"] = "Trend-excluded"
+            print(f"  Trend filter: {n_trend} units excluded (trend_ratio > {TREND_RATIO_THRESH})")
 
     # Summary
     print(f"\n  {'Tier':<28s}  {'N':>5s}  {'%':>6s}")
@@ -405,7 +437,8 @@ def _reclassify(df, alpha, alpha_conj, z_thresh, has_perm):
         nr = int((sub["tier"] != TIER_NONE).sum())
         print(f"    {stg}: {nr}/{len(sub)} ({100*nr/len(sub):.1f}%)" if len(sub) else f"    {stg}: 0/0")
 
-    csv_path = os.path.join(CACHE_DIR, "tf_cell_classification.csv")
+    suffix = "_detrended" if skip_trend_filter else ""
+    csv_path = os.path.join(CACHE_DIR, f"tf_cell_classification{suffix}.csv")
     df.to_csv(csv_path, index=False)
     print(f"\n  Saved: {csv_path}")
 
@@ -458,12 +491,14 @@ def _reclassify(df, alpha, alpha_conj, z_thresh, has_perm):
         f"Permutation (perm-tested={n_perms_label}), alpha={alpha}, alpha_conj={alpha_conj}"
         if has_perm else f"|z| >= {z_thresh}"
     )
+    detrend_tag = "  [DETRENDED]" if skip_trend_filter else ""
     fig.suptitle(
-        f"TF Cell Classification - Medial Striatum  ({method_label})\n"
+        f"TF Cell Classification - Medial Striatum{detrend_tag}  ({method_label})\n"
         "Baseline TF pulses  |  Khilkevich & Lohse, Nature 2024",
         fontsize=13, fontweight="bold", y=0.99,
     )
-    save_figure(fig, "fig41_tf_cell_classification", "08_tf_pulse")
+    fig_suffix = "_detrended" if skip_trend_filter else ""
+    save_figure(fig, f"fig41_tf_cell_classification{fig_suffix}", "08_tf_pulse")
     print("  Done.")
 
 
@@ -488,6 +523,9 @@ def main():
                              "(Splitter/Omni). Default: 5*alpha.")
     parser.add_argument("--reclassify", action="store_true",
                         help="Re-classify from existing CSV (skip Phase 1+2)")
+    parser.add_argument("--detrend", action="store_true",
+                        help="Apply linear detrending to NPZ traces before "
+                             "classification. Output: tf_cell_classification_detrended.csv")
     args = parser.parse_args()
 
     n_perms = 0 if args.no_perm else args.n_perms
@@ -495,10 +533,20 @@ def main():
     alpha_conj = args.alpha_conj if args.alpha_conj is not None else min(10 * alpha, 0.10)
     z_thresh = DEFAULT_Z_THRESH_TF
     n_workers = args.n_workers or min(os.cpu_count() or 1, 8)
+    do_detrend = args.detrend
+
+    # When detrending, narrow peak measurement window to match detrend extrapolation
+    if do_detrend:
+        post_win_eff = TF_DETREND_POST_WINDOW
+        print("  [DETREND] POST_WIN narrowed to "
+              f"{TF_DETREND_POST_WINDOW} (from {TF_PULSE_POST_WINDOW})")
+    else:
+        post_win_eff = TF_PULSE_POST_WINDOW
 
     # ── Reclassify mode: re-apply Phase 3+4 from existing CSV ────
     if args.reclassify:
-        csv_path = os.path.join(CACHE_DIR, "tf_cell_classification.csv")
+        suffix = "_detrended" if do_detrend else ""
+        csv_path = os.path.join(CACHE_DIR, f"tf_cell_classification{suffix}.csv")
         if not os.path.exists(csv_path):
             print(f"ERROR: {csv_path} not found. Run without --reclassify first.")
             sys.exit(1)
@@ -509,12 +557,14 @@ def main():
         print(f"[08g] TF Cell Reclassification  [from existing CSV]")
         print(f"       alpha={alpha}  alpha_conj={alpha_conj}  perm_tested={n_perms_label}")
         print("=" * 70)
-        _reclassify(df, alpha, alpha_conj, z_thresh, has_perm)
+        _reclassify(df, alpha, alpha_conj, z_thresh, has_perm,
+                    skip_trend_filter=do_detrend)
         return
 
+    detrend_label = " +DETREND" if do_detrend else ""
     mode = "permutation" if n_perms > 0 else "threshold"
     print("=" * 70)
-    print(f"[08g] TF Cell Classification  [{mode}]")
+    print(f"[08g] TF Cell Classification  [{mode}{detrend_label}]")
     print(f"       N_perms={n_perms}  alpha={alpha}  alpha_conj={alpha_conj}  workers={n_workers}")
     print("=" * 70)
 
@@ -547,20 +597,49 @@ def main():
             continue
 
         t_vec_npz = npz["t_vec"]
-        post_mask_npz = (t_vec_npz >= POST_WIN[0]) & (t_vec_npz < POST_WIN[1])
+        post_mask_npz = (t_vec_npz >= post_win_eff[0]) & (t_vec_npz < post_win_eff[1])
         t_post_npz = t_vec_npz[post_mask_npz]
+
+        # Optionally detrend full session traces (2D)
+        if do_detrend:
+            fast_z_all, _, _ = detrend_tf_traces(
+                t_vec_npz, npz["fast_z"],
+                baseline_window=TF_DETREND_BASELINE,
+                post_window=TF_DETREND_POST_WINDOW)
+            slow_z_all, _, _ = detrend_tf_traces(
+                t_vec_npz, npz["slow_z"],
+                baseline_window=TF_DETREND_BASELINE,
+                post_window=TF_DETREND_POST_WINDOW)
+        else:
+            fast_z_all = npz["fast_z"]
+            slow_z_all = npz["slow_z"]
 
         for i, cid in enumerate(npz["cluster_ids"]):
             cid = int(cid)
-            z_abs = max(
-                abs(npz["z_max_fast"][i]), abs(npz["z_min_fast"][i]),
-                abs(npz["z_max_slow"][i]), abs(npz["z_min_slow"][i]),
-            )
 
-            fz = npz["fast_z"][i]
-            sz = npz["slow_z"][i]
+            fz = fast_z_all[i]
+            sz = slow_z_all[i]
             fz_post = fz[post_mask_npz] if fz.size else np.array([])
             sz_post = sz[post_mask_npz] if sz.size else np.array([])
+
+            # z_abs_max: from detrended traces when active, else from NPZ scalars
+            if do_detrend:
+                z_abs = max(
+                    np.nanmax(np.abs(fz_post)) if fz_post.size else 0.0,
+                    np.nanmax(np.abs(sz_post)) if sz_post.size else 0.0,
+                )
+            else:
+                z_abs = max(
+                    abs(npz["z_max_fast"][i]), abs(npz["z_min_fast"][i]),
+                    abs(npz["z_max_slow"][i]), abs(npz["z_min_slow"][i]),
+                )
+
+            pk_fast = _signed_peak(fz_post)
+            pk_slow = _signed_peak(sz_post)
+            lat_fast = _peak_latency_ms(fz_post, t_post_npz)
+            lat_slow = _peak_latency_ms(sz_post, t_post_npz)
+            # Dominant-direction latency (whichever peak is larger)
+            lat_dom = lat_fast if abs(pk_fast) >= abs(pk_slow) else lat_slow
 
             unit = {
                 "session_name": sname,
@@ -569,12 +648,16 @@ def main():
                 "session_idx": sidx,
                 "cell_type": ct_lookup.get((sname, cid), "Unknown"),
                 "z_abs_max_npz": z_abs,
-                "peak_fast": _signed_peak(fz_post),
-                "peak_slow": _signed_peak(sz_post),
+                "peak_z_abs": z_abs,
+                "peak_fast": pk_fast,
+                "peak_slow": pk_slow,
+                "peak_latency_fast_ms": lat_fast,
+                "peak_latency_slow_ms": lat_slow,
+                "peak_latency_ms": lat_dom,
                 "auc_fast": float(_trapezoid(fz_post, t_post_npz)) if fz_post.size else 0.0,
                 "auc_slow": float(_trapezoid(sz_post, t_post_npz)) if sz_post.size else 0.0,
-                "half_width_fast_ms": _half_width_ms(fz, t_vec_npz, POST_WIN),
-                "half_width_slow_ms": _half_width_ms(sz, t_vec_npz, POST_WIN),
+                "half_width_fast_ms": _half_width_ms(fz, t_vec_npz, post_win_eff),
+                "half_width_slow_ms": _half_width_ms(sz, t_vec_npz, post_win_eff),
                 "mirror_score": (
                     float(np.corrcoef(fz_post, -sz_post)[0, 1])
                     if fz_post.size > 5 and np.nanvar(fz_post) > 0 and np.nanvar(sz_post) > 0
@@ -610,7 +693,7 @@ def main():
     if n_perms > 0 and n_candidates > 0:
         print(f"\n-- Phase 2: Permutation testing ({n_perms} permutations) --")
         cfg = TFRespPulseConfig()
-        t_vec = np.arange(PRE_WIN[0], POST_WIN[1], DT, dtype=float)
+        t_vec = np.arange(PRE_WIN[0], post_win_eff[1], DT, dtype=float)
         sigma_bins = (SIGMA_MS / 1000.0) / DT
 
         pbar = tqdm(total=n_candidates, desc="Permutation tests")
@@ -659,8 +742,9 @@ def main():
                 seed = hash((sname, cid)) % (2**32)
                 worker_args.append((
                     cid, spike_dict[cid], fast_times, slow_times,
-                    t_vec, sigma_bins, PRE_WIN, POST_WIN,
+                    t_vec, sigma_bins, PRE_WIN, post_win_eff,
                     n_perms, rec_duration, seed,
+                    do_detrend, TF_DETREND_BASELINE, TF_DETREND_POST_WINDOW,
                 ))
 
             if worker_args:
@@ -680,6 +764,13 @@ def main():
                                     if key != "cluster_id":
                                         all_units[ui][key] = result[key]
                                 all_units[ui]["permutation_tested"] = True
+                                # Update dominant-direction latency
+                                u = all_units[ui]
+                                u["peak_latency_ms"] = (
+                                    u["peak_latency_fast_ms"]
+                                    if abs(u["peak_fast"]) >= abs(u["peak_slow"])
+                                    else u["peak_latency_slow_ms"]
+                                )
                         except Exception as e:
                             print(f"    Warning: {sname}/{cid} failed: {e}")
                         pbar.update(1)
@@ -759,7 +850,8 @@ def main():
         print(f"    {stg}: {nr}/{len(sub)} ({100*nr/len(sub):.1f}%)" if len(sub) else f"    {stg}: 0/0")
 
     # Save CSV
-    csv_path = os.path.join(CACHE_DIR, "tf_cell_classification.csv")
+    suffix = "_detrended" if do_detrend else ""
+    csv_path = os.path.join(CACHE_DIR, f"tf_cell_classification{suffix}.csv")
     df.to_csv(csv_path, index=False)
     print(f"\n  Saved: {csv_path}")
 
@@ -821,12 +913,14 @@ def main():
         f"Permutation N={n_perms}, alpha={alpha}, alpha_conj={alpha_conj}"
         if n_perms > 0 else f"|z| >= {z_thresh}"
     )
+    detrend_tag = "  [DETRENDED]" if do_detrend else ""
     fig.suptitle(
-        f"TF Cell Classification – Medial Striatum  ({method_label})\n"
+        f"TF Cell Classification – Medial Striatum{detrend_tag}  ({method_label})\n"
         "Baseline TF pulses  |  Khilkevich & Lohse, Nature 2024",
         fontsize=14, fontweight="bold", y=0.98,
     )
-    save_figure(fig, "fig41_tf_cell_classification", "08_tf_pulse")
+    fig_suffix = "_detrended" if do_detrend else ""
+    save_figure(fig, f"fig41_tf_cell_classification{fig_suffix}", "08_tf_pulse")
     print("  Done.")
 
 

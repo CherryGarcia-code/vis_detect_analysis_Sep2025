@@ -1,21 +1,13 @@
-"""Fig 14: Population heatmap — PSTH heatmaps sorted by peak latency.
+"""Fig 14b: Population heatmap — sorted by DIP (max suppression) latency.
 
-Extended version with behavioral FA alignment panels to disambiguate
-sensory vs motor origins of the post-activation "dip".
+Mirrors Fig 14 exactly but sorts all heatmaps by the time of the
+deepest negative deflection (dip) instead of peak activation.
+Reveals the structure of lick-inhibited / suppressed neurons.
 
-Layout (7 rows x 2 cols = 14 panels):
-  Row 1: A. Hit @ Change_ON (Hit sort),   B. Miss (Hit sort)
-  Row 2: C. Hit-Miss diff (Hit sort),     D. SDT FA (Hit sort)
-  Row 3: E. bFA @ put.Change (Hit sort),  F. bFA @ put.Change (FA sort)
-  Row 4: G. Hit (FA sort),                H. Hit-bFA diff (FA sort)
-  Row 5: I. Hit @ lick (Hit-lick sort),   J. bFA @ lick (FA-lick sort)
-  Row 6: K. Hit @ lick (FA-lick sort),    L. Hit-bFA @ lick diff (matched)
-  Row 7: M. Pop avg change-aligned,       N. Pop avg lick-aligned
+Same 7x2 layout as b_population_psth_heatmap.py.
+Hit-only baseline normalization throughout.
 
-Hit-only baseline normalization. Putative change time for FA trials
-computed as: corrected_lick_time - state_matched_avg_Hit_RT (HMM K=3).
-
-Saves: figures/03_population/population_heatmap_stats.csv
+Saves: figures/03_population/population_heatmap_dip_stats.csv
 """
 
 import os
@@ -53,11 +45,11 @@ setup_style()
 # ── Parameters ───────────────────────────────────────────────────────
 WINDOW = (-0.5, 1.0)
 LICK_WINDOW = (-0.5, 0.5)
-BIN_SIZE = 0.01          # finer binning for heatmaps
+BIN_SIZE = 0.01
 BASELINE_WIN = (-0.5, -0.05)
 MIN_UNITS = 5
-SIGMA_SMOOTH = 15.0      # ms
-FA_LICK_SHIFT = 0.2      # seconds, corrected RT shift
+SIGMA_SMOOTH = 15.0
+FA_LICK_SHIFT = 0.2
 LARGE_CHANGE_SIZES = {2.0, 4.0}
 
 
@@ -86,10 +78,7 @@ def _apply_zscore(tensor, mu, sigma):
 
 
 def _build_lick_aligned_tensor(sess, good_ids, event_times, window, bin_size):
-    """Build a population tensor aligned to arbitrary event times.
-
-    Returns (tensor, bin_centers) or (None, None) if < 3 valid events.
-    """
+    """Build a population tensor aligned to arbitrary event times."""
     event_times = [t for t in event_times if np.isfinite(t)]
     if len(event_times) < 3:
         return None, None
@@ -153,7 +142,8 @@ def _plot_heatmap(ax, mat, bc, n_units_label, vmax, title, xlabel,
         cmap=cmap, norm=norm, interpolation="none",
     )
     if event_line is not None:
-        ax.axvline(event_line, color="k", linewidth=0.8, linestyle="--", alpha=0.7)
+        ax.axvline(event_line, color="k", linewidth=0.8, linestyle="--",
+                   alpha=0.7)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(f"Units (n={n_units_label})")
     ax.set_title(title, fontsize=10)
@@ -161,25 +151,25 @@ def _plot_heatmap(ax, mat, bc, n_units_label, vmax, title, xlabel,
     return im
 
 
-def _sort_by_peak(mat, bc, post_onset=0.0):
-    """Sort matrix rows by peak latency in post-onset window.
+def _sort_by_dip(mat, bc, post_onset=0.0):
+    """Sort matrix rows by DIP (minimum z-score) latency in post-onset window.
 
-    Returns (sorted_mat, sort_order, peak_idx).
+    Returns (sorted_mat, sort_order, dip_idx).
     """
     post_mask = bc >= post_onset
     post_bc_idx = np.where(post_mask)[0]
     if len(post_bc_idx) > 0:
-        peak_idx = post_bc_idx[0] + np.argmax(mat[:, post_mask], axis=1)
+        dip_idx = post_bc_idx[0] + np.argmin(mat[:, post_mask], axis=1)
     else:
-        peak_idx = np.argmax(mat, axis=1)
-    sort_order = np.argsort(peak_idx)
-    return mat[sort_order], sort_order, peak_idx
+        dip_idx = np.argmin(mat, axis=1)
+    sort_order = np.argsort(dip_idx)
+    return mat[sort_order], sort_order, dip_idx
 
 
 # ── Main ─────────────────────────────────────────────────────────────
 
 def main():
-    print("[03b] Population PSTH heatmaps (extended with FA-sorted panels)...",
+    print("[03b-dip] Population PSTH heatmaps sorted by DIP latency...",
           flush=True)
     manifest = load_staging_manifest(qc_only=True)
     hmm_df = load_hmm_assignments()
@@ -188,12 +178,10 @@ def main():
         manifest["stage"] == "Expert"
     ]["session_name"].astype(int).tolist()
 
-    # Per-unit storage: Change_ON aligned
+    # Per-unit storage
     all_hit_psths = []
     all_miss_psths = []
     all_sdt_fa_psths = []
-
-    # Per-unit storage: lick aligned
     all_hit_lick_psths = []
     all_bfa_putchange_psths = []
     all_bfa_lick_psths = []
@@ -218,7 +206,6 @@ def main():
 
         trials = sess.trials
 
-        # ── Trial indices ────────────────────────────────────────────
         go_hit_idx = [
             i for i, t in enumerate(trials)
             if getattr(t, "trialoutcome", None) == "Hit"
@@ -239,7 +226,6 @@ def main():
             if getattr(t, "trialoutcome", None) == "FA"
         ]
 
-        # ── Change_ON-aligned tensors ────────────────────────────────
         hit_tensor, bc, _ = build_population_tensor(
             sess, good_ids, event_name="Change_ON",
             window=WINDOW, bin_size=BIN_SIZE,
@@ -256,7 +242,6 @@ def main():
             del sess; gc.collect()
             continue
 
-        # SDT FA tensor (catch-trial hit)
         has_sdt_fa = False
         sdt_fa_tensor = None
         if len(sdt_fa_idx) >= 3:
@@ -268,18 +253,16 @@ def main():
             if sdt_fa_tensor.shape[0] >= 3:
                 has_sdt_fa = True
 
-        # ── Z-score using Hit-only baseline ──────────────────────────
         mu, sigma = _compute_hit_baseline_stats(hit_tensor, bc, BASELINE_WIN)
 
         hit_z = _apply_zscore(hit_tensor, mu, sigma)
         miss_z = _apply_zscore(miss_tensor, mu, sigma)
         sdt_fa_z = _apply_zscore(sdt_fa_tensor, mu, sigma) if has_sdt_fa else None
 
-        hit_mean = np.nanmean(hit_z, axis=0)    # (n_bins, n_units)
+        hit_mean = np.nanmean(hit_z, axis=0)
         miss_mean = np.nanmean(miss_z, axis=0)
         sdt_fa_mean = np.nanmean(sdt_fa_z, axis=0) if has_sdt_fa else None
 
-        # ── Lick-aligned: Hit @ lick ─────────────────────────────────
         change_times = get_event_times_by_trial(sess, "Change_ON")
         hit_lick_times = []
         for i in go_hit_idx:
@@ -294,7 +277,6 @@ def main():
         if hit_lick_tensor is not None:
             hit_lick_z = _apply_zscore(hit_lick_tensor, mu, sigma)
 
-        # ── Behavioral FA: putative change & lick alignment ──────────
         baseline_times = get_event_times_by_trial(sess, "Baseline_ON")
         state_avg_rt, overall_rt = _get_state_matched_avg_rt(
             trials, hmm_df, sname)
@@ -332,10 +314,7 @@ def main():
         if bfa_lick_tensor is not None:
             bfa_lick_z = _apply_zscore(bfa_lick_tensor, mu, sigma)
 
-        # ── Collect per-unit PSTHs ───────────────────────────────────
         n_units_sess = hit_mean.shape[1]
-
-        # Trial-average lick tensors once (outside per-unit loop)
         hit_lick_mean = (np.nanmean(hit_lick_z, axis=0)
                          if hit_lick_z is not None else None)
         bfa_put_mean = (np.nanmean(bfa_putchange_z, axis=0)
@@ -402,7 +381,6 @@ def main():
     miss_mat = np.array(all_miss_psths)
     bc = bin_centers_ref
 
-    # Build optional matrices
     def _stack_optional(lst):
         valid = np.array([p is not None for p in lst])
         n = int(valid.sum())
@@ -417,52 +395,39 @@ def main():
     bfa_lick_mat, bfa_lick_valid, n_bfa_lick = _stack_optional(
         all_bfa_lick_psths)
 
-    # Lick bin centers
     if lick_bc_ref is None:
         n_lick_bins = int(round((LICK_WINDOW[1] - LICK_WINDOW[0]) / BIN_SIZE))
         lick_bc_ref = np.linspace(LICK_WINDOW[0] + BIN_SIZE / 2,
                                   LICK_WINDOW[1] - BIN_SIZE / 2, n_lick_bins)
     lbc = lick_bc_ref
 
-    # ── Hit-peak sort order (all units) ──────────────────────────────
-    hit_sorted, sort_hit, peak_idx_hit = _sort_by_peak(hit_mat, bc, 0.0)
+    # ── Hit-DIP sort order (all units) ───────────────────────────────
+    hit_sorted, sort_hit, dip_idx_hit = _sort_by_dip(hit_mat, bc, 0.0)
     miss_sorted = miss_mat[sort_hit]
     diff_sorted = hit_sorted - miss_sorted
 
     vmax_single = np.percentile(np.abs(hit_sorted), 97)
     vmax_diff = np.percentile(np.abs(diff_sorted), 97)
 
-    # ── Helper: extract subset for valid units, sorted ───────────────
-    def _extract_sorted_subset(primary_mat, valid_mask, other_mat,
-                               bc_for_sort, post_onset=0.0):
-        """Sort primary_mat by its own peak, return matched other_mat rows.
-
-        primary_mat: (n_valid, n_bins) — only valid units.
-        valid_mask: (n_total,) bool — which global indices have data.
-        other_mat: (n_total, n_bins) — all units (e.g. hit_mat).
-        Returns: (primary_sorted, other_sorted, sort_order, n) or Nones.
-        """
+    # ── Helper: extract subset for valid units, dip-sorted ───────────
+    def _extract_dip_sorted_subset(primary_mat, valid_mask, other_mat,
+                                   bc_for_sort, post_onset=0.0):
         if primary_mat is None or primary_mat.shape[0] < 3:
             return None, None, None, 0
-
-        # Sort primary by its peak
-        prim_sorted, prim_sort, _ = _sort_by_peak(
+        prim_sorted, prim_sort, _ = _sort_by_dip(
             primary_mat, bc_for_sort, post_onset)
-
-        # Map valid positions back to global indices
-        global_indices = np.where(valid_mask)[0]  # global idx of valid units
+        global_indices = np.where(valid_mask)[0]
         sorted_global = global_indices[prim_sort]
         other_sorted = other_mat[sorted_global]
-
         return prim_sorted, other_sorted, prim_sort, prim_sorted.shape[0]
 
-    # ── FA change-aligned sort ───────────────────────────────────────
+    # FA change-aligned dip sort
     bfa_put_fa_sorted, hit_fa_sorted, _, n_fa_change = \
-        _extract_sorted_subset(bfa_put_mat, bfa_put_valid, hit_mat, bc, 0.0)
+        _extract_dip_sorted_subset(
+            bfa_put_mat, bfa_put_valid, hit_mat, bc, 0.0)
 
-    # bFA @ putative change under Hit sort
-    def _sort_optional_by_hit(mat, valid_mask):
-        """Sort optional matrix by global Hit sort order."""
+    # bFA @ putative change under Hit-dip sort
+    def _sort_optional_by_hit_dip(mat, valid_mask):
         if mat is None:
             return None, 0
         rows = []
@@ -474,27 +439,22 @@ def main():
             return np.array(rows), len(rows)
         return None, 0
 
-    bfa_put_hit_sorted, n_bfa_put_hs = _sort_optional_by_hit(
+    bfa_put_hit_sorted, n_bfa_put_hs = _sort_optional_by_hit_dip(
         bfa_put_mat, bfa_put_valid)
-    sdt_fa_hit_sorted, n_sdt_hs = _sort_optional_by_hit(
+    sdt_fa_hit_sorted, n_sdt_hs = _sort_optional_by_hit_dip(
         sdt_fa_mat, sdt_fa_valid)
 
-    # ── FA lick-aligned sort ─────────────────────────────────────────
-    # For lick panels, we need units with BOTH Hit-lick and bFA-lick
+    # ── FA lick-aligned dip sort ─────────────────────────────────────
     both_lick_valid = hit_lick_valid & bfa_lick_valid
     n_both_lick = int(both_lick_valid.sum())
 
-    # bFA @ lick sorted by FA-lick peak
-    bfa_lick_fa_sorted, hit_lick_fa_sorted, _, n_fa_lick = \
-        _extract_sorted_subset(bfa_lick_mat, bfa_lick_valid, hit_mat, lbc,
-                               -0.1)
-    # Note: hit_lick_fa_sorted uses hit_mat (change-aligned), not
-    # hit_lick_mat. We need hit_lick traces for FA-lick-valid units.
-    # Recompute with hit_lick_mat for matched comparison:
-    if bfa_lick_mat is not None and hit_lick_mat is not None and n_both_lick > 0:
-        # Extract units present in both conditions
+    bfa_lick_fa_sorted, _, _, n_fa_lick = \
+        _extract_dip_sorted_subset(
+            bfa_lick_mat, bfa_lick_valid, hit_mat, lbc, -0.1)
+
+    if (bfa_lick_mat is not None and hit_lick_mat is not None
+            and n_both_lick > 0):
         both_global = np.where(both_lick_valid)[0]
-        # Map to positions in each stacked matrix
         hl_positions = np.array([int(hit_lick_valid[:g].sum())
                                  for g in both_global])
         fl_positions = np.array([int(bfa_lick_valid[:g].sum())
@@ -502,37 +462,35 @@ def main():
         bfa_lick_both = bfa_lick_mat[fl_positions]
         hit_lick_both = hit_lick_mat[hl_positions]
 
-        # Sort by FA-lick peak
-        bfa_lick_both_sorted, fa_lick_sort, _ = _sort_by_peak(
+        # Sort by FA-lick DIP
+        bfa_lick_both_sorted, fa_lick_sort, _ = _sort_by_dip(
             bfa_lick_both, lbc, -0.1)
         hit_lick_fa_sorted_matched = hit_lick_both[fa_lick_sort]
 
-        # Sort by Hit-lick peak
-        hit_lick_both_sorted, hit_lick_sort, _ = _sort_by_peak(
+        # Sort by Hit-lick DIP
+        hit_lick_both_sorted, hit_lick_sort, _ = _sort_by_dip(
             hit_lick_both, lbc, -0.1)
-        bfa_lick_hit_sorted_matched = bfa_lick_both[hit_lick_sort]
 
-        # Diff (matched units, FA-lick sort)
+        # Diff (matched units, FA-lick dip sort)
         lick_diff = hit_lick_fa_sorted_matched - bfa_lick_both_sorted
     else:
         bfa_lick_both_sorted = None
         hit_lick_fa_sorted_matched = None
         hit_lick_both_sorted = None
-        bfa_lick_hit_sorted_matched = None
         lick_diff = None
 
-    # Hit @ lick, sorted by Hit-lick peak (all units with Hit-lick data)
+    # Hit @ lick, sorted by Hit-lick DIP
     hit_lick_sorted_own = None
     n_hlick_own = 0
     if hit_lick_mat is not None and hit_lick_mat.shape[0] >= 3:
-        hit_lick_sorted_own, _, _ = _sort_by_peak(hit_lick_mat, lbc, -0.1)
+        hit_lick_sorted_own, _, _ = _sort_by_dip(hit_lick_mat, lbc, -0.1)
         n_hlick_own = hit_lick_sorted_own.shape[0]
 
-    # bFA @ lick, sorted by FA-lick peak (all units with bFA-lick data)
+    # bFA @ lick, sorted by FA-lick DIP
     bfa_lick_sorted_own = None
     n_bfa_lick_own = 0
     if bfa_lick_mat is not None and bfa_lick_mat.shape[0] >= 3:
-        bfa_lick_sorted_own, _, _ = _sort_by_peak(bfa_lick_mat, lbc, -0.1)
+        bfa_lick_sorted_own, _, _ = _sort_by_dip(bfa_lick_mat, lbc, -0.1)
         n_bfa_lick_own = bfa_lick_sorted_own.shape[0]
 
     print("  Building figure...", flush=True)
@@ -541,37 +499,40 @@ def main():
     fig = plt.figure(figsize=(24, 49))
     gs = gridspec.GridSpec(7, 2, hspace=0.35, wspace=0.3)
 
-    # Row 1: Hit + Miss (Hit sort)
+    fig.suptitle("Population heatmaps sorted by DIP (max suppression) latency",
+                 fontsize=14, fontweight="bold", y=0.995)
+
+    # Row 1: Hit + Miss (Hit-dip sort)
     _plot_heatmap(fig.add_subplot(gs[0, 0]), hit_sorted, bc, n_units,
-                  vmax_single, "A. Hit @ Change_ON (Hit-peak sort)",
+                  vmax_single, "A. Hit @ Change_ON (Hit-dip sort)",
                   "Time from Change_ON (s)")
     _plot_heatmap(fig.add_subplot(gs[0, 1]), miss_sorted, bc, n_units,
-                  vmax_single, "B. Miss (Hit-peak sort)",
+                  vmax_single, "B. Miss (Hit-dip sort)",
                   "Time from Change_ON (s)")
 
-    # Row 2: Hit-Miss diff + SDT FA (Hit sort)
+    # Row 2: Hit-Miss diff + SDT FA (Hit-dip sort)
     _plot_heatmap(fig.add_subplot(gs[1, 0]), diff_sorted, bc, n_units,
-                  vmax_diff, "C. Hit \u2212 Miss diff (Hit-peak sort)",
+                  vmax_diff, "C. Hit \u2212 Miss diff (Hit-dip sort)",
                   "Time from Change_ON (s)", cmap="PiYG")
     ax_d = fig.add_subplot(gs[1, 1])
     if sdt_fa_hit_sorted is not None:
         vmax_sdt = np.percentile(np.abs(sdt_fa_hit_sorted), 97)
         _plot_heatmap(ax_d, sdt_fa_hit_sorted, bc, n_sdt_hs,
                       vmax_sdt,
-                      f"D. SDT FA / catch-trial lick ({n_sdt_hs} units)",
+                      f"D. SDT FA ({n_sdt_hs}u, Hit-dip sort)",
                       "Time from Change_ON (s)")
     else:
         ax_d.text(0.5, 0.5, "No SDT FA data",
                   transform=ax_d.transAxes, ha="center")
         ax_d.set_title("D. SDT FA (no data)")
 
-    # Row 3: bFA @ putative change — Hit-sort vs FA-sort
+    # Row 3: bFA @ putative change — Hit-dip vs FA-dip sort
     ax_e = fig.add_subplot(gs[2, 0])
     if bfa_put_hit_sorted is not None:
         vmax_bfa = np.percentile(np.abs(bfa_put_hit_sorted), 97)
         _plot_heatmap(ax_e, bfa_put_hit_sorted, bc, n_bfa_put_hs,
                       vmax_bfa,
-                      f"E. bFA @ put.Change (Hit-peak sort, {n_bfa_put_hs}u)",
+                      f"E. bFA @ put.Change (Hit-dip sort, {n_bfa_put_hs}u)",
                       "Time from putative Change_ON (s)")
     else:
         ax_e.text(0.5, 0.5, "No bFA data",
@@ -583,25 +544,25 @@ def main():
         vmax_bfa_fa = np.percentile(np.abs(bfa_put_fa_sorted), 97)
         _plot_heatmap(ax_f, bfa_put_fa_sorted, bc, n_fa_change,
                       vmax_bfa_fa,
-                      f"F. bFA @ put.Change (FA-peak sort, {n_fa_change}u)",
+                      f"F. bFA @ put.Change (FA-dip sort, {n_fa_change}u)",
                       "Time from putative Change_ON (s)")
     else:
         ax_f.text(0.5, 0.5, "No bFA data",
                   transform=ax_f.transAxes, ha="center")
         ax_f.set_title("F. bFA @ putative change (no data)")
 
-    # Row 4: Hit under FA-sort + Hit-bFA diff (FA-sort)
+    # Row 4: Hit under FA-dip sort + Hit-bFA diff (FA-dip sort)
     ax_g = fig.add_subplot(gs[3, 0])
     if hit_fa_sorted is not None:
         vmax_hfa = np.percentile(np.abs(hit_fa_sorted), 97)
         _plot_heatmap(ax_g, hit_fa_sorted, bc, n_fa_change,
                       vmax_hfa,
-                      f"G. Hit @ Change_ON (FA-peak sort, {n_fa_change}u)",
+                      f"G. Hit @ Change_ON (FA-dip sort, {n_fa_change}u)",
                       "Time from Change_ON (s)")
     else:
         ax_g.text(0.5, 0.5, "No bFA data",
                   transform=ax_g.transAxes, ha="center")
-        ax_g.set_title("G. Hit @ Change (FA sort, no data)")
+        ax_g.set_title("G. Hit @ Change (FA-dip sort, no data)")
 
     ax_h = fig.add_subplot(gs[3, 1])
     if hit_fa_sorted is not None and bfa_put_fa_sorted is not None:
@@ -609,20 +570,20 @@ def main():
         vmax_cd = np.percentile(np.abs(change_diff), 97)
         _plot_heatmap(ax_h, change_diff, bc, n_fa_change,
                       vmax_cd,
-                      f"H. Hit \u2212 bFA diff (FA-peak sort, {n_fa_change}u)",
+                      f"H. Hit \u2212 bFA diff (FA-dip sort, {n_fa_change}u)",
                       "Time (s)", cmap="PiYG")
     else:
         ax_h.text(0.5, 0.5, "Insufficient data",
                   transform=ax_h.transAxes, ha="center")
         ax_h.set_title("H. Hit \u2212 bFA diff (no data)")
 
-    # Row 5: Hit @ lick (own sort) + bFA @ lick (own sort)
+    # Row 5: Hit @ lick (own dip sort) + bFA @ lick (own dip sort)
     ax_i = fig.add_subplot(gs[4, 0])
     if hit_lick_sorted_own is not None:
         vmax_hl = np.percentile(np.abs(hit_lick_sorted_own), 97)
         _plot_heatmap(ax_i, hit_lick_sorted_own, lbc, n_hlick_own,
                       vmax_hl,
-                      f"I. Hit @ lick (Hit-lick sort, {n_hlick_own}u)",
+                      f"I. Hit @ lick (Hit-lick dip sort, {n_hlick_own}u)",
                       "Time from Hit lick (s)")
     else:
         ax_i.text(0.5, 0.5, "No Hit-lick data",
@@ -634,25 +595,25 @@ def main():
         vmax_fl = np.percentile(np.abs(bfa_lick_sorted_own), 97)
         _plot_heatmap(ax_j, bfa_lick_sorted_own, lbc, n_bfa_lick_own,
                       vmax_fl,
-                      f"J. bFA @ lick (FA-lick sort, {n_bfa_lick_own}u)",
+                      f"J. bFA @ lick (FA-lick dip sort, {n_bfa_lick_own}u)",
                       "Time from FA lick (s)")
     else:
         ax_j.text(0.5, 0.5, "No bFA-lick data",
                   transform=ax_j.transAxes, ha="center")
         ax_j.set_title("J. bFA @ lick (no data)")
 
-    # Row 6: Hit @ lick (FA-lick sort) + Hit-bFA @ lick diff (matched)
+    # Row 6: Hit @ lick (FA-lick dip sort) + Hit-bFA @ lick diff
     ax_k = fig.add_subplot(gs[5, 0])
     if hit_lick_fa_sorted_matched is not None:
         vmax_hfl = np.percentile(np.abs(hit_lick_fa_sorted_matched), 97)
         _plot_heatmap(ax_k, hit_lick_fa_sorted_matched, lbc, n_both_lick,
                       vmax_hfl,
-                      f"K. Hit @ lick (FA-lick sort, {n_both_lick}u)",
+                      f"K. Hit @ lick (FA-lick dip sort, {n_both_lick}u)",
                       "Time from lick (s)")
     else:
         ax_k.text(0.5, 0.5, "Insufficient matched data",
                   transform=ax_k.transAxes, ha="center")
-        ax_k.set_title("K. Hit @ lick (FA sort, no data)")
+        ax_k.set_title("K. Hit @ lick (FA dip sort, no data)")
 
     ax_l = fig.add_subplot(gs[5, 1])
     if lick_diff is not None:
@@ -666,7 +627,7 @@ def main():
                   transform=ax_l.transAxes, ha="center")
         ax_l.set_title("L. Hit \u2212 bFA @ lick (no data)")
 
-    # Row 7: Population averages
+    # Row 7: Population averages (same as peak version)
     ax_m = fig.add_subplot(gs[6, 0])
     hit_pop = np.nanmean(hit_mat, axis=0)
     hit_sem = np.nanstd(hit_mat, axis=0) / np.sqrt(n_units)
@@ -721,42 +682,34 @@ def main():
     post_mask = bc >= 0
     stats = []
 
-    diff_pop = hit_pop - miss_pop
-    post_diff = diff_pop[post_mask]
-    if len(post_diff) > 0:
-        peak_diff_time = bc[post_mask][np.argmax(np.abs(post_diff))]
-        peak_diff_val = post_diff[np.argmax(np.abs(post_diff))]
-        stats.append({"test": "peak_population_hit_miss_diff",
-                       "time": peak_diff_time, "value": peak_diff_val})
+    dip_times_hit = bc[dip_idx_hit[sort_hit]]
+    stats.append({"test": "hit_dip_latency_median",
+                   "value": float(np.median(dip_times_hit)),
+                   "iqr_low": float(np.percentile(dip_times_hit, 25)),
+                   "iqr_high": float(np.percentile(dip_times_hit, 75))})
 
-    resp_mask_bc = (bc >= 0) & (bc < 0.25)
-    resp_diff = np.nanmean(diff_sorted[:, resp_mask_bc], axis=1)
-    stats.append({"test": "frac_hit_preferring_response_window",
-                   "value": float(np.mean(resp_diff > 0)),
+    # Fraction of units with dip in post-change window
+    resp_mask_bc = (bc >= 0.1) & (bc < 0.5)
+    dip_vals = np.nanmin(hit_sorted[:, resp_mask_bc], axis=1)
+    stats.append({"test": "frac_units_suppressed_0.1-0.5s",
+                   "value": float(np.mean(dip_vals < -1.0)),
                    "n_units": n_units})
-
-    peak_times_hit = bc[peak_idx_hit[sort_hit]]
-    stats.append({"test": "hit_peak_latency_median",
-                   "value": float(np.median(peak_times_hit)),
-                   "iqr_low": float(np.percentile(peak_times_hit, 25)),
-                   "iqr_high": float(np.percentile(peak_times_hit, 75))})
 
     stats.append({"test": "n_units_total", "value": n_units})
     stats.append({"test": "n_bfa_putchange_units", "value": n_bfa_put})
     stats.append({"test": "n_bfa_lick_units", "value": n_bfa_lick})
     stats.append({"test": "n_hit_lick_units", "value": n_hit_lick})
     stats.append({"test": "n_both_lick_matched", "value": n_both_lick})
+    stats.append({"test": "sort_criterion", "value": "dip (argmin)"})
     stats.append({"test": "normalization", "value": "Hit-only baseline"})
-    stats.append({"test": "putative_change_method",
-                   "value": "corrected_lick - state_matched_avg_RT"})
 
     stats_df = pd.DataFrame(stats)
 
     # ── Save ──────────────────────────────────────────────────────────
-    save_figure(fig, "fig14_population_heatmap", "03_population")
+    save_figure(fig, "fig14b_population_heatmap_dip", "03_population")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "figures", "03_population", "population_heatmap_stats.csv"
+        "figures", "03_population", "population_heatmap_dip_stats.csv"
     )
     stats_df.to_csv(stats_path, index=False)
 

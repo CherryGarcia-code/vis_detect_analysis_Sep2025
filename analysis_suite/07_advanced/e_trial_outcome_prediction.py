@@ -67,7 +67,7 @@ from loader import (
     load_staging_manifest, load_session,
     load_hmm_assignments,
 )
-from utils import get_good_cluster_ids, build_population_tensor
+from visdetect.analysis.utils import get_good_cluster_ids, build_population_tensor
 from plotting import setup_style, save_figure, add_stage_background
 
 setup_style()

@@ -39,7 +39,7 @@ from loader import (
     load_staging_manifest, load_session, load_hmm_assignments,
     load_waveform_labels,
 )
-from utils import get_good_cluster_ids
+from visdetect.analysis.utils import get_good_cluster_ids
 from plotting import setup_style, save_figure
 
 from visdetect.analysis.align import align_spikes_to_events, get_event_times_by_trial

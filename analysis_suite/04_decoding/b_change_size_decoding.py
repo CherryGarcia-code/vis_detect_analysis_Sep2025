@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import confusion_matrix
 
 from config import (
@@ -37,12 +38,16 @@ from config import (
     CACHE_DIR,
 )
 from loader import load_staging_manifest, load_session
-from utils import get_good_cluster_ids, build_population_tensor
+from utils import (
+    get_good_cluster_ids, build_population_tensor,
+    compute_zscore_normalized
+)
 from plotting import setup_style, save_figure, add_stage_background
 
 setup_style()
 
 WINDOW = (-0.5, 1.0)
+BASELINE_WINDOW = (-0.5, -0.05)  # Shared baseline for normalization
 BIN_SIZE = 0.05
 MIN_UNITS = 5
 MIN_TRIALS_PER_CLASS = 8
@@ -55,18 +60,31 @@ def decode_change_size_session(sess, sname, stage, sidx):
     if len(good_ids) < MIN_UNITS:
         return None
 
-    # Get all Hit+Miss trials
+    # Pre-filter to go trials only (change_size > 1.01) — avoids loading
+    # unnecessary catch-trial data into the tensor.
+    trials = sess.trials
+    go_trial_indices = [
+        i for i, t in enumerate(trials)
+        if getattr(t, "trialoutcome", None) in ("Hit", "Miss")
+        and (getattr(t, "change_size", None) or 1.0) > 1.01
+    ]
+
+    if len(go_trial_indices) < 2 * MIN_TRIALS_PER_CLASS:
+        return None
+
     tensor, bc, used = build_population_tensor(
         sess, good_ids, event_name="Change_ON",
         window=WINDOW, bin_size=BIN_SIZE,
-        outcome_filter={"Hit", "Miss"},
+        trial_indices=go_trial_indices,
     )
 
     if tensor.shape[0] < 2 * MIN_TRIALS_PER_CLASS:
         return None
 
+    # Normalize to shared baseline (removes baseline rate confounds)
+    tensor = compute_zscore_normalized(tensor, bc, BASELINE_WINDOW)
+
     # Label: Big (1) vs Small (0)
-    trials = sess.trials
     labels = np.full(len(used), -1, dtype=int)
     for ti, idx in enumerate(used):
         cs = getattr(trials[idx], "change_size", None)
@@ -111,16 +129,19 @@ def decode_change_size_session(sess, sname, stage, sidx):
         cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         fold_accs = []
         for train_idx, test_idx in cv.split(X, labels):
+            scaler = StandardScaler()
+            X_train = scaler.fit_transform(X[train_idx])
+            X_test = scaler.transform(X[test_idx])
             clf = LogisticRegression(
                 C=1.0, solver="liblinear", max_iter=500, random_state=42
             )
-            clf.fit(X[train_idx], labels[train_idx])
-            fold_accs.append(clf.score(X[test_idx], labels[test_idx]))
+            clf.fit(X_train, labels[train_idx])
+            fold_accs.append(clf.score(X_test, labels[test_idx]))
 
             # Collect for confusion matrix (use response window only)
             if bc[b] >= 0.0 and bc[b] < 0.3:
                 all_y_true.extend(labels[test_idx])
-                all_y_pred.extend(clf.predict(X[test_idx]))
+                all_y_pred.extend(clf.predict(X_test))
 
         accs[b] = np.mean(fold_accs)
 

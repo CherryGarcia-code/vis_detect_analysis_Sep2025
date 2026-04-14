@@ -105,7 +105,10 @@ def run_pca_session(sess, sname, stage, sidx):
     hit_mean = np.nanmean(z_tensor[labels == 1], axis=0)  # (n_bins, n_units)
     miss_mean = np.nanmean(z_tensor[labels == 0], axis=0)
 
-    # PCA on concatenated condition means
+    # PCA on concatenated condition means (Mante et al. 2013 style).
+    # This captures the dimensions that best separate Hit/Miss trajectories,
+    # which is appropriate for trajectory visualization (panels A, D).
+    # Effective dimensionality is computed separately from all trial data below.
     data = np.vstack([hit_mean, miss_mean])  # (2*n_bins, n_units)
     n_components = min(10, data.shape[1], data.shape[0])
     pca = PCA(n_components=n_components)
@@ -125,7 +128,12 @@ def run_pca_session(sess, sname, stage, sidx):
             trial_indices=fa_idx,
         )
         if fa_tensor.shape[0] >= 3:
-            fa_z = compute_zscore_normalized(fa_tensor, bc, BASELINE_WIN)
+            # Use SHARED baseline: concatenate FA with existing hit/miss data
+            combined_tensor = np.concatenate([tensor, fa_tensor], axis=0)
+            combined_z = compute_zscore_normalized(combined_tensor, bc, BASELINE_WIN)
+
+            # Extract FA portion using shared baseline normalization
+            fa_z = combined_z[tensor.shape[0]:]  # FA trials are at the end
             fa_mean = np.nanmean(fa_z, axis=0)  # (n_bins, n_units)
             fa_pc = pca.transform(fa_mean)
             n_fa = fa_tensor.shape[0]

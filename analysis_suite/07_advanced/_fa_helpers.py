@@ -16,7 +16,7 @@ import numpy as np
 
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils import compute_auroc
+from visdetect.analysis.utils import compute_auroc
 
 
 # =====================================================================

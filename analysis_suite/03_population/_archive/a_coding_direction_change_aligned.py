@@ -1,13 +1,14 @@
-"""Fig 13: Coding direction — TF-pulse-based task-state CD (Lohse et al. 2025).
+"""Fig 13: Coding direction — Lohse-style baseline-defined task-state CD.
 
-Implements the task-state coding direction exactly matching Lohse et al.:
-the CD is defined from **pre-pulse baseline activity** (-0.4 to 0.0 s) around
-fast TF pulses during constrained baseline periods, using shrinkage Fisher LDA
-to discriminate Hit vs Miss go-trial contexts.  The full time course around
-Change_ON is then *projected* onto this pre-defined axis, revealing how
+Implements the task-state coding direction from Lohse et al. (2025):
+the CD is defined from pre-change BASELINE activity only (average z-scored
+firing rates in the ~1.5s before the change), using shrinkage LDA to
+discriminate Hit vs Miss trials. The full time course (-0.5 to 1.0s around
+Change_ON) is then *projected* onto this pre-defined axis, revealing how
 task-state coding evolves through the sensory response.
 
-The old Change_ON-aligned method is archived in _archive/.
+This approach isolates a pure task-engagement dimension, independent of
+sensory and motor signals that appear post-change.
 
 Produces:
   - Panel A: Single Expert session — Hit vs Miss projections over time
@@ -41,6 +42,7 @@ import matplotlib.gridspec as gridspec
 
 from config import (
     STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS,
+    HMM_STATE_ORDER, HMM_STATE_COLORS,
     CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import (
@@ -53,78 +55,27 @@ from visdetect.analysis.utils import (
 )
 from plotting import setup_style, save_figure, add_stage_background
 from visdetect.analysis.align import align_spikes_to_events, get_event_times_by_trial
-from visdetect.analysis.tf_pulse import _collect_pulses, TFRespPulseConfig
-from visdetect.analysis.constants import (
-    TF_PULSE_PRE_WINDOW,
-    LOHSE_PULSE_SIGMA_MS,
-    LOHSE_TRIAL_SIGMA_MS,
-)
 
 setup_style()
 
 
-# ── Lohse-exact parameters ────────────────────────────────────────
-PULSE_WINDOW = (-0.5, 0.5)             # Window around each TF pulse for alignment
-PRE_PULSE_WINDOW = TF_PULSE_PRE_WINDOW # (-0.4, 0.0) s — feature extraction for CD
-DISPLAY_WINDOW = (-0.5, 1.0)           # Display/cache window for Change_ON projections
-LICK_WINDOW = (-1.0, 0.5)
-BIN_SIZE = DEFAULT_BIN_SIZE             # 0.025s
-PULSE_SIGMA_MS = LOHSE_PULSE_SIGMA_MS  # 17.0 ms — 40 ms FWHM for pulse-aligned
-TRIAL_SIGMA_MS = LOHSE_TRIAL_SIGMA_MS  # 42.5 ms — 100 ms FWHM for trial-aligned
+# ── Lohse-method parameters ─────────────────────────────────────────
+WIDE_WINDOW = (-2.0, 1.0)            # Tensor construction: captures long baseline
+DISPLAY_WINDOW = (-0.5, 1.0)         # Display/cache window (backward compat)
+CD_BASELINE_WINDOW = (-1.5, -0.05)   # Pre-change window for CD feature extraction
+LOHSE_SIGMA_MS = 42.5                # 100ms FWHM Gaussian -> sigma = 42.5ms
+BIN_SIZE = DEFAULT_BIN_SIZE           # 0.025s
 MIN_UNITS = 10
 MIN_TRIALS_PER_CLASS = 8
-MIN_PULSES = 20
 N_PERM = 200
 N_SPLITS = 5
-CD_REG = 1.0                           # Flat regularization matching Lohse
+LICK_WINDOW = (-1.0, 0.5)
 
 CD_CACHE_DIR = os.path.join(CACHE_DIR, "cd_results")
 os.makedirs(CD_CACHE_DIR, exist_ok=True)
 
 
-# ── Pulse-to-trial mapping ────────────────────────────────────────
-
-def _map_pulses_to_trials(sess, pulse_times):
-    """Map each TF pulse time to its parent go-trial and label Hit=1 / Miss=0.
-
-    Parameters
-    ----------
-    sess : Session
-    pulse_times : array-like
-        Absolute pulse times.
-
-    Returns
-    -------
-    labels : ndarray, shape (n_valid,)
-        Binary labels (1=Hit, 0=Miss) for valid pulses.
-    valid_mask : ndarray, shape (n_pulses,), bool
-        Which pulses are on valid go-trials (Hit or Miss).
-    """
-    trials = sess.trials
-    baseline_times = get_event_times_by_trial(sess, "Baseline_ON")
-    change_times = get_event_times_by_trial(sess, "Change_ON")
-
-    labels_list = []
-    valid_mask = np.zeros(len(pulse_times), dtype=bool)
-
-    for pidx, pt in enumerate(pulse_times):
-        for i, trial in enumerate(trials):
-            if (i >= len(baseline_times) or i >= len(change_times) or
-                    not np.isfinite(baseline_times[i]) or not np.isfinite(change_times[i])):
-                continue
-            # Pulse must be during baseline period (before change)
-            if baseline_times[i] <= pt <= change_times[i]:
-                outcome = getattr(trial, 'trialoutcome', None)
-                cs = getattr(trial, 'change_size', 1.0) or 1.0
-                # Only go-trial Hit/Miss
-                if outcome in ('Hit', 'Miss') and cs > 1.01:
-                    valid_mask[pidx] = True
-                    labels_list.append(1 if outcome == 'Hit' else 0)
-                break
-    return np.array(labels_list, dtype=int), valid_mask
-
-
-# ── Cross-validation ──────────────────────────────────────────────
+# ── Coding direction utilities ───────────────────────────────────────
 
 def _stratified_kfold_indices(y, n_splits, random_state=0):
     """Stratified K-fold index generator for binary labels."""
@@ -149,179 +100,165 @@ def _stratified_kfold_indices(y, n_splits, random_state=0):
     return folds
 
 
-def compute_pulse_cd(
-    sess, cluster_ids,
-    n_splits=N_SPLITS, n_perm=N_PERM,
-    random_state=42,
-):
-    """Compute Lohse-exact TF-pulse-based task-state coding direction.
+def compute_baseline_cd(tensor_z, cond_mask, bin_centers,
+                        baseline_window=CD_BASELINE_WINDOW,
+                        n_splits=N_SPLITS, n_perm=N_PERM,
+                        random_state=42):
+    """Compute Lohse-style baseline-defined task-state coding direction.
 
     Steps:
-      1. Collect constrained fast TF pulses during baseline.
-      2. Build pulse-aligned tensor, smooth with 40ms FWHM (sigma=17ms).
-      3. Average pre-pulse window (-0.4, 0.0 s) per unit -> (n_pulses, n_units).
-      4. Label pulses Hit=1 / Miss=0 based on parent go-trial outcome.
-      5. 5-fold stratified CV at PULSE level: fit Fisher LDA on train, classify test.
-      6. Full-data CD for downstream projection.
-      7. Permutation test: shuffle labels, repeat.
+      1. Average each unit's z-scored activity over baseline_window
+         -> per-trial feature vectors (n_trials, n_units).
+      2. K-fold CV: fit LDA on train, project test trials' FULL time
+         course onto train-derived CD.
+      3. Full-data LDA -> avg_cd (for downstream use).
+      4. Permutation test: shuffle labels, repeat, get null distribution.
+
+    Parameters
+    ----------
+    tensor_z : ndarray (n_trials, n_bins, n_units)
+        Z-scored (and pre-smoothed) population tensor.
+    cond_mask : ndarray (n_trials,) bool
+        True = class 1 (Hit), False = class 0 (Miss).
+    bin_centers : ndarray (n_bins,)
+    baseline_window : tuple (start, end)
+    n_splits, n_perm, random_state : int
 
     Returns
     -------
-    dict or None
-        Keys: avg_cd, cv_accuracy, perm_p_global, n_pulses, n_hit_pulses,
-        n_miss_pulses, features, labels.
+    dict with keys:
+        avg_cd        : (n_units,) full-data LDA unit-length CD
+        cv_proj       : (n_trials, n_bins) cross-validated projections
+        cv_accuracy   : float, CV classification accuracy on baseline features
+        mean_hit      : (n_bins,) mean Hit projection (CV)
+        mean_miss     : (n_bins,) mean Miss projection (CV)
+        effect        : (n_bins,) Hit - Miss (CV)
+        pvals         : (n_bins,) per-bin permutation p-values
+        perm_p_global : float, global permutation p for CV accuracy
     """
-    # Collect constrained fast TF pulses
-    cfg = TFRespPulseConfig(use_constraints=True)
-    fast_times, _ = _collect_pulses(sess, cfg, show_progress=False)
-
-    if len(fast_times) < MIN_PULSES:
-        return None
-
-    # Build pulse-aligned tensor
-    pulse_times_list = [float(t) for t in fast_times]
-    cluster_map = {c.cluster_id: c for c in sess.clusters}
-    bc = None
-    tensor = None
-    for uid, cid in enumerate(cluster_ids):
-        cluster = cluster_map.get(cid)
-        if cluster is None:
-            continue
-        mat, bc_ = align_spikes_to_events(
-            cluster.spike_times, pulse_times_list,
-            window=PULSE_WINDOW, bin_size=BIN_SIZE,
-        )
-        if tensor is None:
-            bc = bc_
-            tensor = np.zeros((len(pulse_times_list), len(bc_), len(cluster_ids)))
-        tensor[:, :, uid] = mat
-
-    if tensor is None or tensor.shape[0] < MIN_PULSES:
-        return None
-
-    # Smooth with Lohse pulse sigma (17 ms -> 40 ms FWHM)
-    sigma_bins = (PULSE_SIGMA_MS / 1000.0) / BIN_SIZE
-    tensor = gaussian_filter1d(tensor, sigma=sigma_bins, axis=1)
-
-    # Map pulses to trial outcomes
-    labels, valid_mask = _map_pulses_to_trials(sess, fast_times)
-
-    if valid_mask.sum() < MIN_PULSES:
-        return None
-
-    tensor_valid = tensor[valid_mask]
-
-    # Average pre-pulse window -> (n_pulses, n_units)
-    pre_mask = (bc >= PRE_PULSE_WINDOW[0]) & (bc < PRE_PULSE_WINDOW[1])
-    if not np.any(pre_mask):
-        return None
-    features = tensor_valid[:, pre_mask, :].mean(axis=1)
-
-    n_hit = int((labels == 1).sum())
-    n_miss = int((labels == 0).sum())
-    if n_hit < MIN_TRIALS_PER_CLASS or n_miss < MIN_TRIALS_PER_CLASS:
-        return None
-
-    # Cross-validation at pulse level
     rng = np.random.RandomState(random_state)
-    folds = _stratified_kfold_indices(labels, n_splits=n_splits, random_state=random_state)
+    n_trials, n_bins, n_units = tensor_z.shape
+    y = cond_mask.astype(int)
+
+    # Step 1: Extract baseline features
+    bl_mask = (bin_centers >= baseline_window[0]) & (bin_centers < baseline_window[1])
+    features = tensor_z[:, bl_mask, :].mean(axis=1)  # (n_trials, n_units)
+
+    # Step 2: K-fold cross-validation
+    folds = _stratified_kfold_indices(y, n_splits=n_splits, random_state=random_state)
+    cv_proj = np.zeros((n_trials, n_bins), dtype=float)
     cv_correct = 0
     cv_total = 0
 
     for train_idx, test_idx in folds:
         if len(test_idx) == 0 or len(train_idx) == 0:
             continue
-        y_train = labels[train_idx]
+        y_train = y[train_idx]
         if len(np.unique(y_train)) < 2:
             continue
 
-        cd_fold = compute_lda_cd(features[train_idx], y_train,
-                                 method="manual", reg=CD_REG)
+        # Fit LDA on baseline features
+        cd_fold = compute_lda_cd(features[train_idx], y_train, method="sklearn")
 
-        # Classify test pulses using baseline features
-        test_proj = features[test_idx] @ cd_fold
+        # Project test trials' full time course onto this CD
+        # tensor_z[test_idx] is (n_test, n_bins, n_units), cd_fold is (n_units,)
+        cv_proj[test_idx, :] = tensor_z[test_idx] @ cd_fold
+
+        # Classify test set using baseline features
+        test_proj_bl = features[test_idx] @ cd_fold
         threshold = 0.5 * (
             features[train_idx][y_train == 1].mean(axis=0) @ cd_fold +
             features[train_idx][y_train == 0].mean(axis=0) @ cd_fold
         )
-        predictions = (test_proj > threshold).astype(int)
-        cv_correct += (predictions == labels[test_idx]).sum()
+        predictions = (test_proj_bl > threshold).astype(int)
+        cv_correct += (predictions == y[test_idx]).sum()
         cv_total += len(test_idx)
 
     cv_accuracy = cv_correct / cv_total if cv_total > 0 else 0.5
 
-    # Full-data CD for downstream
-    avg_cd = compute_lda_cd(features, labels, method="manual", reg=CD_REG)
+    # CV projections: mean per class
+    mean_hit = cv_proj[y == 1].mean(axis=0)
+    mean_miss = cv_proj[y == 0].mean(axis=0)
+    effect = mean_hit - mean_miss
 
-    # Permutation test
+    # Step 3: Full-data CD for downstream
+    avg_cd = compute_lda_cd(features, y, method="sklearn")
+
+    # Step 4: Permutation test
+    perm_effects = np.zeros((n_perm, n_bins), dtype=float)
     perm_accuracies = np.zeros(n_perm, dtype=float)
+
     for i in range(n_perm):
-        y_perm = labels.copy()
+        y_perm = y.copy()
         rng.shuffle(y_perm)
 
+        proj_perm = np.zeros((n_trials, n_bins), dtype=float)
         perm_correct = 0
         perm_total = 0
+
         for train_idx, test_idx in folds:
             if len(test_idx) == 0 or len(train_idx) == 0:
                 continue
             y_train_perm = y_perm[train_idx]
             if len(np.unique(y_train_perm)) < 2:
                 continue
+
             cd_perm = compute_lda_cd(features[train_idx], y_train_perm,
-                                     method="manual", reg=CD_REG)
-            test_proj_perm = features[test_idx] @ cd_perm
+                                     method="sklearn")
+            proj_perm[test_idx, :] = tensor_z[test_idx] @ cd_perm
+
+            # Accuracy on permuted labels
+            test_bl_perm = features[test_idx] @ cd_perm
             thresh_perm = 0.5 * (
                 features[train_idx][y_train_perm == 1].mean(axis=0) @ cd_perm +
                 features[train_idx][y_train_perm == 0].mean(axis=0) @ cd_perm
             )
-            pred_perm = (test_proj_perm > thresh_perm).astype(int)
+            pred_perm = (test_bl_perm > thresh_perm).astype(int)
             perm_correct += (pred_perm == y_perm[test_idx]).sum()
             perm_total += len(test_idx)
+
+        perm_effects[i] = (proj_perm[y_perm == 1].mean(axis=0)
+                           - proj_perm[y_perm == 0].mean(axis=0))
         perm_accuracies[i] = perm_correct / perm_total if perm_total > 0 else 0.5
 
+    # Per-bin p-values
+    pvals = np.array([
+        ((np.abs(perm_effects[:, b]) >= abs(effect[b])).sum() + 1) / (n_perm + 1)
+        for b in range(n_bins)
+    ])
+
+    # Global accuracy p-value
     perm_p_global = ((perm_accuracies >= cv_accuracy).sum() + 1) / (n_perm + 1)
 
     return {
         "avg_cd": avg_cd,
+        "cv_proj": cv_proj,
         "cv_accuracy": cv_accuracy,
+        "mean_hit": mean_hit,
+        "mean_miss": mean_miss,
+        "effect": effect,
+        "pvals": pvals,
         "perm_p_global": perm_p_global,
-        "n_pulses": int(valid_mask.sum()),
-        "n_hit_pulses": n_hit,
-        "n_miss_pulses": n_miss,
-        "features": features,
-        "labels": labels,
     }
 
 
-# ── Per-session computation ──────────────────────────────────────
+# ── Per-session computation ──────────────────────────────────────────
 
-def run_cd_for_session(sess, session_name, force=False):
-    """Compute Lohse-exact pulse-based task-state CD for a single session."""
+def run_cd_for_session(sess, session_name, hmm_assign=None, force=False):
+    """Compute Lohse-style baseline CD for a single session. Returns dict or None."""
     cache_file = os.path.join(CD_CACHE_DIR, f"{session_name}_hit_miss_cd.npz")
     if os.path.exists(cache_file) and not force:
         data = dict(np.load(cache_file, allow_pickle=True))
-        if "avg_cd" in data and "method" in data:
-            method = str(data["method"])
-            if method == "lohse_pulse_based":
-                return data
+        # Accept both new Lohse format and old format
+        if "avg_cd" in data and "effect" in data:
+            return data
 
     # Get good clusters
     good_ids = get_good_cluster_ids(sess, min_rate_hz=1.0)
     if len(good_ids) < MIN_UNITS:
         return None
 
-    # Compute pulse-based CD
-    result = compute_pulse_cd(sess, good_ids)
-    if result is None:
-        return None
-
-    avg_cd = result["avg_cd"]
-    n_units = len(good_ids)
-    print(f"      CD (Lohse pulse): {result['n_pulses']} pulses "
-          f"({result['n_hit_pulses']} hit, {result['n_miss_pulses']} miss), "
-          f"{n_units} units, CV acc={result['cv_accuracy']:.2%}")
-
-    # ── Project onto Change_ON-aligned data for visualization ─────
+    # Select go-trial Hit and Miss indices
     trials = sess.trials
     go_hit_indices = [
         i for i, t in enumerate(trials)
@@ -339,7 +276,58 @@ def run_cd_for_session(sess, session_name, force=False):
 
     allowed_indices = set(go_hit_indices + go_miss_indices)
 
-    # Build display-window tensor for Change_ON projection
+    # Build WIDE tensor for baseline CD computation
+    tensor_wide, bc_wide, used_indices = build_population_tensor(
+        sess, good_ids,
+        event_name="Change_ON",
+        window=WIDE_WINDOW,
+        bin_size=BIN_SIZE,
+        trial_indices=list(allowed_indices),
+    )
+
+    if tensor_wide.shape[0] < 2 * MIN_TRIALS_PER_CLASS or tensor_wide.shape[2] < MIN_UNITS:
+        return None
+
+    # Build condition mask (True = Hit, False = Miss)
+    cond_mask = np.array([
+        getattr(trials[i], "trialoutcome", None) == "Hit"
+        for i in used_indices
+    ])
+
+    n_hit = int(cond_mask.sum())
+    n_miss = int((~cond_mask).sum())
+    if n_hit < MIN_TRIALS_PER_CLASS or n_miss < MIN_TRIALS_PER_CLASS:
+        return None
+
+    # Smooth along TIME axis (axis=1) with Lohse 100ms FWHM Gaussian
+    sigma_bins = (LOHSE_SIGMA_MS / 1000.0) / BIN_SIZE
+    tensor_smooth = gaussian_filter1d(tensor_wide, sigma=sigma_bins, axis=1)
+
+    # Z-score normalize using pre-change baseline
+    tensor_z = compute_zscore_normalized(tensor_smooth, bc_wide, CD_BASELINE_WINDOW)
+
+    # Compute Lohse-style baseline CD
+    print(f"      CD (Lohse): {tensor_z.shape[0]} trials ({n_hit} hit, {n_miss} miss), "
+          f"{tensor_z.shape[2]} units, baseline [{CD_BASELINE_WINDOW[0]}, {CD_BASELINE_WINDOW[1]}]s")
+
+    result = compute_baseline_cd(
+        tensor_z, cond_mask, bc_wide,
+        baseline_window=CD_BASELINE_WINDOW,
+        n_splits=N_SPLITS, n_perm=N_PERM,
+        random_state=42,
+    )
+
+    avg_cd = result["avg_cd"]
+
+    # Extract DISPLAY window slices for cache and downstream
+    disp_mask = (bc_wide >= DISPLAY_WINDOW[0]) & (bc_wide < DISPLAY_WINDOW[1])
+    display_bc = bc_wide[disp_mask]
+    display_mean_hit = result["mean_hit"][disp_mask]
+    display_mean_miss = result["mean_miss"][disp_mask]
+    display_effect = result["effect"][disp_mask]
+    display_pvals = result["pvals"][disp_mask]
+
+    # Also build a DISPLAY-window tensor for SDT projections (non-z-scored, raw Hz)
     tensor_disp, bc_disp, disp_used = build_population_tensor(
         sess, good_ids,
         event_name="Change_ON",
@@ -348,42 +336,17 @@ def run_cd_for_session(sess, session_name, force=False):
         trial_indices=list(allowed_indices),
     )
 
-    if tensor_disp.shape[0] < 2 * MIN_TRIALS_PER_CLASS or tensor_disp.shape[2] < MIN_UNITS:
-        return None
-
-    # Smooth with trial-onset sigma (42.5 ms = 100 ms FWHM)
-    sigma_bins_trial = (TRIAL_SIGMA_MS / 1000.0) / BIN_SIZE
-    tensor_smooth = gaussian_filter1d(tensor_disp, sigma=sigma_bins_trial, axis=1)
-
-    # Build condition mask
-    cond_mask = np.array([
+    # ── Change-aligned projection: True Hit vs SDT FA/CR ────────────
+    # Project hit trials onto avg CD axis
+    disp_hit_mask = np.array([
         getattr(trials[i], "trialoutcome", None) == "Hit"
         for i in disp_used
     ])
-    n_hit = int(cond_mask.sum())
-    n_miss = int((~cond_mask).sum())
+    hit_change_proj = tensor_disp[disp_hit_mask] @ avg_cd
+    hit_change_proj_mean = hit_change_proj.mean(axis=0)
+    hit_change_proj_sem = hit_change_proj.std(axis=0) / np.sqrt(hit_change_proj.shape[0])
 
-    # Project each trial's full time course onto pulse-defined CD
-    cv_proj = tensor_smooth @ avg_cd  # (n_trials, n_bins)
-    mean_hit = cv_proj[cond_mask].mean(axis=0)
-    mean_miss = cv_proj[~cond_mask].mean(axis=0)
-    effect = mean_hit - mean_miss
-
-    # Per-bin significance via permutation
-    rng = np.random.RandomState(42)
-    n_bins = len(bc_disp)
-    perm_effects = np.zeros((N_PERM, n_bins), dtype=float)
-    for i in range(N_PERM):
-        perm_mask = cond_mask.copy()
-        rng.shuffle(perm_mask)
-        perm_effects[i] = (cv_proj[perm_mask].mean(axis=0)
-                           - cv_proj[~perm_mask].mean(axis=0))
-    pvals = np.array([
-        ((np.abs(perm_effects[:, b]) >= abs(effect[b])).sum() + 1) / (N_PERM + 1)
-        for b in range(n_bins)
-    ])
-
-    # ── SDT projections (True FA, CR) ──────────────────────────────
+    # Build change-aligned tensor for catch-trial FAs and project
     fa_change_indices = [
         i for i, t in enumerate(trials)
         if getattr(t, "trialoutcome", None) == "Hit"
@@ -394,10 +357,6 @@ def run_cd_for_session(sess, session_name, force=False):
         if getattr(t, "trialoutcome", None) == "Miss"
         and (getattr(t, "change_size", None) or 1.0) <= 1.01
     ]
-
-    hit_change_proj_mean = mean_hit  # From go-trial hits above
-    hit_change_proj_sem = cv_proj[cond_mask].std(axis=0) / np.sqrt(n_hit)
-
     fa_change_proj_mean = np.array([])
     fa_change_proj_sem = np.array([])
     n_fa_change = 0
@@ -405,37 +364,37 @@ def run_cd_for_session(sess, session_name, force=False):
     cr_change_proj_sem = np.array([])
     n_cr_change = 0
 
-    def _project_trial_indices(trial_inds):
-        """Build tensor for trial_inds and project onto avg_cd."""
-        if len(trial_inds) < 3:
-            return None, None, 0
-        t, _, _ = build_population_tensor(
+    if len(fa_change_indices) >= 3:
+        fa_tensor, _, fa_used = build_population_tensor(
             sess, good_ids, event_name="Change_ON",
             window=DISPLAY_WINDOW, bin_size=BIN_SIZE,
-            trial_indices=trial_inds,
+            trial_indices=fa_change_indices,
         )
-        if t.shape[0] < 3 or t.shape[2] != len(avg_cd):
-            return None, None, 0
-        t_sm = gaussian_filter1d(t, sigma=sigma_bins_trial, axis=1)
-        proj = t_sm @ avg_cd
-        return proj.mean(axis=0), proj.std(axis=0) / np.sqrt(proj.shape[0]), proj.shape[0]
+        if fa_tensor.shape[0] >= 3 and fa_tensor.shape[2] == len(avg_cd):
+            fa_proj = fa_tensor @ avg_cd
+            fa_change_proj_mean = fa_proj.mean(axis=0)
+            fa_change_proj_sem = fa_proj.std(axis=0) / np.sqrt(fa_proj.shape[0])
+            n_fa_change = fa_tensor.shape[0]
 
-    fa_change_proj_mean, fa_change_proj_sem, n_fa_change = _project_trial_indices(fa_change_indices)
-    if fa_change_proj_mean is None:
-        fa_change_proj_mean = np.array([])
-        fa_change_proj_sem = np.array([])
+    if len(cr_change_indices) >= 3:
+        cr_tensor, _, cr_used = build_population_tensor(
+            sess, good_ids, event_name="Change_ON",
+            window=DISPLAY_WINDOW, bin_size=BIN_SIZE,
+            trial_indices=cr_change_indices,
+        )
+        if cr_tensor.shape[0] >= 3 and cr_tensor.shape[2] == len(avg_cd):
+            cr_proj = cr_tensor @ avg_cd
+            cr_change_proj_mean = cr_proj.mean(axis=0)
+            cr_change_proj_sem = cr_proj.std(axis=0) / np.sqrt(cr_proj.shape[0])
+            n_cr_change = cr_tensor.shape[0]
 
-    cr_change_proj_mean, cr_change_proj_sem, n_cr_change = _project_trial_indices(cr_change_indices)
-    if cr_change_proj_mean is None:
-        cr_change_proj_mean = np.array([])
-        cr_change_proj_sem = np.array([])
-
-    # ── Lick-aligned projection ────────────────────────────────────
+    # ── Lick-aligned projection: True Hit vs True FA ──────────────────
     change_on_times = get_event_times_by_trial(sess, "Change_ON")
     cluster_map = {int(c.cluster_id): c for c in sess.clusters}
     n_lick_bins = int(np.round((LICK_WINDOW[1] - LICK_WINDOW[0]) / BIN_SIZE))
 
     def _extract_rt(trial):
+        """Get RT from reactiontimes dict; key is 'RT' in this dataset."""
         rt_dict = getattr(trial, "reactiontimes", {}) or {}
         rt = rt_dict.get("RT", rt_dict.get("Hit", rt_dict.get("hit", np.nan)))
         try:
@@ -445,7 +404,7 @@ def run_cd_for_session(sess, session_name, force=False):
 
     # Collect lick times for True Hits (go-trial hits)
     hit_lick_times, hit_rts = [], []
-    for i in disp_used:
+    for i in used_indices:
         t = trials[i]
         if getattr(t, "trialoutcome", None) != "Hit":
             continue
@@ -468,6 +427,7 @@ def run_cd_for_session(sess, session_name, force=False):
             fa_rts.append(rt)
 
     def _lick_project(lick_event_times):
+        """Build lick-aligned tensor and project onto avg CD axis."""
         mats = []
         bc_out = np.array([])
         for cid in good_ids:
@@ -479,10 +439,11 @@ def run_cd_for_session(sess, session_name, force=False):
                 c.spike_times, lick_event_times, window=LICK_WINDOW, bin_size=BIN_SIZE
             )
             mats.append(mat)
-        tensor_l = np.stack(mats, axis=2)
-        proj_l = tensor_l @ avg_cd
+        tensor_l = np.stack(mats, axis=2)   # (n_trials, n_bins, n_units)
+        proj_l = tensor_l @ avg_cd          # (n_trials, n_bins)
         return proj_l.mean(axis=0), proj_l.std(axis=0) / np.sqrt(proj_l.shape[0]), bc_out
 
+    # Defaults
     lick_proj_mean = np.array([])
     lick_proj_sem = np.array([])
     lick_bc = np.array([])
@@ -503,29 +464,26 @@ def run_cd_for_session(sess, session_name, force=False):
         if len(lick_bc) == 0:
             lick_bc = lick_bc_fa
 
-    # ── Cache (backward-compatible with d_state_matched_cd's _load_cd_axis) ──
+    # ── Cache (backward-compatible with 03d's _load_cd_axis) ─────────
     np.savez(cache_file,
              # Backward-compatible fields
              avg_cd=avg_cd,
-             bin_centers=bc_disp,
+             bin_centers=display_bc,
              cluster_ids=np.array(good_ids),
              cds=avg_cd[np.newaxis, :],  # (1, n_units) fallback compat
-             # Lohse-pulse-method fields
-             method="lohse_pulse_based",
-             pre_pulse_window=np.array(PRE_PULSE_WINDOW),
+             # Lohse-method fields
+             method="lohse_baseline",
+             cd_baseline_window=np.array(CD_BASELINE_WINDOW),
              cv_accuracy=result["cv_accuracy"],
              perm_p_global=result["perm_p_global"],
-             n_pulses=result["n_pulses"],
-             n_hit_pulses=result["n_hit_pulses"],
-             n_miss_pulses=result["n_miss_pulses"],
              # Display-window projections
-             effect=effect,
-             pvals=pvals,
-             mean_hit=mean_hit,
-             mean_miss=mean_miss,
+             effect=display_effect,
+             pvals=display_pvals,
+             mean_hit=display_mean_hit,
+             mean_miss=display_mean_miss,
              n_hit=n_hit,
              n_miss=n_miss,
-             n_units=n_units,
+             n_units=tensor_z.shape[2],
              # SDT projections
              hit_change_proj_mean=hit_change_proj_mean,
              hit_change_proj_sem=hit_change_proj_sem,
@@ -547,17 +505,16 @@ def run_cd_for_session(sess, session_name, force=False):
              )
 
     return {
-        "bin_centers": bc_disp,
-        "effect": effect,
-        "pvals": pvals,
-        "mean_hit": mean_hit,
-        "mean_miss": mean_miss,
+        "bin_centers": display_bc,
+        "effect": display_effect,
+        "pvals": display_pvals,
+        "mean_hit": display_mean_hit,
+        "mean_miss": display_mean_miss,
         "n_hit": n_hit,
         "n_miss": n_miss,
-        "n_units": n_units,
+        "n_units": tensor_z.shape[2],
         "cv_accuracy": result["cv_accuracy"],
         "perm_p_global": result["perm_p_global"],
-        "n_pulses": result["n_pulses"],
         "hit_change_proj_mean": hit_change_proj_mean,
         "hit_change_proj_sem": hit_change_proj_sem,
         "fa_change_proj_mean": fa_change_proj_mean,
@@ -578,7 +535,7 @@ def run_cd_for_session(sess, session_name, force=False):
 
 
 def _process_session_worker(args):
-    """Module-level worker for ProcessPoolExecutor."""
+    """Module-level worker for ProcessPoolExecutor: load session, compute CD."""
     sname, stage, sidx, force = args
     try:
         sess = load_session(sname)
@@ -601,13 +558,16 @@ def _process_session_worker(args):
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--n_workers", type=int, default=1)
-    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--n_workers", type=int, default=1,
+                        help="Parallel worker processes for session-level CD computation "
+                             "(default: 1 = sequential). Each worker loads and processes "
+                             "one session independently.")
+    parser.add_argument("--force", action="store_true",
+                        help="Force recomputation, ignoring cached results.")
     args = parser.parse_args()
 
-    print("[03a] Coding direction — Lohse pulse-based task-state CD (Hit vs Miss)...")
-    print(f"      Pre-pulse window: {PRE_PULSE_WINDOW}, "
-          f"pulse sigma: {PULSE_SIGMA_MS} ms, trial sigma: {TRIAL_SIGMA_MS} ms")
+    print("[03a] Coding direction analysis — Lohse-style baseline CD (Hit vs Miss)...")
+    print(f"      Baseline window: {CD_BASELINE_WINDOW}, smoothing: {LOHSE_SIGMA_MS} ms sigma")
     manifest = load_staging_manifest(qc_only=True)
     hmm_assign = load_hmm_assignments()
 
@@ -616,7 +576,7 @@ def main():
         for _, row in manifest.iterrows()
     ]
 
-    # ── Compute CD for each session ───────────────────────────────
+    # ── Compute CD for each session ───────────────────────────────────
     cd_results = {}
     if args.n_workers > 1:
         from concurrent.futures import ProcessPoolExecutor
@@ -653,10 +613,11 @@ def main():
         print("  No CD results. Exiting.")
         return
 
-    # ── Create figure ─────────────────────────────────────────────
+    # ── Create figure ─────────────────────────────────────────────────
     fig = plt.figure(figsize=(20, 24))
     gs = gridspec.GridSpec(4, 2, hspace=0.4, wspace=0.3)
 
+    # Helper to safely extract scalar from cache (npz loads scalars as 0-d arrays)
     def _scalar(val, default=np.nan):
         if isinstance(val, np.ndarray):
             return float(val) if val.ndim == 0 else default
@@ -665,21 +626,35 @@ def main():
         except (TypeError, ValueError):
             return default
 
-    # ── Per-session z-scoring for grand averages ──────────────────
+    # ── Per-session baseline z-scoring for grand averages ─────────────
     CHANGE_BL = (-0.5, -0.1)
-    LICK_BL = (-1.0, -0.7)
+    LICK_BL   = (-1.0, -0.7)
 
     def _zscore_shared(traces, bin_centers, bl_window):
+        """Z-score multiple traces using a shared (pooled) baseline.
+
+        Parameters
+        ----------
+        traces : list of ndarray
+            Each trace is (n_bins,). All conditions for one session.
+        bin_centers : ndarray
+        bl_window : tuple (start, end)
+
+        Returns
+        -------
+        list of ndarray — z-scored traces, same order as input.
+        """
         bl_mask = (bin_centers >= bl_window[0]) & (bin_centers < bl_window[1])
         if bl_mask.sum() < 2:
             return traces
+        # Pool baseline bins from ALL conditions
         pooled_bl = np.concatenate([t[bl_mask] for t in traces])
         mu, sd = pooled_bl.mean(), pooled_bl.std()
         if sd < 1e-12:
             return [t - mu for t in traces]
         return [(t - mu) / sd for t in traces]
 
-    # ── Row 1: Change-aligned CD ──────────────────────────────────
+    # ── Row 1: Change-aligned CD ──────────────────────────────────────
     ax_a = fig.add_subplot(gs[0, 0])
     expert_results = {k: v for k, v in cd_results.items() if v["stage"] == "Expert"}
 
@@ -703,18 +678,19 @@ def main():
                           where=r["pvals"] < 0.05, alpha=0.1, color="gold")
         ax_a.set_xlabel("Time from Change_ON (s)")
         ax_a.set_ylabel("CD projection (a.u.)")
-        ax_a.set_title(f"A. Expert session {best_session} — pulse-defined CD "
+        ax_a.set_title(f"A. Expert session {best_session} — baseline-defined CD "
                         f"(n={r['n_units']} units)")
         ax_a.legend(fontsize=8)
     else:
         ax_a.text(0.5, 0.5, "No Expert sessions", transform=ax_a.transAxes, ha="center")
-        ax_a.set_title("A. Single Expert session — pulse-defined CD")
+        ax_a.set_title("A. Single Expert session — baseline-defined CD")
 
-    # Panel B: Grand-average across Expert sessions
+    # Panel B: Grand-average across Expert sessions (change-aligned, z-scored)
     ax_b = fig.add_subplot(gs[0, 1])
     if expert_results:
         ref_bc = list(expert_results.values())[0]["bin_centers"]
-        all_hit, all_miss = [], []
+        all_hit = []
+        all_miss = []
         for r in expert_results.values():
             if len(r["mean_hit"]) == len(ref_bc):
                 hit_sm = smooth_psth(r["mean_hit"], BIN_SIZE, 15.0)
@@ -742,8 +718,8 @@ def main():
                 grand_mrt = float(np.median(all_mrt))
                 ax_b.axvline(grand_mrt, color="gray", linestyle=":", linewidth=1.2,
                              label=f"median RT ({grand_mrt:.2f} s)")
-            ax_b.set_title(f"B. Grand-average pulse-defined CD — change-aligned "
-                           f"(n={len(all_hit)} Expert, z-scored)")
+            ax_b.set_title(f"B. Grand-average baseline CD — change-aligned "
+                           f"(n={len(all_hit)} Expert sessions, z-scored)")
         else:
             ax_b.set_title("B. Grand-average CD — change-aligned")
 
@@ -751,7 +727,7 @@ def main():
         ax_b.set_ylabel("CD projection (z-score vs baseline)")
         ax_b.legend(fontsize=8)
 
-    # ── Row 2: SDT outcomes ───────────────────────────────────────
+    # ── Row 2: Change-aligned True Hit vs True FA ─────────────────────
     ax_c = fig.add_subplot(gs[1, 0])
     if expert_results and best_session is not None:
         r = expert_results[best_session]
@@ -804,14 +780,15 @@ def main():
         ax_c.text(0.5, 0.5, "No Expert sessions", transform=ax_c.transAxes, ha="center")
         ax_c.set_title("C. Single Expert — change-aligned Hit vs FA")
     ax_c.set_xlabel("Time from Change_ON (s)")
-    ax_c.set_ylabel("Projection onto pulse-defined CD (a.u.)")
+    ax_c.set_ylabel("Projection onto baseline CD axis (a.u.)")
     ax_c.legend(fontsize=8)
 
-    # Panel D: Grand-average SDT (z-scored)
+    # Panel D: Grand-average change-aligned True Hit vs True FA (z-scored)
     ax_d = fig.add_subplot(gs[1, 1])
     if expert_results:
         ref_bc = list(expert_results.values())[0]["bin_centers"]
         all_hit_ch, all_fa_ch, all_cr_ch = [], [], []
+        bl_mask = (ref_bc >= CHANGE_BL[0]) & (ref_bc < CHANGE_BL[1])
 
         for r in expert_results.values():
             hcp = r.get("hit_change_proj_mean", np.array([]))
@@ -820,6 +797,7 @@ def main():
 
             if isinstance(hcp, np.ndarray) and len(hcp) == len(ref_bc):
                 hit_sm = smooth_psth(hcp, BIN_SIZE, 15.0)
+                # Collect all available conditions for shared baseline
                 traces_to_norm = [hit_sm]
                 has_fa = isinstance(fcp, np.ndarray) and len(fcp) > 0 and len(fcp) == len(ref_bc)
                 has_cr = isinstance(crp, np.ndarray) and len(crp) > 0 and len(crp) == len(ref_bc)
@@ -870,16 +848,17 @@ def main():
                 grand_mrt = float(np.median(all_mrt))
                 ax_d.axvline(grand_mrt, color="gray", linestyle=":", linewidth=1.2,
                              label=f"median RT ({grand_mrt:.2f} s)")
-            ax_d.set_title("D. Grand-average — change-aligned SDT outcomes (z-scored)")
+            ax_d.set_title(f"D. Grand-average — change-aligned "
+                           f"SDT outcomes (z-scored)")
         else:
             ax_d.set_title("D. Grand-average — change-aligned SDT outcomes")
     else:
         ax_d.set_title("D. Grand-average — change-aligned SDT outcomes")
     ax_d.set_xlabel("Time from Change_ON (s)")
-    ax_d.set_ylabel("Projection onto pulse-defined CD (z-score)")
+    ax_d.set_ylabel("Projection onto baseline CD axis (z-score vs baseline)")
     ax_d.legend(fontsize=8)
 
-    # ── Row 3: Lick-aligned CD projection ─────────────────────────
+    # ── Row 3: Lick-aligned CD projection ─────────────────────────────
     ax_e = fig.add_subplot(gs[2, 0])
     if expert_results and best_session is not None:
         r = expert_results[best_session]
@@ -910,13 +889,14 @@ def main():
             ax_e.set_title(f"E. Expert session {best_session} — lick-aligned "
                            f"(n={r['n_units']} units)")
         else:
-            ax_e.text(0.5, 0.5, "Lick data unavailable", transform=ax_e.transAxes, ha="center")
+            ax_e.text(0.5, 0.5, "Lick data unavailable", transform=ax_e.transAxes,
+                      ha="center")
             ax_e.set_title("E. Single Expert — lick-aligned")
     else:
         ax_e.text(0.5, 0.5, "No Expert sessions", transform=ax_e.transAxes, ha="center")
         ax_e.set_title("E. Single Expert — lick-aligned")
     ax_e.set_xlabel("Time from lick onset (s)")
-    ax_e.set_ylabel("Projection onto pulse-defined CD (a.u.)")
+    ax_e.set_ylabel("Projection onto baseline CD axis (a.u.)")
     ax_e.legend(fontsize=8)
 
     # Panel F: Grand-average lick-aligned
@@ -936,10 +916,12 @@ def main():
 
                 if isinstance(lpm, np.ndarray) and len(lpm) == len(ref_lbc):
                     hit_lick_sm = smooth_psth(lpm, BIN_SIZE, 15.0)
+                    # Collect all available conditions for shared baseline
                     traces_to_norm = [hit_lick_sm]
                     has_fa = isinstance(fa_lpm, np.ndarray) and len(fa_lpm) == len(ref_lbc)
                     if has_fa:
                         traces_to_norm.append(smooth_psth(fa_lpm, BIN_SIZE, 15.0))
+
                     normed = _zscore_shared(traces_to_norm, ref_lbc, LICK_BL)
                     all_hit_lick.append(normed[0])
                     if has_fa:
@@ -965,17 +947,18 @@ def main():
         if plotted:
             ax_f.axvline(0, color="k", linestyle="--", linewidth=0.8, alpha=0.5,
                          label="Lick onset")
-            ax_f.set_title("F. Grand-average pulse-defined CD — lick-aligned "
-                           "(True Hit vs True FA, z-scored)")
+            ax_f.set_title(f"F. Grand-average baseline CD — lick-aligned "
+                           f"(True Hit vs True FA, z-scored)")
         else:
             ax_f.set_title("F. Grand-average CD — lick-aligned")
     else:
         ax_f.set_title("F. Grand-average CD — lick-aligned")
     ax_f.set_xlabel("Time from lick onset (s)")
-    ax_f.set_ylabel("Projection onto pulse-defined CD (z-score)")
+    ax_f.set_ylabel("Projection onto baseline CD axis (z-score vs baseline)")
     ax_f.legend(fontsize=8)
 
-    # ── Row 4: Learning dynamics ──────────────────────────────────
+    # ── Row 4: Learning dynamics ──────────────────────────────────────
+    # Panel G: CD effect size vs session index
     ax_g = fig.add_subplot(gs[3, 0])
     add_stage_background(ax_g, manifest)
 
@@ -1002,7 +985,7 @@ def main():
     ax_g.set_ylabel("Peak |CD effect| (0\u2013500 ms)")
     ax_g.set_title("G. CD emergence across learning")
 
-    # Panel H: CV accuracy by stage
+    # Panel H: Cross-validated classification accuracy by stage
     ax_h = fig.add_subplot(gs[3, 1])
 
     stage_accuracies = {}
@@ -1039,35 +1022,35 @@ def main():
 
     ax_h.set_xticks(range(len(STAGE_ORDER)))
     ax_h.set_xticklabels(STAGE_ORDER)
-    ax_h.set_ylabel("CV accuracy (pulse-level Hit vs Miss)")
-    ax_h.set_title("H. Pulse-based CD classification accuracy by stage")
+    ax_h.set_ylabel("CV accuracy (baseline Hit vs Miss)")
+    ax_h.set_title("H. Baseline CD classification accuracy by stage")
     ax_h.legend(fontsize=8)
 
-    # ── Statistics ────────────────────────────────────────────────
+    # ── Statistics ────────────────────────────────────────────────────
     stats = []
 
-    # CD effect trend
+    # CD effect trend across sessions
     if len(idxs) >= 3:
         rho, p = spearmanr(idxs, peak_effects)
         stats.append({"test": "cd_effect_vs_session_spearman", "rho": rho, "p": p,
                       "n": len(idxs)})
 
-    # CD effect by stage
+    # CD effect by stage (Kruskal-Wallis)
     stage_effects = {}
     for stage in STAGE_ORDER:
-        vals = [pe for k, pe in zip(session_names, peak_effects)
-                if cd_results[k]["stage"] == stage]
+        vals = [pe for k, pe in zip(session_names, peak_effects) if cd_results[k]["stage"] == stage]
         stage_effects[stage] = vals
 
     valid_stage_data = [stage_effects[s] for s in STAGE_ORDER if stage_effects[s]]
     if len(valid_stage_data) >= 2:
         from scipy.stats import kruskal
-        flat = [np.array(d) for d in valid_stage_data if len(d) >= 2]
+        flat = [np.array(d) for d in valid_stage_data]
+        flat = [d for d in flat if len(d) >= 2]
         if len(flat) >= 2:
             h, p = kruskal(*flat)
             stats.append({"test": "cd_effect_kruskal_by_stage", "H": h, "p": p})
 
-    # Expert vs Learning
+    # Expert vs Learning comparison
     if stage_effects.get("Expert") and stage_effects.get("Learning"):
         e = np.array(stage_effects["Expert"])
         l = np.array(stage_effects["Learning"])
@@ -1081,6 +1064,7 @@ def main():
         median_acc = float(np.median(expert_accs))
         stats.append({"test": "cd_cv_accuracy_expert_median",
                       "median": median_acc, "n": len(expert_accs)})
+        # Test if significantly above chance (0.5)
         _, p_wilcox = wilcoxon(np.array(expert_accs) - 0.5, alternative="greater")
         stats.append({"test": "cd_cv_accuracy_vs_chance_wilcoxon",
                       "p": p_wilcox, "n": len(expert_accs)})
@@ -1095,7 +1079,7 @@ def main():
 
     stats_df = pd.DataFrame(stats)
 
-    # ── Save ──────────────────────────────────────────────────────
+    # ── Save ──────────────────────────────────────────────────────────
     save_figure(fig, "fig13_coding_direction", "03_population")
     stats_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

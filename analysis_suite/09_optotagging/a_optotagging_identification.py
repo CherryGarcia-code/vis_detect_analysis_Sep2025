@@ -36,7 +36,7 @@ import matplotlib.gridspec as gridspec
 
 from config import STAGE_ORDER, STAGE_COLORS, CACHE_DIR
 from loader import load_staging_manifest, load_session, load_waveform_labels
-from utils import get_good_cluster_ids
+from visdetect.analysis.utils import get_good_cluster_ids
 from plotting import setup_style, save_figure
 
 from visdetect.analysis.optotagging import (

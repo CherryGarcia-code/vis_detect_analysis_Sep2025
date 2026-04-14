@@ -40,13 +40,17 @@ from config import (
     STAGE_ORDER, STAGE_COLORS, HMM_STATE_ORDER, HMM_STATE_COLORS, CACHE_DIR, DEFAULT_BIN_SIZE,
 )
 from loader import load_staging_manifest, load_session, load_hmm_assignments
-from utils import get_good_cluster_ids, build_population_tensor
+from utils import (
+    get_good_cluster_ids, build_population_tensor,
+    compute_baseline_subtracted
+)
 from plotting import setup_style, save_figure, add_stage_background
 
 setup_style()
 
 # ── Parameters ────────────────────────────────────────────────────────
 TENSOR_WINDOW = (-1.5, 0.0)   # full pre-trial window for tensor
+BASELINE_WINDOW = (-1.5, -1.0)  # Baseline for normalization (early pre-trial)
 FEATURE_WIN = (-1.5, -0.5)    # sub-window for mean FR feature extraction
 BIN_SIZE = DEFAULT_BIN_SIZE
 MIN_UNITS = 5
@@ -100,6 +104,9 @@ def decode_state_session(sess, sname, trial_states, stage, sidx):
 
     if tensor.shape[0] == 0 or tensor.shape[2] < MIN_UNITS:
         return None
+
+    # Normalize to early pre-trial baseline (removes baseline rate confounds)
+    tensor = compute_baseline_subtracted(tensor, bin_centers, BASELINE_WINDOW)
 
     # Map used trial indices to HMM state labels -> integer labels
     labels = np.full(len(used), -1, dtype=int)

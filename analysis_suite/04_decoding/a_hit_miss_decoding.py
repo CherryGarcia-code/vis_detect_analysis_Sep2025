@@ -36,13 +36,17 @@ from config import (
     STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS, CACHE_DIR,
 )
 from loader import load_staging_manifest, load_session
-from utils import get_good_cluster_ids, build_population_tensor, smooth_psth
+from utils import (
+    get_good_cluster_ids, build_population_tensor, smooth_psth,
+    compute_zscore_normalized
+)
 from plotting import setup_style, save_figure, add_stage_background
 
 setup_style()
 
 # Parameters
 WINDOW = (-0.5, 1.0)
+BASELINE_WINDOW = (-0.5, -0.05)  # Shared baseline for normalization
 BIN_SIZE = 0.050
 MIN_UNITS = 10
 MIN_TRIALS_PER_CLASS = 8
@@ -103,6 +107,9 @@ def decode_session(sess, session_name):
     if tensor.shape[0] < 2 * MIN_TRIALS_PER_CLASS or tensor.shape[2] < MIN_UNITS:
         return None
 
+    # Normalize to shared baseline (removes baseline rate confounds)
+    tensor = compute_zscore_normalized(tensor, bin_centers, BASELINE_WINDOW)
+
     # Labels
     labels = np.array([
         1 if getattr(trials[i], "trialoutcome", None) == "Hit" else 0
@@ -158,6 +165,8 @@ def decode_session(sess, session_name):
             trial_indices=fa_idx,
         )
         if fa_tensor.shape[0] >= 3 and fa_tensor.shape[2] >= MIN_UNITS:
+            # Normalize FA tensor to same baseline as training data
+            fa_tensor = compute_zscore_normalized(fa_tensor, bin_centers, BASELINE_WINDOW)
             n_fa = fa_tensor.shape[0]
             for b in range(n_bins):
                 X_train = tensor[:, b, :]

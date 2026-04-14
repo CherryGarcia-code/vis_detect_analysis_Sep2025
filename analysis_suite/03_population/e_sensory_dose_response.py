@@ -44,7 +44,7 @@ from config import (
     HMM_STATE_ORDER, HMM_STATE_COLORS,
 )
 from loader import load_staging_manifest, load_session, load_hmm_assignments
-from utils import smooth_psth
+from visdetect.analysis.utils import smooth_psth
 from plotting import setup_style, save_figure
 
 # Import heavy analysis function from script d (avoids duplication)
@@ -60,28 +60,55 @@ setup_style()
 CHANGE_BL = (-0.5, -0.1)
 
 
-def _zscore_baseline(trace, bin_centers, bl_window):
-    bl_mask = (bin_centers >= bl_window[0]) & (bin_centers < bl_window[1])
-    if bl_mask.sum() < 2:
-        return trace
-    bl = trace[bl_mask]
-    mu, sd = bl.mean(), bl.std()
+def _zscore_resp_scalars(cat_dicts, bc):
+    """Z-score multiple categories using a shared (pooled) baseline, return resp-window means.
+
+    Parameters
+    ----------
+    cat_dicts : list of (dict or None)
+        Each dict has key "proj_mean" (1-D trace). None entries yield NaN.
+    bc : ndarray
+        Bin centers.
+
+    Returns
+    -------
+    list of float — one resp-window mean per category (shared baseline z-scored).
+    """
+    bl_mask = (bc >= CHANGE_BL[0]) & (bc < CHANGE_BL[1])
+    resp_mask = (bc >= RESP_WIN[0]) & (bc < RESP_WIN[1])
+
+    # Smooth all valid traces
+    smoothed = []
+    valid_idx = []
+    for i, d in enumerate(cat_dicts):
+        if d is None:
+            smoothed.append(None)
+            continue
+        pm = d.get("proj_mean")
+        if pm is None or len(pm) != len(bc):
+            smoothed.append(None)
+            continue
+        smoothed.append(smooth_psth(pm, BIN_SIZE, 15.0))
+        valid_idx.append(i)
+
+    if not valid_idx or bl_mask.sum() < 2 or resp_mask.sum() < 1:
+        return [np.nan] * len(cat_dicts)
+
+    # Pool baseline from ALL valid categories
+    pooled_bl = np.concatenate([smoothed[i][bl_mask] for i in valid_idx])
+    mu, sd = pooled_bl.mean(), pooled_bl.std()
     if sd < 1e-12:
-        return trace - mu
-    return (trace - mu) / sd
+        sd = 1.0
 
-
-def _zscore_resp_scalar(d, bc):
-    """Z-score a category's mean trace to baseline, return resp-window mean."""
-    if d is None:
-        return np.nan
-    pm = d.get("proj_mean")
-    if pm is None or len(pm) != len(bc):
-        return np.nan
-    sm = smooth_psth(pm, BIN_SIZE, 15.0)
-    z = _zscore_baseline(sm, bc, CHANGE_BL)
-    resp_m = (bc >= RESP_WIN[0]) & (bc < RESP_WIN[1])
-    return float(np.mean(z[resp_m])) if resp_m.sum() > 0 else np.nan
+    # Z-score each and extract resp-window mean
+    out = []
+    for sm in smoothed:
+        if sm is None:
+            out.append(np.nan)
+        else:
+            z = (sm - mu) / sd
+            out.append(float(np.mean(z[resp_mask])))
+    return out
 
 
 def _get(r, state, cat):
@@ -182,17 +209,54 @@ def main():
         if expert:
             ref_bc = list(expert.values())[0]["bin_centers"]
             grand = {}
-            for cat in ["fa", "go_small", "go_big"]:
-                traces = []
-                for r in expert.values():
-                    d = _get(r, state, cat)
-                    if d is not None and len(d["proj_mean"]) == len(ref_bc):
-                        sm = smooth_psth(d["proj_mean"], BIN_SIZE, 15.0)
-                        traces.append(_zscore_baseline(sm, ref_bc, CHANGE_BL))
-                if traces:
-                    grand[cat] = (np.mean(traces, axis=0),
-                                  np.std(traces, axis=0) / np.sqrt(len(traces)),
-                                  len(traces))
+
+            # FIXED: Use shared baseline normalization to preserve relative differences
+            bl_mask = (ref_bc >= CHANGE_BL[0]) & (ref_bc < CHANGE_BL[1])
+
+            # First pass: collect all go_big traces to establish shared baseline (highest signal)
+            all_go_traces = []
+            for r in expert.values():
+                # Use go_big as reference (highest signal), fallback to go_small
+                d_go = _get(r, state, "go_big") or _get(r, state, "go_small")
+                if d_go is not None and len(d_go["proj_mean"]) == len(ref_bc):
+                    sm_go = smooth_psth(d_go["proj_mean"], BIN_SIZE, 15.0)
+                    all_go_traces.append(sm_go)
+
+            if all_go_traces:
+                # Compute shared baseline from Go trials
+                go_baselines = [trace[bl_mask] for trace in all_go_traces if bl_mask.sum() >= 2]
+                if go_baselines:
+                    all_bl_vals = np.concatenate(go_baselines)
+                    mu_shared = all_bl_vals.mean()
+                    sd_shared = all_bl_vals.std()
+                    if sd_shared < 1e-12:
+                        sd_shared = 1.0  # Avoid division by zero
+
+                    # Second pass: normalize all categories to shared baseline
+                    for cat in ["fa", "go_small", "go_big"]:
+                        traces = []
+                        for r in expert.values():
+                            d = _get(r, state, cat)
+                            if d is not None and len(d["proj_mean"]) == len(ref_bc):
+                                sm = smooth_psth(d["proj_mean"], BIN_SIZE, 15.0)
+                                traces.append((sm - mu_shared) / sd_shared)
+                        if traces:
+                            grand[cat] = (np.mean(traces, axis=0),
+                                          np.std(traces, axis=0) / np.sqrt(len(traces)),
+                                          len(traces))
+                else:
+                    # Fallback to baseline-subtraction if shared sd computation fails
+                    for cat in ["fa", "go_small", "go_big"]:
+                        traces = []
+                        for r in expert.values():
+                            d = _get(r, state, cat)
+                            if d is not None and len(d["proj_mean"]) == len(ref_bc):
+                                sm = smooth_psth(d["proj_mean"], BIN_SIZE, 15.0)
+                                traces.append(sm - mu_shared)
+                        if traces:
+                            grand[cat] = (np.mean(traces, axis=0),
+                                          np.std(traces, axis=0) / np.sqrt(len(traces)),
+                                          len(traces))
 
             plotted = False
             for cat in ["fa", "go_small", "go_big"]:
@@ -224,11 +288,8 @@ def main():
             ref_bc = list(expert.values())[0]["bin_centers"]
             dose_per_session = []
             for r in expert.values():
-                row = []
-                for cat in dose_cats:
-                    d = _get(r, state, cat)
-                    row.append(_zscore_resp_scalar(d, ref_bc))
-                dose_per_session.append(row)
+                cat_dicts = [_get(r, state, cat) for cat in dose_cats]
+                dose_per_session.append(_zscore_resp_scalars(cat_dicts, ref_bc))
 
             dose_arr = np.array(dose_per_session)
             for sess_row in dose_arr:
@@ -294,10 +355,8 @@ def main():
     stage_slopes = {s: [] for s in STAGE_ORDER}
     for r in results.values():
         _bc = r["bin_centers"]
-        row = []
-        for cat in dose_cats:
-            d = _get(r, SUMMARY_STATE, cat)
-            row.append(_zscore_resp_scalar(d, _bc))
+        cat_dicts = [_get(r, SUMMARY_STATE, cat) for cat in dose_cats]
+        row = _zscore_resp_scalars(cat_dicts, _bc)
         finite_vals = [(DOSE_LEVELS[j], row[j])
                        for j in range(len(row)) if np.isfinite(row[j])]
         if len(finite_vals) >= 3:
@@ -341,9 +400,7 @@ def main():
         d_miss = _get(r, SUMMARY_STATE, "miss")
         if d_big is None or d_fa is None or d_miss is None:
             continue
-        h = _zscore_resp_scalar(d_big, _bc)
-        f = _zscore_resp_scalar(d_fa, _bc)
-        m = _zscore_resp_scalar(d_miss, _bc)
+        h, f, m = _zscore_resp_scalars([d_big, d_fa, d_miss], _bc)
         if not (np.isfinite(h) and np.isfinite(f) and np.isfinite(m)):
             continue
         denom = h - m
@@ -386,10 +443,8 @@ def main():
     all_slopes, all_sidxs = [], []
     for r in results.values():
         _bc = r["bin_centers"]
-        row = []
-        for cat in dose_cats:
-            d = _get(r, SUMMARY_STATE, cat)
-            row.append(_zscore_resp_scalar(d, _bc))
+        cat_dicts = [_get(r, SUMMARY_STATE, cat) for cat in dose_cats]
+        row = _zscore_resp_scalars(cat_dicts, _bc)
         finite_vals = [(DOSE_LEVELS[j], row[j])
                        for j in range(len(row)) if np.isfinite(row[j])]
         if len(finite_vals) >= 3:

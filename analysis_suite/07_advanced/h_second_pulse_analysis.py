@@ -57,7 +57,7 @@ import matplotlib.gridspec as gridspec
 
 from config import CACHE_DIR, ROOT, SUBJECT, FA_SUBTYPE_COLORS, TF_PULSE_WINDOW
 from loader import load_staging_manifest, load_session
-from utils import get_good_cluster_ids, compute_zscore_normalized, smooth_psth
+from visdetect.analysis.utils import get_good_cluster_ids, compute_zscore_normalized, smooth_psth
 from plotting import setup_style, save_figure
 from _fa_helpers import compute_timeresolved_auc, _find_clusters, grand_auc_cluster_test
 
