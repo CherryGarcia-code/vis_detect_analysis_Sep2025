@@ -25,6 +25,26 @@ py -c "import visdetect; print('OK')"
 
 **Additional** (install manually if needed): `h5py` (for legacy .mat loading), `pytest` (for tests).
 
+### Configuration Options (New!)
+
+The pipeline now supports flexible configuration via environment variables:
+
+```bash
+# Multi-subject analysis
+export VISDETECT_SUBJECT=BG_047  # Default: BG_046
+
+# Custom data root (for different storage locations)
+export VISDETECT_DATA_ROOT=/custom/path/to/data
+
+# Pipeline scripts also accept CLI arguments
+python scripts/pipelines/concat_sort/build_concat_pkls.py --subject BG_047 --data-root /path/to/data
+```
+
+**Benefits**:
+- ✅ **Multi-subject ready** - Easy to analyze different subjects
+- ✅ **Portable** - Works across different machines and storage setups
+- ✅ **CI/Testing friendly** - No hard-coded paths
+
 ### Platform Notes
 
 - **Windows + Git Bash**: Use `py` not `python` to invoke Python.

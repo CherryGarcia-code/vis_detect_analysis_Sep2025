@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(py check_ks4_completion_status.py)"
+    ]
+  }
+}

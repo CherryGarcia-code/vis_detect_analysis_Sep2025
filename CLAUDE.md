@@ -119,6 +119,127 @@ Follow these standards for all analyses. These reflect current best practices in
 - **Bootstrap CI** (1000 resamples, seed=42, percentile method) for key estimates.
 - See the Research Statistician skill for the full decision framework and effect size formulas.
 
+### Normalization Best Practices
+
+**The Golden Rule**: Normalize each unit separately using a **shared baseline definition** across all conditions being compared.
+
+#### When to Normalize
+- **Always normalize** when comparing firing rates across neurons (population averages, heatmaps, decoding)
+- **Never average raw rates** across units — high-FR neurons will dominate
+- **Within-unit comparisons** (single neuron, single trial) may use raw rates
+
+#### Decision Tree
+
+| Analysis Type | Method | Rationale |
+|---------------|--------|-----------|
+| Single-unit responsiveness | Per-trial Δrate + permutation test | Paired comparison within unit |
+| Population heatmaps | Per-unit z-score (shared baseline) | Equalizes units for visualization |
+| Coding directions | Δrate (baseline-subtracted) | Preserves Hz units, interpretable projections |
+| Grand averages across sessions | Shared baseline z-score | Preserves relative magnitude between conditions |
+| Decoding | Z-score to shared baseline | Removes baseline confounds, units contribute equally |
+| TF responsiveness screening | Per-unit z-score | Single-unit significance testing |
+| Modulation strength comparison | Percent change (if FR > 1 Hz) | True equalization for multiplicative effects |
+
+#### Normalization Methods
+
+**Z-score** (most common):
+```python
+from utils import compute_zscore_normalized
+tensor_z = compute_zscore_normalized(tensor, bin_centers, baseline_window)
+# Returns: (rate - baseline_mean) / baseline_std per unit
+```
+- **Use for**: Heatmaps, population comparisons, significance testing
+- **Strengths**: Units are interpretable (SD of baseline noise), removes baseline differences
+- **Pitfalls**: Requires stable baseline, can inflate low-FR units if SD is tiny
+
+**Baseline-subtracted (Δrate)**:
+```python
+from utils import compute_baseline_subtracted
+tensor_delta = compute_baseline_subtracted(tensor, bin_centers, baseline_window)
+# Returns: rate - baseline_mean per unit (preserves Hz units)
+```
+- **Use for**: Coding directions, population averages where Hz units matter
+- **Strengths**: Preserves firing rate units, robust to small SD
+- **Pitfalls**: Still biased toward high-FR units (not fully equalized)
+
+**Percent change** (special cases):
+```python
+percent_change = 100 * (rate - baseline_mean) / max(baseline_mean, 1.0)
+```
+- **Use for**: Modulation strength comparisons across neurons
+- **Strengths**: True equalization (doubling = doubling regardless of baseline)
+- **Pitfalls**: Explodes for low baselines, use clamp `max(baseline, 1.0)`
+
+#### Critical Pitfalls to Avoid
+
+1. **Circular baseline** (CRITICAL ERROR):
+   ```python
+   # WRONG: Each condition normalized to its own baseline
+   hit_z = (hit - hit_baseline.mean()) / hit_baseline.std()
+   fa_z = (fa - fa_baseline.mean()) / fa_baseline.std()
+   # This inflates FA's z-score because FA has low activity → low SD → inflated z
+
+   # CORRECT: Shared baseline computed once
+   all_baseline = tensor[:, baseline_mask, :].ravel()
+   baseline_mean = all_baseline.mean()
+   baseline_std = all_baseline.std()
+   hit_z = (hit - baseline_mean) / baseline_std
+   fa_z = (fa - baseline_mean) / baseline_std
+   ```
+
+2. **Average-then-normalize** (WRONG ORDER):
+   ```python
+   # WRONG: High-FR neurons dominate the average
+   pop_avg = np.mean([unit1_rate, unit2_rate, ...], axis=0)
+   normalized = (pop_avg - pop_avg.mean()) / pop_avg.std()
+
+   # CORRECT: Normalize each unit, then average
+   unit1_z = (unit1_rate - baseline_mean) / baseline_std
+   unit2_z = (unit2_rate - baseline_mean) / baseline_std
+   pop_avg = np.mean([unit1_z, unit2_z, ...], axis=0)
+   ```
+
+3. **Division by zero**:
+   ```python
+   # Guard against zero variance
+   if baseline_std < 1e-6:
+       baseline_std = 1.0  # or skip this unit, or use Δrate instead
+   z_score = (rate - baseline_mean) / baseline_std
+   ```
+
+4. **Inconsistent baseline windows**:
+   - Always import baseline windows from `constants.py` (e.g., `TF_PULSE_PRE_WINDOW`)
+   - Use the **same** baseline definition across all conditions in a comparison
+   - Common baseline: `(-0.5, -0.05)` s before Change_ON
+
+5. **Wrong method for task**:
+   - Decoding on **raw rates** biases toward high-FR units → use z-score or Δrate first
+   - Heatmaps without normalization are uninterpretable → always z-score per unit
+   - Grand averages across sessions need **shared baseline** to preserve relative magnitude
+
+#### Where Normalization Lives
+
+| Module | Function | Purpose |
+|--------|----------|---------|
+| `analysis_suite/utils.py` | `compute_zscore_normalized()` | Per-unit z-score with shared baseline |
+| `analysis_suite/utils.py` | `compute_baseline_subtracted()` | Per-unit Δrate (Hz units preserved) |
+| `src/visdetect/analysis/tf_pulse.py` | `_zscore_trace()` | TF pulse z-scoring (single trace) |
+
+#### Recent Fixes (March 2026)
+- **Scripts 03a, 03d, 03e**: Now use shared baseline normalization for grand averages (preserves Hit-FA relative magnitude)
+- **Scripts 04a, 04b, 04c**: Updated to normalize before decoding (removes baseline confounds)
+
+#### Quick Reference Card
+
+| Goal | Code Snippet |
+|------|--------------|
+| Z-score tensor | `tensor_z = compute_zscore_normalized(tensor, bin_centers, baseline_window)` |
+| Δrate tensor | `tensor_delta = compute_baseline_subtracted(tensor, bin_centers, baseline_window)` |
+| Single-unit z-score | `z = (rate - pre_mean) / pre_std` with `if pre_std < 1e-6: pre_std = 1.0` |
+| Check baseline | `print(f"Baseline window: {baseline_window}, bins: {baseline_mask.sum()}")` |
+
+See `analysis_suite/NORMALIZATION_AUDIT_MARCH2026.md` for full audit report.
+
 ### Consistency Checks (Do These for Every New Script)
 1. **Are event alignment outcomes filtered correctly?** Check against `EVENT_VALID_OUTCOMES`.
 2. **Are constants imported from the canonical source?** Never hardcode thresholds that exist in `constants.py`.
@@ -126,6 +247,7 @@ Follow these standards for all analyses. These reflect current best practices in
 4. **Are units selected by the standard QC pipeline?** Use `get_good_cluster_ids()` or `load_kept_ids()`.
 5. **Are existing utility functions used?** Search the codebase before writing new code.
 6. **Are color palettes consistent?** Use `STAGE_COLORS`, `HMM_STATE_COLORS`, `OUTCOME_COLORS`, `CELLTYPE_COLORS` from config.
+7. **Is normalization correct?** Shared baseline, normalize-then-average, division-by-zero guards.
 
 ---
 

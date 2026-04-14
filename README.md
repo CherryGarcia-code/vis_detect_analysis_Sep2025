@@ -55,5 +55,38 @@ This project investigates neural dynamics in the medial striatum of mice perform
 
 ## Getting Started
 
-- See the `PROMPT.md` for coding and analysis instructions.
-- Example session schema: `RAW_SESSION_SCHEMA_BG_031_260325.json`
+### Quick Setup
+```bash
+# 1. Clone repository
+git clone <repository_url>
+cd vis_detect_analysis_Sep2025
+
+# 2. Install package in development mode
+pip install -e .
+
+# 3. Run behavioral analysis (quick test)
+cd analysis_suite
+python 01_behavior/a_learning_curve.py
+```
+
+### Environment Configuration
+```bash
+# Optional: Set subject for multi-subject analysis
+export VISDETECT_SUBJECT=BG_046  # Default if not set
+
+# Optional: Set custom data root (for different storage locations)
+export VISDETECT_DATA_ROOT=/path/to/your/data/root
+```
+
+### Documentation
+- **Analysis Suite**: See `analysis_suite/README.md` for detailed usage
+- **Project Manual**: See `CLAUDE.md` for complete analysis guidelines
+- **Running Guide**: See `RUNNING.md` for step-by-step pipeline execution
+- **Monitoring Tools**: See `docs/AI_interaction/concat-sort/MONITORING_GUIDE.md` for pipeline monitoring
+
+### Key Features
+- ✅ **Centralized utilities** in `src/visdetect/analysis/utils.py`
+- ✅ **Multi-subject ready** via environment variables
+- ✅ **Cross-platform** Python path detection
+- ✅ **Robust imports** with automatic fallbacks
+- ✅ **Comprehensive monitoring** for concat-sort pipelines

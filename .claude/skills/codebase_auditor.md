@@ -99,7 +99,62 @@ Run every section below. For each check, search the relevant files and report fi
 - Check that FDR correction is applied when screening across units.
 - Verify effect sizes are reported alongside p-values.
 
-### 8. Documentation (LOW)
+### 8. Normalization Practices (HIGH)
+
+#### 8a. Shared Baseline Definition
+- Search for z-score normalization, baseline subtraction, or `compute_zscore_normalized()` calls.
+- For any code comparing conditions (Hit vs Miss, Hit vs FA, etc.), verify baseline is computed **once** and shared across all conditions.
+- Flag any pattern where each condition is normalized to its own baseline:
+  ```python
+  # BAD (circular baseline):
+  hit_z = (hit - hit_baseline.mean()) / hit_baseline.std()
+  miss_z = (miss - miss_baseline.mean()) / miss_baseline.std()
+
+  # GOOD (shared baseline):
+  all_baseline = ...  # pool across conditions
+  hit_z = (hit - all_baseline.mean()) / all_baseline.std()
+  miss_z = (miss - all_baseline.mean()) / all_baseline.std()
+  ```
+
+#### 8b. Normalize-then-Average Order
+- Search for population averages, grand averages, or heatmaps.
+- Verify the order is: **normalize each unit → average across units** (NOT reverse).
+- Flag any code that averages raw rates first, then normalizes:
+  ```python
+  # BAD (average-then-normalize):
+  pop_avg = np.mean([unit1_rate, unit2_rate, ...], axis=0)
+  normalized = (pop_avg - pop_avg.mean()) / pop_avg.std()
+
+  # GOOD (normalize-then-average):
+  unit1_z = (unit1_rate - baseline_mean) / baseline_std
+  unit2_z = (unit2_rate - baseline_mean) / baseline_std
+  pop_avg = np.mean([unit1_z, unit2_z, ...], axis=0)
+  ```
+
+#### 8c. Division-by-Zero Guards
+- Search for z-score implementations (`/ std`, `/ sd`, `/ baseline_std`).
+- Verify all have guards to prevent division by zero or near-zero variance:
+  ```python
+  if std < 1e-6:
+      std = 1.0  # or return zero-centered trace
+  z = (rate - mean) / std
+  ```
+- Check `analysis_suite/utils.py` functions (`compute_zscore_normalized`, `compute_baseline_subtracted`).
+- Check `src/visdetect/analysis/tf_pulse.py` (`_zscore_trace`).
+
+#### 8d. Consistent Baseline Windows
+- Search for baseline window definitions (`(-0.5, 0.0)`, `TF_PULSE_PRE_WINDOW`, etc.).
+- Verify that scripts within the same analysis domain use consistent baseline windows.
+- Check that baseline windows are imported from `constants.py` (not hardcoded).
+- Flag any script that uses different baseline definitions for different conditions within the same comparison.
+
+#### 8e. Normalization Method Matches Task
+- **Decoding scripts** (`04_decoding/`): Should normalize to shared baseline before training classifiers (not rely solely on StandardScaler per time bin).
+- **Heatmaps** (`03_population/b_*.py`): Should use per-unit z-score with shared baseline.
+- **Coding directions** (`03_population/a_*.py`): Should use baseline-subtracted (Δrate) or shared-baseline z-score for grand averages.
+- **Single-unit screening** (`02_single_unit/a_*.py`): Per-trial paired differences are OK (not pooled).
+
+### 9. Documentation (LOW)
 
 - Check that every script has a docstring with: figure number, title, description.
 - Check that `save_figure()` calls include the module name.
