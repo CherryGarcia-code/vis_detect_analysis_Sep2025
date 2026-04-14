@@ -21,11 +21,11 @@ from scipy.ndimage import gaussian_filter1d
 import h5py
 import warnings
 
-from visdetect.analysis.constants import EVENT_VALID_OUTCOMES
+from visdetect.analysis.constants import EVENT_VALID_OUTCOMES, LICK_HARDWARE_DELAY_MS
 
 
 def compute_true_reaction_time(
-    trial, ni_events: Dict[str, Any], trial_idx: int, shift_fa_hit_ms: float = 200.0
+    trial, ni_events: Dict[str, Any], trial_idx: int, shift_fa_hit_ms: float = LICK_HARDWARE_DELAY_MS
 ) -> Optional[float]:
     """Replicates the notebook logic to compute a trial's true reaction time (absolute time).
 

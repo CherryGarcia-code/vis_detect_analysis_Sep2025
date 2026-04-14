@@ -45,6 +45,24 @@ from visdetect.analysis.constants import (          # noqa: F401
     DEFAULT_SIGMA_MS,
     DEFAULT_MIN_FR,
     DEFAULT_Z_THRESH_TF,
+    VIDEO_SYNC_SMOOTH_FRAMES,
+    VIDEO_SYNC_DETECT_THRESH,
+    VIDEO_SYNC_DETECT_THRESH_LOW,
+    VIDEO_SYNC_CLUSTER_MS,
+    VIDEO_SYNC_MATCH_REJECT_S,
+    VIDEO_SYNC_RANSAC_THRESH_S,
+    VIDEO_SYNC_MAX_DRIFT_PPM,
+    VIDEO_SYNC_MAX_RESIDUAL_MS,
+    VIDEO_SYNC_MIN_COVERAGE,
+    VIDEO_SYNC_COARSE_SEARCH_S,
+    VIDEO_SYNC_COARSE_STEP_S,
+    VIDEO_SYNC_DERIV_SIGMA_MULT,
+    VIDEO_SYNC_DERIV_MIN_THRESH,
+    VIDEO_SYNC_DERIV_PRE_FRAMES,
+    VIDEO_SYNC_DERIV_SEARCH_FRAMES,
+    VIDEO_SYNC_OUTLIER_N_ITER,
+    VIDEO_SYNC_OUTLIER_SIGMA,
+    VIDEO_SYNC_DEFAULT_EYE_ROI,
 )
 
 # =====================================================================
@@ -53,9 +71,10 @@ from visdetect.analysis.constants import (          # noqa: F401
 ROOT = str(Path(__file__).resolve().parents[3])
 
 # =====================================================================
-# Subject
+# Subject Configuration
 # =====================================================================
-SUBJECT: str = "BG_046"
+# Allow subject to be configured via environment variable or default to BG_046
+SUBJECT: str = os.getenv("VISDETECT_SUBJECT", "BG_046")
 
 # =====================================================================
 # Paths
@@ -90,6 +109,13 @@ TF_TRACES_DIR          = os.path.join(ROOT, "data", "cache", "tf_traces", SUBJEC
 # Legacy QC sessions manifest (deprecated — use staging manifest)
 QC_SESSIONS_PATH       = os.path.join(ROOT, "data", "pkls", SUBJECT,
                                       f"{SUBJECT}_sessions_manifest.csv")
+
+# Camera data root (may live on a different drive from main data)
+CAMERA_ROOT            = os.getenv("VISDETECT_CAMERA_ROOT",
+                         os.path.join("X:/public/projects/BeJG_20230130_VisDetect",
+                                      "wEPhys", "Cameras_sortIntoSubjects"))
+VIDEO_SYNC_DIR         = os.path.join(ROOT, "data", "cache", "video_sync")
+VIDEO_SYNC_FIG_DIR     = os.path.join(ROOT, "figures", "video_sync")
 
 # =====================================================================
 # Learning stages (full set — used internally for manifest validation)
