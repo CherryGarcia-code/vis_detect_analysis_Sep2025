@@ -24,6 +24,7 @@ import pandas as pd
 
 from visdetect.analysis.tf_pulse import collect_tf_pulse_traces, TFRespPulseConfig
 from visdetect.analysis.config import STAGING_MANIFEST_PATH, TF_TRACES_DIR, SUBJECT
+from visdetect.analysis.constants import TF_PULSE_TRACE_PRE
 from visdetect.core.session import load_session as _load_session
 
 try:
@@ -87,7 +88,7 @@ def main():
         return
 
     # Phase 1: Delete existing NPZ files
-    print("── Phase 1: Deleting old NPZ caches ──")
+    print("-- Phase 1: Deleting old NPZ caches --")
     deleted = 0
     for npz_file in existing_npz:
         npz_file.unlink()
@@ -95,8 +96,9 @@ def main():
     print(f"  Deleted {deleted} NPZ files.\n")
 
     # Phase 2: Recompute from PKLs
-    print("── Phase 2: Recomputing TF traces from PKLs ──")
-    cfg = TFRespPulseConfig(kept_only=False, use_constraints=True)
+    print("-- Phase 2: Recomputing TF traces from PKLs --")
+    cfg = TFRespPulseConfig(kept_only=False, use_constraints=True,
+                            trace_pre=TF_PULSE_TRACE_PRE)
     n_workers = args.workers
 
     results = []

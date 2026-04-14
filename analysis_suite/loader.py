@@ -231,6 +231,40 @@ def load_tf_traces_npz(session_name):
         return None
 
 
+# ── Detrended TF classification ─────────────────────────────────────
+
+def load_tf_responsiveness_detrended() -> pd.DataFrame:
+    """Load the detrended TF responsiveness CSV (from j_tf_detrended_classification.py).
+
+    Returns a DataFrame with columns: session_name, cluster_id, stage,
+    z_abs_max_standard, z_abs_max_detrended, is_tf_responsive_standard,
+    is_tf_responsive_detrended, z_max_fast_dt, z_min_fast_dt,
+    z_max_slow_dt, z_min_slow_dt.
+
+    Returns empty DataFrame if the cache file does not exist yet.
+    """
+    from config import CACHE_DIR
+    path = os.path.join(CACHE_DIR, "tf_responsiveness_detrended.csv")
+    if os.path.exists(path):
+        return pd.read_csv(path)
+    return pd.DataFrame()
+
+
+def load_tf_classification_detrended() -> pd.DataFrame:
+    """Load the detrended tier classification CSV (from g_tf_cell_classifier.py --detrend).
+
+    Returns a DataFrame with columns: session_name, cluster_id, stage,
+    tier, sub_type, and all per-unit metrics computed with linear detrending.
+
+    Returns empty DataFrame if the cache file does not exist yet.
+    """
+    from config import CACHE_DIR
+    path = os.path.join(CACHE_DIR, "tf_cell_classification_detrended.csv")
+    if os.path.exists(path):
+        return pd.read_csv(path)
+    return pd.DataFrame()
+
+
 # ── Waveform cell-type labels ────────────────────────────────────────
 
 def load_waveform_labels() -> pd.DataFrame:
@@ -312,5 +346,40 @@ def build_unit_table(qc_only: bool = True) -> pd.DataFrame:
             glt["celltype"] = np.nan
     except FileNotFoundError:
         glt["celltype"] = np.nan
+
+    # Merge detrended TF responsiveness (if available)
+    dt_df = load_tf_responsiveness_detrended()
+    if not dt_df.empty and "cluster_id" in dt_df.columns:
+        dt_sub = dt_df[["session_name", "cluster_id",
+                        "z_abs_max_detrended", "is_tf_responsive_detrended"]].copy()
+        dt_sub["session_name"] = dt_sub["session_name"].astype(int)
+        glt = glt.merge(
+            dt_sub,
+            left_on=["Session_Date", "Cluster_ID"],
+            right_on=["session_name", "cluster_id"],
+            how="left",
+        )
+        glt["is_tf_responsive_detrended"] = glt["is_tf_responsive_detrended"].fillna(False)
+        glt.drop(columns=["session_name", "cluster_id"], errors="ignore", inplace=True)
+    else:
+        glt["z_abs_max_detrended"] = np.nan
+        glt["is_tf_responsive_detrended"] = False
+
+    # Merge detrended tier classification (if available)
+    tier_dt = load_tf_classification_detrended()
+    if not tier_dt.empty and "cluster_id" in tier_dt.columns:
+        tier_sub = tier_dt[["session_name", "cluster_id", "tier"]].copy()
+        tier_sub = tier_sub.rename(columns={"tier": "tier_detrended"})
+        tier_sub["session_name"] = tier_sub["session_name"].astype(int)
+        glt = glt.merge(
+            tier_sub,
+            left_on=["Session_Date", "Cluster_ID"],
+            right_on=["session_name", "cluster_id"],
+            how="left",
+        )
+        glt["tier_detrended"] = glt["tier_detrended"].fillna("Non-responsive")
+        glt.drop(columns=["session_name", "cluster_id"], errors="ignore", inplace=True)
+    else:
+        glt["tier_detrended"] = "Non-responsive"
 
     return glt

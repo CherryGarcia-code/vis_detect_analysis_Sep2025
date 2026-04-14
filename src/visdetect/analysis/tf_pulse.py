@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 from visdetect.analysis.constants import (
     TF_PULSE_PRE_WINDOW,
     TF_PULSE_POST_WINDOW,
+    TF_PULSE_TRACE_PRE,
     DEFAULT_Z_THRESH_TF,
 )
 from visdetect.analysis.su_analysis import load_kept_ids
@@ -40,6 +41,8 @@ class TFRespPulseConfig:
     # Time windows around pulses
     pre_window: Tuple[float, float] = TF_PULSE_PRE_WINDOW
     post_window: Tuple[float, float] = TF_PULSE_POST_WINDOW
+    # Wider trace start for extraction (z-score baseline still uses pre_window)
+    trace_pre: Optional[float] = None  # None → use pre_window[0]
     # Smoothing for spike KDE
     dt: float = 0.001  # seconds per bin for smoothing grid
     sigma_ms: float = 17.0  # Gaussian sigma in ms (approx 40ms FWHM)
@@ -183,13 +186,15 @@ def _mean_activity_per_unit(
     post_window: Tuple[float, float],
     dt: float,
     sigma_ms: float,
+    trace_start: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     pulses = np.asarray(pulses, dtype=float)
     pulses = pulses[np.isfinite(pulses)]
+    full0 = trace_start if trace_start is not None else pre_window[0]
+    full1 = post_window[1]
     if pulses.size == 0:
-        t_vec = np.arange(pre_window[0], post_window[1], dt, dtype=float)
+        t_vec = np.arange(full0, full1, dt, dtype=float)
         return np.array([]), np.array([]), t_vec
-    full0, full1 = pre_window[0], post_window[1]
     t_vec = np.arange(full0, full1, dt, dtype=float)
     sigma_bins = (sigma_ms / 1000.0) / dt
     traces = []
@@ -231,20 +236,100 @@ def _zscore_trace(
     return z
 
 
+# ── Post-hoc linear detrending ──────────────────────────────────────
+
+def detrend_tf_traces(
+    t_vec: np.ndarray,
+    traces: np.ndarray,
+    baseline_window: Tuple[float, float] = (-0.4, -0.01),
+    post_window: Tuple[float, float] = (0.0, 0.3),
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Linear-detrend z-scored TF pulse traces and measure post-pulse peaks.
+
+    Fits a degree-1 polynomial to the baseline window of each trace,
+    subtracts the extrapolated trend from the full trace, then measures
+    peak and trough z-scores in the post-pulse window.
+
+    The trend is subtracted from the **full** trace (for clean
+    visualisation), but peaks are measured only in *post_window*
+    (default 0–300 ms) to avoid unreliable extrapolation far beyond
+    the fit region.
+
+    Parameters
+    ----------
+    t_vec : ndarray, shape (n_time,)
+        Time vector in **seconds** (matching NPZ ``t_vec``).
+    traces : ndarray, shape (n_units, n_time)
+        Z-scored mean traces (e.g. ``fast_z`` or ``slow_z`` from NPZ).
+    baseline_window : tuple of float
+        (start, end) in seconds for the linear-fit region.
+    post_window : tuple of float
+        (start, end) in seconds for peak/trough measurement.
+
+    Returns
+    -------
+    detrended : ndarray, shape (n_units, n_time)
+        Full detrended traces.
+    z_max_post : ndarray, shape (n_units,)
+        Maximum z-score in *post_window* per unit.
+    z_min_post : ndarray, shape (n_units,)
+        Minimum z-score in *post_window* per unit.
+    """
+    t_s = np.asarray(t_vec, dtype=float)
+    pre_mask = (t_s >= baseline_window[0]) & (t_s < baseline_window[1])
+    post_mask = (t_s >= post_window[0]) & (t_s < post_window[1])
+
+    n_units = traces.shape[0]
+    detrended = traces.copy()
+    z_max_post = np.full(n_units, np.nan)
+    z_min_post = np.full(n_units, np.nan)
+
+    if pre_mask.sum() < 2:
+        # Not enough baseline bins for a linear fit — return as-is
+        if post_mask.any():
+            z_max_post = np.nanmax(traces[:, post_mask], axis=1)
+            z_min_post = np.nanmin(traces[:, post_mask], axis=1)
+        return detrended, z_max_post, z_min_post
+
+    t_pre = t_s[pre_mask]
+    for u in range(n_units):
+        tr = traces[u]
+        if np.all(np.isnan(tr)):
+            continue
+        coeffs = np.polyfit(t_pre, tr[pre_mask], deg=1)
+        trend = np.polyval(coeffs, t_s)
+        detrended[u] = tr - trend
+        if post_mask.any():
+            z_max_post[u] = np.nanmax(detrended[u, post_mask])
+            z_min_post[u] = np.nanmin(detrended[u, post_mask])
+
+    return detrended, z_max_post, z_min_post
+
+
 def _compute_trace_for_cluster(args):
     """Top-level worker for parallel trace computation.
 
-    args: tuple containing (cid, spike_times, fast_times, slow_times, t_vec, pre_window, post_window, dt, sigma_ms)
+    args: tuple of 9 or 10 elements:
+      (cid, spike_times, fast_times, slow_times, t_vec,
+       pre_window, post_window, dt, sigma_ms[, trace_start])
     Returns a tuple (cid, TFUnitTrace)
     """
-    (cid, spike_times, fast_times, slow_times, t_vec, pre_window, post_window, dt, sigma_ms) = args
+    if len(args) == 10:
+        (cid, spike_times, fast_times, slow_times, t_vec,
+         pre_window, post_window, dt, sigma_ms, trace_start) = args
+    else:
+        (cid, spike_times, fast_times, slow_times, t_vec,
+         pre_window, post_window, dt, sigma_ms) = args
+        trace_start = None
     import numpy as _np
 
     post_mask = (t_vec >= post_window[0]) & (t_vec < post_window[1])
 
     st = _np.asarray(spike_times, dtype=float).flatten()
 
-    mf, mf_sem, _ = _mean_activity_per_unit(st, fast_times, pre_window, post_window, dt, sigma_ms)
+    mf, mf_sem, _ = _mean_activity_per_unit(
+        st, fast_times, pre_window, post_window, dt, sigma_ms,
+        trace_start=trace_start)
     if mf.size > 0:
         zf, fast_sd = _zscore_trace(mf, t_vec, pre_window, return_stats=True)
         zf_sem = mf_sem / fast_sd if _np.isfinite(fast_sd) and fast_sd > 0 else _np.zeros_like(mf_sem)
@@ -256,7 +341,9 @@ def _compute_trace_for_cluster(args):
         zf_peak = _np.nan
         zf_trough = _np.nan
 
-    ms, ms_sem, _ = _mean_activity_per_unit(st, slow_times, pre_window, post_window, dt, sigma_ms)
+    ms, ms_sem, _ = _mean_activity_per_unit(
+        st, slow_times, pre_window, post_window, dt, sigma_ms,
+        trace_start=trace_start)
     if ms.size > 0:
         zs, slow_sd = _zscore_trace(ms, t_vec, pre_window, return_stats=True)
         zs_sem = ms_sem / slow_sd if _np.isfinite(slow_sd) and slow_sd > 0 else _np.zeros_like(ms_sem)
@@ -308,7 +395,8 @@ def collect_tf_pulse_traces(
     if fast_times is None or slow_times is None:
         fast_times, slow_times = _collect_pulses(session, cfg, show_progress=show_progress)
 
-    full0, full1 = cfg.pre_window[0], cfg.post_window[1]
+    full0 = cfg.trace_pre if cfg.trace_pre is not None else cfg.pre_window[0]
+    full1 = cfg.post_window[1]
     t_vec = np.arange(full0, full1, cfg.dt, dtype=float)
     post_mask = (t_vec >= cfg.post_window[0]) & (t_vec < cfg.post_window[1])
 
@@ -360,14 +448,17 @@ def collect_tf_pulse_traces(
     if parallel and total > 0:
         if n_workers is None:
             n_workers = min(os.cpu_count() or 1, 8)
-        # Build args for each cluster: (cid, spike_times, fast_times, slow_times, t_vec, pre_window, post_window, dt, sigma_ms)
+        # Build args for each cluster
+        trace_start = cfg.trace_pre  # None when not using wider window
         tasks = []
         for cid in cluster_ids:
             c = next((x for x in session.clusters if int(x.cluster_id) == int(cid)), None)
             if c is None:
                 continue
             st = np.asarray(c.spike_times, dtype=float).flatten()
-            tasks.append((int(cid), st, fast_times, slow_times, t_vec, cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms))
+            tasks.append((int(cid), st, fast_times, slow_times, t_vec,
+                          cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms,
+                          trace_start))
 
         results = []
         with ProcessPoolExecutor(max_workers=n_workers) as ex:
@@ -392,7 +483,10 @@ def collect_tf_pulse_traces(
                 if c is None:
                     continue
                 st = np.asarray(c.spike_times, dtype=float).flatten()
-                cid_ret, entry = _compute_trace_for_cluster((int(cid), st, fast_times, slow_times, t_vec, cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms))
+                cid_ret, entry = _compute_trace_for_cluster((
+                    int(cid), st, fast_times, slow_times, t_vec,
+                    cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms,
+                    trace_start))
                 entries.append(entry)
         if pr2 is not None:
             pr2.close()
@@ -404,7 +498,9 @@ def collect_tf_pulse_traces(
                 continue
             st = np.asarray(c.spike_times, dtype=float).flatten()
 
-            mf, mf_sem, _ = _mean_activity_per_unit(st, fast_times, cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms)
+            mf, mf_sem, _ = _mean_activity_per_unit(
+                st, fast_times, cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms,
+                trace_start=cfg.trace_pre)
             if mf.size > 0:
                 zf, fast_sd = _zscore_trace(mf, t_vec, cfg.pre_window, return_stats=True)
                 zf_sem = mf_sem / fast_sd if np.isfinite(fast_sd) and fast_sd > 0 else np.zeros_like(mf_sem)
@@ -416,7 +512,9 @@ def collect_tf_pulse_traces(
                 zf_peak = np.nan
                 zf_trough = np.nan
 
-            ms, ms_sem, _ = _mean_activity_per_unit(st, slow_times, cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms)
+            ms, ms_sem, _ = _mean_activity_per_unit(
+                st, slow_times, cfg.pre_window, cfg.post_window, cfg.dt, cfg.sigma_ms,
+                trace_start=cfg.trace_pre)
             if ms.size > 0:
                 zs, slow_sd = _zscore_trace(ms, t_vec, cfg.pre_window, return_stats=True)
                 zs_sem = ms_sem / slow_sd if np.isfinite(slow_sd) and slow_sd > 0 else np.zeros_like(ms_sem)

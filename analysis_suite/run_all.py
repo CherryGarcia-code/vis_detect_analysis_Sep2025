@@ -13,9 +13,32 @@ All other scripts are unaffected and run sequentially as normal.
 """
 import subprocess, sys, os, time, argparse
 
+# ── Configuration ─────────────────────────────────────────────────────
+
 SUITE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SUITE_DIR)
-PYTHON = os.path.join(ROOT_DIR, ".venv", "Scripts", "python.exe")
+
+# Python executable - try multiple options for cross-platform compatibility
+def find_python_executable():
+    """Find the best Python executable for running scripts."""
+    candidates = [
+        # Windows venv
+        os.path.join(ROOT_DIR, ".venv", "Scripts", "python.exe"),
+        # Linux/Mac venv
+        os.path.join(ROOT_DIR, ".venv", "bin", "python"),
+        # System Python as fallback
+        "python",
+        "py"  # Windows Python launcher
+    ]
+
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+
+    # Return 'python' as final fallback
+    return "python"
+
+PYTHON = find_python_executable()
 
 SCRIPTS = [
     # ── 01_behavior (Figs 01-07) ──────────────────────────────────────
@@ -35,9 +58,11 @@ SCRIPTS = [
     # ── 03_population (Figs 13-17) ────────────────────────────────────
     ("03_population/a_coding_direction.py",        "Fig13 Coding Direction"),
     ("03_population/b_population_psth_heatmap.py", "Fig14 Population Heatmap"),
+    ("03_population/g_sequence_significance.py",  "Fig14b Sequence Significance"),
     ("03_population/c_dimensionality_reduction.py","Fig15 PCA Dimensionality"),
     ("03_population/d_state_matched_cd.py",        "Fig16 State-Matched CD"),
     ("03_population/e_sensory_dose_response.py",   "Fig17 Sensory Dose-Response"),
+    ("03_population/f_2d_decomposition.py",        "Fig17b 2D Decomposition"),
     # ── 04_decoding (Figs 18-20) ──────────────────────────────────────
     ("04_decoding/a_hit_miss_decoding.py",         "Fig18 Hit/Miss Decoding"),
     ("04_decoding/b_change_size_decoding.py",      "Fig19 Change-Size Decoding"),
@@ -61,8 +86,10 @@ SCRIPTS = [
     ("07_advanced/h_second_pulse_analysis.py",     "Fig34 Second Pulse Analysis"),
     ("07_advanced/i_fa_circular_shuffle_classification.py", "Fig32i FA Circular Shuffle"),
     ("07_advanced/j_fa_matched_null_classification.py",     "Fig32j FA Matched Null"),
+    ("07_advanced/k_lick_hazard_glm.py",                   "Fig35k Lick Hazard GLM"),
     # ── 08_tf_pulse (Figs 35-42) ──────────────────────────────────────
     ("08_tf_pulse/a_tf_responsiveness.py",         "Fig35 TF Responsiveness"),
+    ("08_tf_pulse/i_tf_encoding_distribution.py",  "Fig35b TF Encoding Distribution"),
     ("08_tf_pulse/b_tf_response_properties.py",    "Fig36 TF Response Properties"),
     ("08_tf_pulse/c_tf_pulse_integration.py",      "Fig37 Two-Pulse Integration"),
     ("08_tf_pulse/d_tf_learning_emergence.py",     "Fig38 TF Learning Emergence"),
@@ -78,6 +105,7 @@ SCRIPTS = [
 # Scripts that accept --n_workers (session-level parallelism)
 PARALLEL_SCRIPTS = {
     "03_population/a_coding_direction.py",
+    "03_population/g_sequence_significance.py",
     "04_decoding/a_hit_miss_decoding.py",
     "07_advanced/a_glm_encoding.py",
 }
