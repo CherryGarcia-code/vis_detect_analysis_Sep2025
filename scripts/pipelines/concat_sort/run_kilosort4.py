@@ -69,6 +69,7 @@ def run_ks4(
     manifest_path: str,
     batch_size: int = 60000,
     nblocks: int = 5,
+    drift_smoothing: list[float] | None = None,
     Th_universal: float | None = None,
     Th_learned: float | None = None,
 ) -> int:
@@ -84,6 +85,10 @@ def run_ks4(
         KS4 batch size in samples (default 60000 = 2 s at 30 kHz).
     nblocks : int
         Number of blocks for drift correction (default 5).
+    drift_smoothing : list of float or None
+        Temporal smoothing widths for drift correction, one per nblocks
+        dimension (KS4 default: [0.5, 0.5, 0.5]).  Increase for small
+        channel counts where per-batch drift estimates are noisy.
     Th_universal : float or None
         Spike detection threshold for universal templates (KS4 default: 9).
         Raise to detect fewer spikes and reduce clustering memory pressure.
@@ -173,6 +178,10 @@ def run_ks4(
         "nblocks":     nblocks,
     }
 
+    # Override drift smoothing if specified (increase for small channel counts)
+    if drift_smoothing is not None:
+        settings["drift_smoothing"] = drift_smoothing
+
     # Override spike detection thresholds if specified (reduces spike count
     # and therefore clustering GPU memory usage).
     if Th_universal is not None:
@@ -238,6 +247,7 @@ def run_ks4(
 
     print(f"  KS4: n_chan_bin={n_channels}, fs={sample_rate}, "
           f"batch_size={batch_size}, nblocks={nblocks}"
+          f", drift_smoothing={drift_smoothing or [0.5, 0.5, 0.5]}"
           f", Th_universal={Th_universal or 9}, Th_learned={Th_learned or 8}")
 
     # ── Run Kilosort 4 ──
@@ -293,6 +303,7 @@ def run_ks4(
         f.write(f"N channels: {n_channels}\n")
         f.write(f"Batch size: {batch_size}\n")
         f.write(f"Nblocks: {nblocks}\n")
+        f.write(f"Drift smoothing: {drift_smoothing or [0.5, 0.5, 0.5]}\n")
         f.write(f"Th_universal: {Th_universal or 9}\n")
         f.write(f"Th_learned: {Th_learned or 8}\n")
 
@@ -321,6 +332,12 @@ if __name__ == "__main__":
         help="KS4 nblocks for drift correction (default: 5)",
     )
     parser.add_argument(
+        "--drift-smoothing", type=float, nargs=3, default=None,
+        metavar=("S1", "S2", "S3"),
+        help="Drift smoothing widths (3 floats, default: 0.5 0.5 0.5). "
+             "Increase for small channel counts (e.g. 3.0 3.0 3.0 for 96 ch).",
+    )
+    parser.add_argument(
         "--Th-universal", type=float, default=None,
         help="Spike detection threshold for universal templates "
              "(KS4 default: 9). Raise to reduce clustering memory.",
@@ -336,6 +353,7 @@ if __name__ == "__main__":
     idx = args.job_index - 1
     sys.exit(run_ks4(
         idx, args.manifest, args.batch_size, args.nblocks,
+        drift_smoothing=args.drift_smoothing,
         Th_universal=args.Th_universal,
         Th_learned=args.Th_learned,
     ))

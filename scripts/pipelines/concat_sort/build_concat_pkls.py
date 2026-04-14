@@ -40,19 +40,29 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from visdetect.core.session import Session, Cluster, load_session, save_session
 
-# ── Constants ─────────────────────────────────────────────────────────
-SUBJECT = "BG_046"
-FINAL_OUTPUT = Path(
-    r"X:/public/projects/BeJG_20230130_VisDetect/wEPhys/BG_046"
-    r"/concat_sort/final_output"
-)
-PROCESSED_BASE = Path(
-    r"X:/public/projects/BeJG_20230130_VisDetect/wEPhys/BG_046"
-    r"/Processed data"
-)
-PKL_INPUT_DIR = REPO_ROOT / "data" / "pkls" / SUBJECT
-PKL_OUTPUT_DIR = REPO_ROOT / "data" / "pkls" / f"{SUBJECT}_concat_sort"
-MANIFEST_PATH = REPO_ROOT / "data" / f"{SUBJECT}_staging_manifest.csv"
+# ── Configuration (can be overridden via CLI) ────────────────────────
+def get_default_paths(subject="BG_046", data_root=None):
+    """Get default paths for a subject, optionally with custom data root."""
+    if data_root is None:
+        data_root = f"X:/public/projects/BeJG_20230130_VisDetect/wEPhys/{subject}"
+
+    return {
+        'subject': subject,
+        'final_output': Path(data_root) / "concat_sort/final_output",
+        'processed_base': Path(data_root) / "Processed data",
+        'pkl_input_dir': REPO_ROOT / "data" / "pkls" / subject,
+        'pkl_output_dir': REPO_ROOT / "data" / "pkls" / f"{subject}_concat_sort",
+        'manifest_path': REPO_ROOT / "data" / f"{subject}_staging_manifest.csv"
+    }
+
+# Default configuration (backwards compatibility)
+DEFAULT_CONFIG = get_default_paths()
+SUBJECT = DEFAULT_CONFIG['subject']
+FINAL_OUTPUT = DEFAULT_CONFIG['final_output']
+PROCESSED_BASE = DEFAULT_CONFIG['processed_base']
+PKL_INPUT_DIR = DEFAULT_CONFIG['pkl_input_dir']
+PKL_OUTPUT_DIR = DEFAULT_CONFIG['pkl_output_dir']
+MANIFEST_PATH = DEFAULT_CONFIG['manifest_path']
 
 SAMPLE_RATE = 30_000.0
 SHANK_ID_OFFSET = 100_000
@@ -299,15 +309,24 @@ def _build_one_session(sess_name, shank_registries, output_dir, force):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build .pkl sessions from concat-sort KS4 + TPrime"
+        description="Build .pkl sessions from concat-sort KS4 + TPrime",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        "--subject", default=os.getenv("VISDETECT_SUBJECT", "BG_046"),
+        help="Subject ID"
+    )
+    parser.add_argument(
+        "--data-root", default=None,
+        help="Data root directory (default: X:/public/projects/BeJG_20230130_VisDetect/wEPhys/{subject})"
     )
     parser.add_argument(
         "--sessions", nargs="+",
         help="Specific sessions (e.g. BG_046_01072025)"
     )
     parser.add_argument(
-        "--output", type=Path, default=PKL_OUTPUT_DIR,
-        help=f"Output directory (default: {PKL_OUTPUT_DIR})"
+        "--output", type=Path, default=None,
+        help="Output directory (default: data/pkls/{subject}_concat_sort)"
     )
     parser.add_argument("--force", action="store_true", help="Overwrite existing pkls")
     parser.add_argument("--dry-run", action="store_true", help="Show plan, don't write")
@@ -316,6 +335,22 @@ def main():
         help="Parallel workers (default: 1 = serial).  4-6 recommended.",
     )
     args = parser.parse_args()
+
+    # Configure paths based on arguments
+    config = get_default_paths(args.subject, args.data_root)
+    if args.output:
+        config['pkl_output_dir'] = args.output
+
+    # Update global variables for functions below
+    global SUBJECT, FINAL_OUTPUT, PROCESSED_BASE, PKL_INPUT_DIR, PKL_OUTPUT_DIR, MANIFEST_PATH
+    SUBJECT = config['subject']
+    FINAL_OUTPUT = config['final_output']
+    PROCESSED_BASE = config['processed_base']
+    PKL_INPUT_DIR = config['pkl_input_dir']
+    PKL_OUTPUT_DIR = config['pkl_output_dir']
+    MANIFEST_PATH = config['manifest_path']
+
+    args.output = PKL_OUTPUT_DIR
 
     args.output.mkdir(parents=True, exist_ok=True)
 
