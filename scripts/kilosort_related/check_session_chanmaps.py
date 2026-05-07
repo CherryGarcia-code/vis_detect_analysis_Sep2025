@@ -136,10 +136,14 @@ def main(subject: str, subject_root: str) -> None:
         print(f"No *_imec0.ap.meta files found under {subject_root}")
         return
 
-    results: List[Dict[str, str]] = []
+    seen: Dict[str, str] = {}
     for session_name, meta_path in meta_files:
-        imro_file = extract_imro_file(meta_path)
-        results.append({'session': session_name, 'imro_file': imro_file})
+        if session_name not in seen:
+            seen[session_name] = extract_imro_file(meta_path)
+
+    results: List[Dict[str, str]] = [
+        {'session': s, 'imro_file': imro} for s, imro in seen.items()
+    ]
 
     grouped_results = group_by_imro(results)
     write_grouped_csvs(subject, grouped_results)

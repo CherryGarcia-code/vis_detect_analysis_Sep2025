@@ -66,7 +66,7 @@ MAX_PULSES_PER_RASTER = 2000  # cap for memory; subsample if more
 
 def _raster_path(session_name, cluster_id):
     return os.path.join(RASTER_CACHE_DIR,
-                        f"{int(session_name)}_{int(cluster_id)}_raster.npz")
+                        f"{str(int(session_name)).zfill(8)}_{int(cluster_id)}_raster.npz")
 
 
 # ── Worker function (module-level for ProcessPoolExecutor on Windows) ──

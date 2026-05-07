@@ -58,11 +58,17 @@ from visdetect.analysis.constants import (          # noqa: F401
     VIDEO_SYNC_COARSE_STEP_S,
     VIDEO_SYNC_DERIV_SIGMA_MULT,
     VIDEO_SYNC_DERIV_MIN_THRESH,
+    VIDEO_SYNC_DERIV_MAX_THRESH,
     VIDEO_SYNC_DERIV_PRE_FRAMES,
     VIDEO_SYNC_DERIV_SEARCH_FRAMES,
     VIDEO_SYNC_OUTLIER_N_ITER,
     VIDEO_SYNC_OUTLIER_SIGMA,
     VIDEO_SYNC_DEFAULT_EYE_ROI,
+    VIDEO_SYNC_MASK_N_TRANSITIONS,
+    VIDEO_SYNC_MASK_PRE_FRAMES,
+    VIDEO_SYNC_MASK_POST_FRAMES,
+    VIDEO_SYNC_MASK_MORPH_OPEN,
+    VIDEO_SYNC_MASK_MIN_COMPONENT,
 )
 
 # =====================================================================
@@ -116,6 +122,10 @@ CAMERA_ROOT            = os.getenv("VISDETECT_CAMERA_ROOT",
                                       "wEPhys", "Cameras_sortIntoSubjects"))
 VIDEO_SYNC_DIR         = os.path.join(ROOT, "data", "cache", "video_sync")
 VIDEO_SYNC_FIG_DIR     = os.path.join(ROOT, "figures", "video_sync")
+
+# Camera feature extraction cache directories
+MOTION_ENERGY_DIR      = os.path.join(ROOT, "data", "cache", "motion_energy")
+PUPIL_DIR              = os.path.join(ROOT, "data", "cache", "pupil")
 
 # =====================================================================
 # Learning stages (full set — used internally for manifest validation)

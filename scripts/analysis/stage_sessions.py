@@ -182,6 +182,10 @@ def stage_sessions(subject_dir, subject_name, output_csv, dprime_threshold=0.8, 
 
     df = pd.DataFrame(records)
 
+    if df.empty:
+        print(f"No sessions found or processed for {subject_name} in {subject_dir}")
+        return
+
     # ── Staging Logic: Chronological + Performance Threshold ──────────
     #
     # Algorithm (Option 2 — hybrid chronological + performance):

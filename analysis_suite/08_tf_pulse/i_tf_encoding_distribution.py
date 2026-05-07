@@ -330,7 +330,7 @@ def main():
 
     detrended_rows = []
     for _, mrow in manifest.iterrows():
-        sname = str(int(mrow["session_name"]))
+        sname = str(int(mrow["session_name"])).zfill(8)
         stage = mrow["stage"]
 
         try:
@@ -425,7 +425,7 @@ def main():
     session_stages = []
 
     for _, mrow in manifest.iterrows():
-        sname = str(int(mrow["session_name"]))
+        sname = str(int(mrow["session_name"])).zfill(8)
         stage = mrow["stage"]
 
         try:

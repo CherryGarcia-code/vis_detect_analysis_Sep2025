@@ -287,7 +287,7 @@ def load_unit_rasters(session_name: int, cluster_id: int) -> Optional[Dict]:
     n_fast_pulses, n_slow_pulses, t_range.
     Returns None if not cached yet.
     """
-    sname = str(int(session_name))
+    sname = str(int(session_name)).zfill(8)
     cache_path = os.path.join(RASTER_CACHE_DIR,
                               f"{sname}_{cluster_id}_raster.npz")
     if not os.path.exists(cache_path):

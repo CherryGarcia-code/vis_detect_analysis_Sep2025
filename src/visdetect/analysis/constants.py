@@ -153,16 +153,90 @@ VIDEO_SYNC_COARSE_STEP_S: float = 0.5       # Brute-force offset search step (se
 
 # --- Derivative-based onset detection (preferred method) ---
 # The eye camera is IR-illuminated; the strongest Baseline_ON signal is the
-# background screen glow visible in the upper-right region of the frame.
-# When the gray screen transitions to a drifting grating, the luminance trace
-# in this ROI goes from flat to oscillating (TF modulation).  We detect the
-# first large absolute derivative as the onset timestamp.
+# background screen glow visible to the right of the frame.  At Baseline_ON
+# the uniform bright ITI screen transitions to a drifting grating (lower mean
+# luminance), producing a luminance DROP in the background glow region.  The
+# grating can appear anywhere to the right of x~600, but the mouse head
+# (y~250-750) blocks the signal.  We therefore use two strips above and below
+# the head.  We detect the first large absolute derivative as the onset
+# timestamp.
 VIDEO_SYNC_DERIV_SIGMA_MULT: float = 5.0    # MAD multiplier for derivative threshold
 VIDEO_SYNC_DERIV_MIN_THRESH: float = 2.0    # Minimum abs-derivative for onset (pixel units)
+VIDEO_SYNC_DERIV_MAX_THRESH: float = 15.0   # Cap on adaptive threshold (prevents inflation when pre-baseline overlaps active grating)
 VIDEO_SYNC_DERIV_PRE_FRAMES: int = 20       # Frames before expected onset for baseline noise
 VIDEO_SYNC_DERIV_SEARCH_FRAMES: int = 30    # Frames before/after expected onset to search
-VIDEO_SYNC_OUTLIER_N_ITER: int = 3          # Iterative MAD outlier rejection passes
+VIDEO_SYNC_OUTLIER_N_ITER: int = 10         # Iterative MAD outlier rejection passes
 VIDEO_SYNC_OUTLIER_SIGMA: float = 3.0       # MAD multiplier for outlier rejection
-# Default ROI for BG_046 eye camera: background glow upper-right of frame
-# (y0, y1, x0, x1) — screen illumination visible behind the mouse head
-VIDEO_SYNC_DEFAULT_EYE_ROI: tuple = (50, 300, 600, 900)
+# Default ROI for BG_046 eye camera: two strips of background glow to the
+# right of the frame, above and below the mouse head (which blocks y~250-750).
+# Multi-polygon format: [[[x,y], ...], [[x,y], ...]]
+# Top strip: x:650-976, y:0-200   |  Bottom strip: x:600-976, y:750-1024
+VIDEO_SYNC_DEFAULT_EYE_ROI: list = [
+    [[650, 0], [976, 0], [976, 200], [650, 200]],
+    [[600, 750], [976, 750], [976, 1024], [600, 1024]],
+]
+
+# --- Data-driven screen mask parameters ---
+# build_screen_mask() averages |post-pre| difference images across known
+# transitions to identify which pixels see the screen (phase-invariant).
+VIDEO_SYNC_MASK_N_TRANSITIONS: int = 40   # Number of transitions to sample for mask
+VIDEO_SYNC_MASK_PRE_FRAMES: int = 3       # Frames before transition for pre-image
+VIDEO_SYNC_MASK_POST_FRAMES: int = 3      # Frames after transition for post-image
+VIDEO_SYNC_MASK_MORPH_OPEN: int = 7       # Morphological opening kernel size
+VIDEO_SYNC_MASK_MIN_COMPONENT: int = 5000 # Min connected component area (pixels)
+VIDEO_SYNC_MASK_X_MIN: int = 500          # Spatial prior: zero mask for x < this value
+
+# --- Corneal auto-calibration parameters ---
+# auto_calibrate_corneal_roi() automatically finds the corneal grating reflection
+# by (1) detecting the pupil as a dark blob, then (2) applying a data-driven
+# std(post-pre diff) approach within a constrained search region.
+#
+# Position prior (eye-cam specific): the grating reflection is always LOWER and
+# SLIGHTLY LEFT of the pupil center.  This is because the stimulus screen is
+# positioned below-left of the eye in the rig.  The angular wedge [125°, 170°]
+# (where 0°=right, 90°=down in image coords) restricts to the lower-left region,
+# excluding the near-pure-downward tear duct / nasal tissue artefacts that appear
+# at 90-125° and show strong eye-movement reflex signals peaking 200-700ms after
+# stimulus onset.  The reflection is typically around 130°-160° (mostly leftward
+# with slight downward lean).  The upper range is capped at 170° to exclude
+# near-pure-left artefacts (whisker reflections, tube glints) at 175°-185°.
+# NEVER apply this to the front cam — front cam is not used for Baseline_ON sync.
+CORNEAL_CAL_N_TRANSITIONS: int = 40        # Transitions sampled for std(diff) map
+CORNEAL_CAL_PRE_FRAMES: int = 3            # Frames averaged before each transition
+CORNEAL_CAL_POST_FRAMES: int = 3           # Frames averaged after each transition
+CORNEAL_CAL_SEARCH_MARGIN_PX: int = 120    # Search radius around pupil center (px)
+CORNEAL_CAL_PUPIL_EXCLUSION_FACTOR: float = 1.5  # Exclude pupil_radius × this
+CORNEAL_CAL_ANGLE_MIN_DEG: float = 125.0  # Lower-left wedge start (deg, 0=right 90=down)
+CORNEAL_CAL_ANGLE_MAX_DEG: float = 170.0  # Lower-left wedge end
+CORNEAL_CAL_MAX_DIST_PX: int = 60         # Max distance from pupil centre for reflection (px)
+CORNEAL_CAL_MASK_MIN_AREA_PX: int = 5     # Minimum corneal reflection area (px²)
+CORNEAL_CAL_MASK_MAX_AREA_PX: int = 1000  # Maximum corneal reflection area (px²)
+CORNEAL_CAL_MASK_THRESHOLD_PCT: int = 65  # Percentile threshold within search region (top 35%)
+CORNEAL_CAL_PUPIL_MIN_AREA_PX: int = 50   # Minimum pupil blob area (px²)
+CORNEAL_CAL_PUPIL_MAX_AREA_PX: int = 8000 # Maximum pupil blob area (px²)
+CORNEAL_CAL_PUPIL_MIN_CIRCULARITY: float = 0.55  # Min 4π·area/perimeter² for pupil
+
+# =====================================================================
+# Camera feature extraction parameters
+# =====================================================================
+
+# Motion energy: frame-to-frame absolute pixel difference in ROI.
+# Mouth ROI (y0, y1, x0, x1) in the eye camera frame.  The eye camera
+# captures the eye in the upper region and the mouth/jaw in the lower
+# region.  PLACEHOLDER values — calibrate via validate_roi.py before
+# batch use.
+MOTION_ENERGY_MOUTH_ROI: tuple = (700, 1000, 100, 500)
+# Spatial downsampling factor (2 = half resolution per axis = 4x fewer pixels)
+MOTION_ENERGY_DOWNSAMPLE: int = 2
+
+# Pupil extraction: adaptive threshold + ellipse fitting for head-fixed
+# mice under IR illumination (dark pupil vs bright iris).
+# Eye ROI (y0, y1, x0, x1) — upper portion of eye camera frame.
+# PLACEHOLDER values — calibrate via validate_roi.py before batch use.
+PUPIL_EYE_ROI: tuple = (50, 450, 150, 600)
+PUPIL_BLUR_KERNEL: int = 5               # Gaussian blur kernel (must be odd)
+PUPIL_THRESH_BLOCK_SIZE: int = 51         # Adaptive threshold block size
+PUPIL_MIN_AREA: int = 200                 # Min pupil contour area (px^2)
+PUPIL_MAX_AREA: int = 15000               # Max pupil contour area (px^2)
+PUPIL_MIN_ROUNDNESS: float = 0.3          # min(minor/major) axis ratio
+PUPIL_BLINK_MAX_GAP_MS: float = 500.0     # Max NaN gap to interpolate (blinks)

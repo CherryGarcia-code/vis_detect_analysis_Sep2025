@@ -34,6 +34,7 @@ from config import (
     LICK_DIR,
     PKL_DIR,
     STAGING_MANIFEST_PATH,
+    SUBJECT,
     VALID_STAGES,
     WAVEFORM_LABELS_PATH,
     chronological_sort,
@@ -55,15 +56,40 @@ from visdetect.core.session import load_session as _load_session_raw
 # ── Session loading ───────────────────────────────────────────────────
 
 def load_session(session_name) -> "Session":
-    """Load a single session by name (DDMMYYYY int or string).
+    """Load a single session by name (DDMMYYYY or DDMMYY int or string).
 
-    Wraps visdetect.core.session.load_session with path resolution.
+    Tries multiple date-format variants to handle subjects with mixed naming:
+      - 8-digit DDMMYYYY (BG_046, BG_039, newer sessions)
+      - 6-digit DDMMYY   (BG_031, BG_038, older sessions)
+    Also converts between the two formats when needed.
     """
-    name_str = str(int(session_name)).zfill(8)
-    pkl_path = os.path.join(PKL_DIR, f"BG_046_{name_str}.pkl")
-    if not os.path.exists(pkl_path):
-        raise FileNotFoundError(f"Session pkl not found: {pkl_path}")
-    return _load_session_raw(pkl_path)
+    digits = str(int(session_name))
+
+    candidates = []
+    # Standard zero-padding to 8 and 6 digits
+    candidates.append(digits.zfill(8))
+    candidates.append(digits.zfill(6))
+    # If given 8-digit DDMMYYYY, also try 6-digit DDMMYY (strip century)
+    if len(digits) == 8:
+        candidates.append(digits[:4] + digits[6:])  # e.g. 25042025 -> 250425
+    # If given 6-digit DDMMYY, also try 8-digit DDMMYYYY (expand century to 20xx)
+    if len(digits.zfill(6)) == 6:
+        padded6 = digits.zfill(6)
+        candidates.append(padded6[:4] + "20" + padded6[4:])  # e.g. 250425 -> 25042025
+
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        pkl_path = os.path.join(PKL_DIR, f"{SUBJECT}_{candidate}.pkl")
+        if os.path.exists(pkl_path):
+            return _load_session_raw(pkl_path)
+
+    raise FileNotFoundError(
+        f"pkl not found for session '{session_name}' in {PKL_DIR} "
+        f"(tried {SUBJECT}_<date>.pkl with candidates: {list(seen)})"
+    )
 
 
 def session_iterator(
