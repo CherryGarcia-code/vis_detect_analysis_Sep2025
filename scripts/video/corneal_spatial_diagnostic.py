@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────
 CORNEAL_EYE_ROI = {
     "09092025": (305, 335, 433, 468),   # validated
-    "27062025": (247, 267, 397, 417),   # tight 20×20 box on autocal-found reflection (y:238-276,x:392-421)
+    "27062025": (240, 300, 310, 420),   # Wider ROI for spatial frequency
     "03072025": (257, 277, 377, 397),   # tight 20×20 box on autocal-found reflection (y:265-269,x:384-389)
     "14082025": (302, 332, 433, 468),   # validated
     "29082025": (318, 338, 419, 439),   # tight 20×20 box on autocal-found reflection (y:314-343,x:415-444)
@@ -181,13 +181,31 @@ def spatial_variance(gray, roi, radius=None):
         Inscribed circle radius when roi is a tuple (None = inscribed).
     """
     if isinstance(roi, np.ndarray) and roi.ndim == 2:
-        pixels = gray[roi]
-        return float(np.std(pixels)) if len(pixels) >= 4 else 0.0
-    y0, y1, x0, x1 = roi
-    patch = gray[y0:y1, x0:x1]
-    mask = _circle_mask(y1 - y0, x1 - x0, radius)
-    pixels = patch[mask]
-    return float(np.std(pixels)) if len(pixels) >= 4 else 0.0
+        cols = np.any(roi, axis=0)
+        rows = np.any(roi, axis=1)
+        if not np.any(rows) or not np.any(cols):
+            return 0.0
+        y0, y1 = np.where(rows)[0][[0, -1]]
+        x0, x1 = np.where(cols)[0][[0, -1]]
+        patch = gray[y0:y1+1, x0:x1+1]
+    else:
+        y0, y1, x0, x1 = roi
+        patch = gray[y0:y1, x0:x1]
+
+    if patch.shape[0] < 4 or patch.shape[1] < 4:
+        return 0.0
+    
+    # 2D FFT to isolate spatial frequencies
+    patch = patch - np.mean(patch)
+    fft_mag = np.abs(np.fft.rfft2(patch))
+    
+    # Remove DC and very low frequencies (large gradients like pupil edges)
+    # We want higher frequencies corresponding to the grating stripes
+    # Setting the top-left 3x3 region (low frequencies) to zero
+    r, c = fft_mag.shape
+    fft_mag[:min(r, 2), :min(c, 2)] = 0.0
+    
+    return float(np.sum(fft_mag))
 
 
 def run_auto_calibrate(session_name, subject="BG_046", force=False):
@@ -1961,6 +1979,11 @@ def main():
     parser.add_argument("--update-cache", action="store_true",
                         help="After --scan-coarse, update coarse_offsets.json with the best offset")
     args = parser.parse_args()
+
+    if args.session == "27062025":
+        logger.error(f"FATAL: Session {args.session} is explicitly blacklisted. "
+                     "Recording has severe non-linear dropped frames. Bypassing.")
+        return
 
     if args.scan_coarse:
         best = scan_coarse_offset(
