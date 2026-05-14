@@ -125,9 +125,12 @@ def main():
 
         if "hmm_state_label" in stage_trials.columns and len(stage_trials) > 1:
             states = stage_trials["hmm_state_label"].values
-            # Compute transition matrix
+            sessions_seq = stage_trials["session_name"].values
+            # Compute transition matrix — skip cross-session boundaries
             trans = np.zeros((3, 3))
             for i in range(len(states) - 1):
+                if sessions_seq[i] != sessions_seq[i + 1]:
+                    continue  # don't count last-of-session → first-of-next as a transition
                 s_from = states[i]
                 s_to = states[i + 1]
                 if s_from in HMM_STATE_ORDER and s_to in HMM_STATE_ORDER:

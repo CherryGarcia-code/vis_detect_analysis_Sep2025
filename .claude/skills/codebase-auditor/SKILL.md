@@ -47,6 +47,13 @@ Run every section below. For each check, search the relevant files and report fi
 - Search for manual session filtering (hardcoded session lists, custom d-prime thresholds).
 - Verify all scripts use `load_staging_manifest(qc_only=True)`.
 
+#### 2d. Manifest vs PKL Session Coverage
+- When performing any gap-based or longitudinal analysis, verify that chronological gaps in the staging manifest are NOT treated as real training breaks.
+- Manifest gaps = QC-filtered sessions (failed `min_dprime >= 0.8` or `min_trials >= 150`). Real training sessions exist in pkl files but are absent from the manifest.
+- **Rule**: `gap_days` must be computed from actual pkl file dates (all sessions, including QC-failing ones), NOT from manifest-to-manifest date differences.
+- Check: count pkl files in `data/pkls/{subject}/` and compare with manifest row count. A large discrepancy (e.g., 45 pkls vs 26 manifest rows for BG_046) means many sessions were QC-filtered.
+- Example: BG_046 has apparent "+28d" and "+18d" manifest gaps that each contain 4–7 real training days with pkl files. True inter-session gap is almost always 1–3 days.
+
 ### 3. Unit Selection (HIGH)
 
 - Search for `good_cluster_ids`, `good_and_stable_ids`, `get_good_cluster_ids`.

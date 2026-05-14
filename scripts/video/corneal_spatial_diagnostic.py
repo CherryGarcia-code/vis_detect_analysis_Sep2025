@@ -41,6 +41,8 @@ from src.visdetect.core.video_sync import (
     auto_calibrate_corneal_roi,
     load_corneal_cal,
     load_corneal_mask,
+    horizontal_band_energy,
+    horizontal_edge_energy,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -701,11 +703,18 @@ def run_diagnostic(session_name, n_trials=12, trial_offset=20, delta_ms=DELTA_MS
 
 
 def run_timeseries(session_name, n_trials=6, trial_offset=20, window_s=3.0):
-    """Extract per-frame spatial variance time series across a wide window.
+    """Compare per-frame onset features (SV, band energy, Sobel edge) across trials.
 
-    For each sampled trial, extracts every frame in a ±window_s window around
-    the predicted Baseline_ON camera time and computes spatial variance per frame.
-    Plots the SV trace so the actual onset step is directly visible and measurable.
+    For each sampled trial, extracts every frame in a ±window_s window and
+    computes three features:
+      - SV          : spatial variance in the small corneal ROI (current method)
+      - Band energy : std of horizontal band means in the context ROI (new)
+      - Edge energy : mean squared horizontal Sobel response in context ROI (new)
+
+    All three are z-scored to their own baseline window so they can be compared
+    on the same axes.  The detection threshold (THRESH_NSIGMA σ) is shown as a
+    dashed horizontal line.  A clean step at t=0 in band/edge energy but not SV
+    indicates the new features would improve detection reliability.
     """
     import cv2
 
@@ -743,6 +752,7 @@ def run_timeseries(session_name, n_trials=6, trial_offset=20, window_s=3.0):
 
     roi = CORNEAL_EYE_ROI.get(session_name, list(CORNEAL_EYE_ROI.values())[0])
     radius = CORNEAL_CIRCLE_RADIUS.get(session_name)
+    ctx_roi = CONTEXT_EYE_ROI.get(session_name)
     y0, y1, x0, x1 = roi
 
     n_avail = len(baseline_on)
@@ -780,7 +790,7 @@ def run_timeseries(session_name, n_trials=6, trial_offset=20, window_s=3.0):
             all_data.append(None)
             continue
 
-        sv_trace, t_trace = [], []
+        sv_trace, t_trace, band_trace, edge_trace = [], [], [], []
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_indices[0])
         expected = frame_indices[0]
         for fidx in frame_indices:
@@ -793,12 +803,21 @@ def run_timeseries(session_name, n_trials=6, trial_offset=20, window_s=3.0):
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
             sv_trace.append(spatial_variance(gray, roi, radius))
             t_trace.append(ts_ms[fidx] - cam_ms)
+            if ctx_roi is not None:
+                cy0, cy1, cx0, cx1 = ctx_roi
+                ctx_patch = gray[cy0:cy1, cx0:cx1]
+                band_trace.append(horizontal_band_energy(ctx_patch, n_bands=8))
+                edge_trace.append(horizontal_edge_energy(ctx_patch))
+            else:
+                band_trace.append(0.0)
+                edge_trace.append(0.0)
 
         if not sv_trace:
             all_data.append(None)
             continue
         all_data.append((trial_i, nidaq_t, cam_ms,
-                         np.array(sv_trace), np.array(t_trace)))
+                         np.array(sv_trace), np.array(t_trace),
+                         np.array(band_trace), np.array(edge_trace)))
 
     cap.release()
 
@@ -822,6 +841,14 @@ def run_timeseries(session_name, n_trials=6, trial_offset=20, window_s=3.0):
     logger.info(f"  Session SV reference (20th pctile): {session_sv_ref:.2f}  "
                 f"ceiling: {baseline_ceiling:.2f}")
 
+    # ── Helper: z-score normalisation for display ────────────────────────────
+    def _zs(arr, bl_mask, fallback=5):
+        """Z-score arr to its baseline window (or first `fallback` frames)."""
+        bl = arr[bl_mask] if bl_mask.sum() >= 3 else arr[:fallback]
+        mu = float(np.mean(bl))
+        sd = max(float(np.std(bl)), 1e-3)
+        return (arr - mu) / sd
+
     # ── Phase 3: detection + plotting ────────────────────────────────────────
     ncols = 2
     nrows = int(np.ceil(n_trials / ncols))
@@ -829,11 +856,12 @@ def run_timeseries(session_name, n_trials=6, trial_offset=20, window_s=3.0):
                              figsize=(ncols * 7, nrows * 3.2), sharey=False)
     axes = np.array(axes).flatten()
     fig.suptitle(
-        f"Corneal spatial variance time series — {session_name}\n"
-        f"ROI {roi}  |  window ±{window_s:.1f}s  |  clock RMSE={rmse_ms:.0f}ms  |  "
-        f"session SV ref={session_sv_ref:.1f}  ceil={baseline_ceiling:.1f}\n"
-        f"Green shading = sustained ≥{SUSTAIN_MS:.0f}ms above threshold.  "
-        f"Red bg = baseline elevated.  Yellow bg = no crossing found.",
+        f"Onset feature comparison (z-scored) — {session_name}\n"
+        f"Blue=SV (corneal ROI {roi})  Orange=band energy (context ROI)  "
+        f"Green=horiz edge (context ROI)\n"
+        f"window ±{window_s:.1f}s  |  clock RMSE={rmse_ms:.0f}ms  |  "
+        f"threshold={THRESH_NSIGMA:.0f}σ (dashed).  "
+        f"Red bg = baseline elevated.  Yellow bg = SV no crossing.",
         fontsize=8
     )
 
@@ -850,7 +878,7 @@ def run_timeseries(session_name, n_trials=6, trial_offset=20, window_s=3.0):
             ax.axis("off")
             continue
 
-        trial_i, nidaq_t, cam_ms, sv_trace, t_trace = item
+        trial_i, nidaq_t, cam_ms, sv_trace, t_trace, band_trace, edge_trace = item
 
         # Frame interval → frames needed for SUSTAIN_MS
         frame_ms  = float(np.median(np.diff(t_trace))) if len(t_trace) > 2 else 20.0
@@ -869,14 +897,23 @@ def run_timeseries(session_name, n_trials=6, trial_offset=20, window_s=3.0):
         bl_end_idx = int(np.searchsorted(t_trace, BL_END_MS))
         n_search   = max(bl_end_idx + 1, int(len(sv_trace) * 0.25))
 
-        # Plot trace
-        ax.plot(t_trace, sv_trace, color="steelblue", linewidth=0.8, alpha=0.85)
+        # Z-score all features to their own baseline window for comparison
+        sv_z   = _zs(sv_trace,   bl_mask)
+        band_z = _zs(band_trace, bl_mask)
+        edge_z = _zs(edge_trace, bl_mask)
+
+        # Plot normalized traces
+        ax.plot(t_trace, sv_z,   color="steelblue",  linewidth=0.8, alpha=0.75,
+                label="SV z (corneal ROI)")
+        if ctx_roi is not None:
+            ax.plot(t_trace, band_z, color="darkorange",  linewidth=0.9, alpha=0.9,
+                    label="band energy z (context ROI)")
+            ax.plot(t_trace, edge_z, color="forestgreen", linewidth=0.9, alpha=0.9,
+                    label="horiz edge z (context ROI)")
         ax.axvline(0, color="red", linestyle="--", linewidth=1.2,
                    label="predicted Baseline_ON")
-        ax.axhline(thresh, color="orange", linestyle=":", linewidth=0.8,
-                   label=f"bl+{THRESH_NSIGMA:.0f}SD={thresh:.1f}")
-        ax.axhline(session_sv_ref, color="purple", linestyle=":", linewidth=0.7,
-                   alpha=0.5, label=f"sess ref={session_sv_ref:.1f}")
+        ax.axhline(THRESH_NSIGMA, color="orange", linestyle=":", linewidth=0.8,
+                   label=f"threshold={THRESH_NSIGMA:.0f}σ")
         ax.axvspan(BL_START_MS, BL_END_MS,
                    alpha=0.08, color="gray", label="baseline region")
 
@@ -955,7 +992,7 @@ def run_timeseries(session_name, n_trials=6, trial_offset=20, window_s=3.0):
 
         ax.set_title(f"Trial {trial_i}  (NI-DAQ t={nidaq_t:.1f}s)", fontsize=8)
         ax.set_xlabel("Time from predicted Baseline_ON (ms)", fontsize=7)
-        ax.set_ylabel("Spatial variance (px std)", fontsize=7)
+        ax.set_ylabel("Feature z-score (σ above baseline)", fontsize=7)
         ax.tick_params(labelsize=7)
         ax.legend(fontsize=6, loc="upper right")
 
@@ -1245,6 +1282,40 @@ def run_full_session(session_name, window_s=3.0, skip_short=False,
     slope0, offset0, _ = build_sync_model(
         session_name, video_path, meta_path, baseline_on
     )
+
+    # ── Sanity check: does the task window fit inside the video? ──────────────
+    # Converts first/last Baseline_ON to camera time and verifies they land
+    # within the recorded video.  A large mismatch means the coarse offset is
+    # aliased (e.g., ITI-period aliasing) and per-trial detection will fail.
+    video_dur_s = (ts_ms[-1] - ts_ms[0]) / 1000.0
+    task_start_cam_s = float(nidaq_to_camera(np.array([baseline_on[0]]),  slope0, offset0)[0])
+    task_end_cam_s   = float(nidaq_to_camera(np.array([baseline_on[-1]]), slope0, offset0)[0])
+    task_span_s = baseline_on[-1] - baseline_on[0]
+    post_task_s = video_dur_s - task_end_cam_s
+    logger.info(
+        f"  Task span: {task_span_s:.0f}s  |  "
+        f"task in cam time: [{task_start_cam_s:.0f}s, {task_end_cam_s:.0f}s]  |  "
+        f"video duration: {video_dur_s:.0f}s  |  "
+        f"post-task video: {post_task_s:.0f}s"
+    )
+    if task_start_cam_s < -30.0 or task_end_cam_s > video_dur_s + 30.0:
+        logger.error(
+            f"  *** COVERAGE ERROR: task projects to cam time "
+            f"[{task_start_cam_s:.0f}s, {task_end_cam_s:.0f}s] but video is "
+            f"only {video_dur_s:.0f}s long — coarse offset is likely aliased. "
+            f"Re-run with --scan-coarse to fix."
+        )
+    elif post_task_s < -30.0:
+        logger.warning(
+            f"  *** VIDEO TOO SHORT: task ends at cam {task_end_cam_s:.0f}s but "
+            f"video ends at {video_dur_s:.0f}s — last {abs(post_task_s):.0f}s of "
+            f"task has no video coverage."
+        )
+    else:
+        logger.info(
+            f"  Coverage OK.  Video extends {post_task_s:.0f}s past task end "
+            f"(laser-stim / post-task period)."
+        )
 
     roi    = CORNEAL_EYE_ROI.get(session_name, list(CORNEAL_EYE_ROI.values())[0])
     radius = CORNEAL_CIRCLE_RADIUS.get(session_name)

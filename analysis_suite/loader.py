@@ -27,6 +27,7 @@ if _src not in sys.path:
 from config import (
     CACHE_DIR,
     GLT_PATH,
+    HMM_DIR,
     HMM_LABEL_RENAME,
     HMM_PER_SESSION_PATH,
     HMM_STATE_ASSIGN_PATH,
@@ -192,6 +193,16 @@ def load_hmm_trajectory(K: int = 3) -> pd.DataFrame:
     df["session_name"] = df["session_name"].astype(int)
     df = _rename_hmm_columns(df)
     return df
+
+
+def load_hmm_cv(K: int = 3) -> pd.DataFrame:
+    """Load LOSO cross-validation results for a given K.
+
+    Saved by ``fit_behavioral_hmm.py --cv`` as
+    ``data/hmm/{subject}/cv_results_K{K}.csv``.
+    """
+    cv_path = os.path.join(HMM_DIR, f"cv_results_K{K}.csv")
+    return pd.read_csv(cv_path)
 
 
 # ── Lick responsiveness ──────────────────────────────────────────────

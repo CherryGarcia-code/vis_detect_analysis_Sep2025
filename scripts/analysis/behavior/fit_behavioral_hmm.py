@@ -64,6 +64,7 @@ from visdetect.analysis.hmm import (
     fit_best_model,
     prepare_session_data,
 )
+from visdetect.analysis.hmm_downstream import loso_cross_validation
 from visdetect.viz.plotting import set_style, despine
 
 
@@ -189,10 +190,12 @@ def plot_session_states(posteriors: np.ndarray, df: pd.DataFrame,
         return
     palette = _state_palette(K)
     trial_idx = np.arange(T)
+    ml_states = posteriors.argmax(axis=1)
 
-    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(12, 5),
-                                          gridspec_kw={"height_ratios": [1, 3]},
-                                          sharex=True)
+    fig, (ax_top, ax_vit, ax_bot) = plt.subplots(
+        3, 1, figsize=(12, 5.5),
+        gridspec_kw={"height_ratios": [1, 0.25, 3]},
+        sharex=True)
 
     # Top: outcome raster
     for i, row in df.iterrows():
@@ -212,13 +215,18 @@ def plot_session_states(posteriors: np.ndarray, df: pd.DataFrame,
     ax_top.set_ylabel("Outcome")
     ax_top.set_yticks([])
 
-    # Bottom: individual state posterior lines (not stacked / filled)
+    # Middle: Viterbi (MAP) state strip
+    for i in range(T):
+        ax_vit.axvline(i, color=palette[ml_states[i]], linewidth=0.8, alpha=0.9)
+    ax_vit.set_yticks([])
+    ax_vit.set_ylabel("MAP", fontsize=7, labelpad=2)
+
+    # Bottom: individual state posterior lines
     for k in range(K):
         ax_bot.plot(trial_idx, posteriors[:, k],
                     color=palette[k], linewidth=1.5, label=state_labels[k])
 
-    # Mark most-likely-state transitions with dashed vertical lines
-    ml_states = posteriors.argmax(axis=1)
+    # Mark MAP state transitions with dashed vertical lines
     for t in range(1, T):
         if ml_states[t] != ml_states[t - 1]:
             ax_bot.axvline(t, color="k", linestyle="--", linewidth=0.6, alpha=0.5)
@@ -230,6 +238,7 @@ def plot_session_states(posteriors: np.ndarray, df: pd.DataFrame,
 
     fig.suptitle(f"{session_name}", fontsize=12)
     despine(ax_top)
+    despine(ax_vit)
     despine(ax_bot)
     plt.tight_layout()
     sess_dir = out_dir / "session_states"
@@ -434,6 +443,10 @@ def main():
                         help="Number of parallel workers for K fitting (default: 1).")
     parser.add_argument("--seed", type=int, default=0,
                         help="Base random seed for reproducibility (default: 0).")
+    parser.add_argument("--cv", action="store_true",
+                        help="Run LOSO cross-validation on the best-K model after fitting.")
+    parser.add_argument("--cv-restarts", type=int, default=5,
+                        help="Random restarts per LOSO fold (default: 5).")
     args = parser.parse_args()
 
     # ---- Replot-only mode: skip fitting, load saved data ----
@@ -578,6 +591,45 @@ def main():
     assign_path = data_out / "state_assignments.csv"
     assignments_df.to_csv(assign_path, index=False)
     print(f"\nBest-K state assignments saved: {assign_path}  ({len(assignments_df)} trials)")
+
+    # ------------------------------------------------------------------
+    # 3b. LOSO cross-validation (optional)
+    # ------------------------------------------------------------------
+    if args.cv:
+        print(f"\n{'=' * 60}")
+        print(f"Running LOSO cross-validation  K={best_K}  "
+              f"({args.cv_restarts} restarts/fold)")
+        print("=" * 60)
+        cv_cfg = GLMHMMConfig(
+            max_iter=args.max_iter,
+            n_restarts=args.cv_restarts,
+            verbose=False,
+        )
+        cv_df = loso_cross_validation(
+            sessions_data, best_K,
+            config=cv_cfg,
+            verbose=True,
+            seed=args.seed,
+        )
+        cv_path = data_out / f"cv_results_K{best_K}.csv"
+        cv_df.to_csv(cv_path, index=False)
+        print(f"\nCV results saved: {cv_path}")
+
+        # Per-stage summary
+        manifest_cv = manifest[["session_name", "stage"]].copy()
+        manifest_cv["session_name"] = manifest_cv["session_name"].astype(str)
+        cv_df["held_out_session"] = cv_df["held_out_session"].astype(str)
+        cv_merged = cv_df.merge(
+            manifest_cv, left_on="held_out_session", right_on="session_name", how="left"
+        )
+        print("\nPer-stage CV summary:")
+        for stage in cv_merged["stage"].dropna().unique():
+            sub = cv_merged[cv_merged["stage"] == stage]
+            mean_ll = sub["test_ll_per_trial"].mean()
+            sem_ll = sub["test_ll_per_trial"].sem()
+            mean_acc = sub["test_accuracy"].mean()
+            print(f"  {stage:12s}: LL/trial = {mean_ll:.4f} ± {sem_ll:.4f}  "
+                  f"accuracy = {mean_acc:.3f}  (n={len(sub)} sessions)")
 
     # ------------------------------------------------------------------
     # 4. Generate plots

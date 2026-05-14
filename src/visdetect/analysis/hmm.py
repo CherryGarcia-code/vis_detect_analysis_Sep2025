@@ -187,7 +187,13 @@ class GLMHMMConfig:
     max_iter: int = 200
     tol: float = 1e-4
     n_restarts: int = 20
-    self_transition_prior: float = 0.8
+    # Dirichlet pseudo-counts for the transition matrix M-step (MAP estimate).
+    # Following Ashwood et al. 2022: alpha_diag=10, alpha_off=1.
+    # These enforce state persistence without hard-coding transitions.
+    transition_alpha_diag: float = 100.0
+    transition_alpha_off: float = 1.0
+    # Initialization only: starting diagonal of the transition matrix.
+    init_self_transition: float = 0.95
     l2_penalty: float = 0.0
     glm_max_iter: int = 100
     verbose: bool = True
@@ -255,7 +261,7 @@ class GLMHMM:
         K, D = self.n_states, self.n_features
 
         # Transition matrix: strong self-transition
-        p_self = self.config.self_transition_prior
+        p_self = self.config.init_self_transition
         A = np.full((K, K), (1 - p_self) / max(K - 1, 1))
         np.fill_diagonal(A, p_self)
         # Add small noise
@@ -394,9 +400,9 @@ class GLMHMM:
     # ------------------------------------------------------------------
 
     def _fit_glm_state(self, X: np.ndarray, y: np.ndarray,
-                       gamma_k: np.ndarray) -> np.ndarray:
+                       gamma_k: np.ndarray, state_idx: int = 0) -> np.ndarray:
         """Weighted logistic regression for one state (scipy L-BFGS-B)."""
-        w0 = self._weights[0] if self._weights is not None else np.zeros(self.n_features)
+        w0 = self._weights[state_idx] if self._weights is not None else np.zeros(self.n_features)
         w0 = np.array(w0, dtype=float)
         result = minimize(
             _nll_and_grad,
@@ -418,11 +424,12 @@ class GLMHMM:
         """Update all parameters from sufficient statistics."""
         K = self.n_states
 
-        # --- Transition matrix ---
-        # Row-normalise xi
+        # --- Transition matrix (MAP with Dirichlet prior) ---
+        pseudo = np.full((K, K), self.config.transition_alpha_off)
+        np.fill_diagonal(pseudo, self.config.transition_alpha_diag)
         row_sums = total_xi.sum(axis=1, keepdims=True)
         row_sums = np.maximum(row_sums, _EPS)
-        A = total_xi / row_sums
+        A = (total_xi + pseudo) / (row_sums + pseudo.sum(axis=1, keepdims=True))
         self._log_A = np.log(A + _EPS)
 
         # --- Initial state distribution ---
@@ -435,7 +442,7 @@ class GLMHMM:
         gamma_all = np.concatenate(all_gamma)
 
         for k in range(K):
-            self._weights[k] = self._fit_glm_state(X_all, y_all, gamma_all[:, k])
+            self._weights[k] = self._fit_glm_state(X_all, y_all, gamma_all[:, k], state_idx=k)
 
     # ------------------------------------------------------------------
     # EM fitting
@@ -853,46 +860,62 @@ def fit_best_model(
 # =====================================================================
 
 def auto_label_states(model: GLMHMM) -> List[str]:
-    """Assign human-readable labels based on each state's psychometric profile.
+    """Assign human-readable labels based on rank, not absolute thresholds.
 
-    Heuristic (after states are sorted by ascending bias):
-      - Compute P(lick | stimulus=0) and P(lick | stimulus=max)
-      - "Disengaged": low P at both catch and max stimulus
-      - "Engaged":    low P at catch, high P at max stimulus
-      - "Biased":     high P at catch (always licking)
+    Requires states to be sorted ascending by bias (sort_states_by_bias()).
+    Uses sensitivity slope = P(lick|max_stim) - P(lick|catch) per state.
 
-    Falls back to generic "State_k" if K > 3 and thresholds are ambiguous.
+    K=2: lowest sensitivity → Disengaged; other → Engaged.
+    K=3: highest baseline → Impulsive; lowest sensitivity of rest → Disengaged;
+         remaining → Engaged.
+    K≥4: highest baseline → Impulsive; lowest sensitivity of rest → Disengaged;
+         remaining → Engaged_1, Engaged_2, …
     """
     K = model.n_states
     D = model.n_features
-    labels = []
-    # Psychometric at catch (stim=0) and high stim (stim=2.0, i.e. log2(4))
+
+    p_catch = np.zeros(K)
+    p_high = np.zeros(K)
     for k in range(K):
         x_catch = np.zeros(D); x_catch[0] = 1.0
-        x_high  = np.zeros(D); x_high[0] = 1.0; x_high[1] = 2.0
-        p_catch = float(expit(model.weights[k] @ x_catch))
-        p_high = float(expit(model.weights[k] @ x_high))
+        x_high  = np.zeros(D); x_high[0] = 1.0; x_high[1] = 2.0  # log2(4)
+        p_catch[k] = float(expit(model.weights[k] @ x_catch))
+        p_high[k]  = float(expit(model.weights[k] @ x_high))
 
-        if p_catch > 0.65:
-            labels.append("Biased")
-        elif p_high < 0.40:
-            labels.append("Disengaged")
-        else:
-            labels.append("Engaged")
+    sensitivity = p_high - p_catch
 
-    # De-duplicate if needed (e.g. two "Engaged" states)
-    seen = {}
-    for i, lab in enumerate(labels):
-        if lab in seen:
-            seen[lab] += 1
-            labels[i] = f"{lab}_{seen[lab]}"
-        else:
-            seen[lab] = 1
-    # Fix first occurrence if there were duplicates
-    for lab_base, count in seen.items():
-        if count > 1:
-            first_idx = next(j for j, l in enumerate(labels) if l == lab_base)
-            labels[first_idx] = f"{lab_base}_1"
+    labels = [""] * K
+    remaining = list(range(K))
+
+    if K == 2:
+        dis = int(np.argmin(p_catch))
+        labels[dis] = "Disengaged"
+        labels[1 - dis] = "Engaged"
+        return labels
+
+    # K≥3: highest baseline → Impulsive
+    imp = int(np.argmax(p_catch))
+    labels[imp] = "Impulsive"
+    remaining.remove(imp)
+
+    # Lowest sensitivity among remaining → Disengaged
+    dis = min(remaining, key=lambda i: sensitivity[i])
+    labels[dis] = "Disengaged"
+    remaining.remove(dis)
+
+    # Remaining → Engaged (with semantic suffix if more than one)
+    if len(remaining) == 1:
+        labels[remaining[0]] = "Engaged"
+    elif len(remaining) == 2:
+        # Sort by sensitivity: lower → Engaged_low, higher → Engaged_high
+        lo, hi = sorted(remaining, key=lambda i: sensitivity[i])
+        labels[lo] = "Engaged_low"
+        labels[hi] = "Engaged_high"
+    else:
+        for j, idx in enumerate(
+            sorted(remaining, key=lambda i: sensitivity[i]), start=1
+        ):
+            labels[idx] = f"Engaged_{j}"
 
     return labels
 

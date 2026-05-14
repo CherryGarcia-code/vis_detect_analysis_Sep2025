@@ -427,9 +427,11 @@ def build_session_from_raw(
             f"No probe folder found in {ks_phy_dir}"
         )
 
-    # KS4 writes outputs into a kilosort4/ subfolder; KS3 writes directly to probe_dir
+    # KS4 writes outputs into a kilosort4/ subfolder; KS3 writes directly to probe_dir.
+    # Fall back to probe_dir if kilosort4/ doesn't exist or has no spike times files.
     ks_output_dir = probe_dir / "kilosort4"
-    if not ks_output_dir.exists():
+    _spike_files = ("spike_times_sec_adj.npy", "spike_times_sec.npy", "spike_times.npy")
+    if not ks_output_dir.exists() or not any((ks_output_dir / f).exists() for f in _spike_files):
         ks_output_dir = probe_dir
 
     ks_data = load_kilosort_spikes(ks_output_dir)

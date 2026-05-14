@@ -174,16 +174,19 @@ else:
 # HMM state labels (K = 3)
 # =====================================================================
 HMM_LABEL_RENAME: Dict[str, str] = {
-    "Engaged_1": "Disengaged",
-    "Engaged_2": "Engaged",
-    "Engaged_3": "Impulsive",
-    "Biased":    "Impulsive",
+    # Legacy alias for pre-rank-labeling fits only.
+    "Biased": "Impulsive",
 }
-HMM_STATE_ORDER: List[str] = ["Disengaged", "Engaged", "Impulsive"]
+HMM_STATE_ORDER: List[str] = [
+    "Disengaged", "Engaged", "Impulsive",
+    "Engaged_low", "Engaged_high",
+]
 HMM_STATE_COLORS: Dict[str, str] = {
-    "Disengaged": "#bdbdbd",
-    "Engaged":    "#6baed6",
-    "Impulsive":  "#fb6a4a",
+    "Disengaged":  "#bdbdbd",
+    "Engaged":     "#6baed6",
+    "Impulsive":   "#fb6a4a",
+    "Engaged_low": "#9ecae1",  # lighter blue (lower sensitivity variant)
+    "Engaged_high": "#2171b5", # darker blue (higher sensitivity variant)
 }
 
 # =====================================================================

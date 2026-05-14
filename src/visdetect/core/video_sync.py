@@ -738,6 +738,60 @@ def extract_luminance(
 
 
 # =====================================================================
+# Orientation-selective grating-onset features
+# =====================================================================
+
+
+def horizontal_band_energy(patch: np.ndarray, n_bands: int = 8) -> float:
+    """Std of horizontal band means — high when horizontal grating bars are present.
+
+    Divides *patch* into *n_bands* equal horizontal slices, computes the mean
+    luminance of each band, and returns the std of those means.
+
+    Properties
+    ----------
+    - Robust to uniform illumination changes (std of equal means = 0).
+    - Selective for horizontal gratings: alternating dark/light bars create
+      large std across band means even when the grating drifts between frames
+      (phase-invariant — any phase gives the same energy).
+    - Suppressed by vertical or random-orientation movement (e.g., eyelid
+      motion shifts the image but preserves the band-mean ordering rather
+      than creating alternating bright/dark bands across slices).
+    - Works best on a wide ROI (≥ 60 px tall) so each band spans ≥ 1 bar.
+    """
+    h = patch.shape[0]
+    if h < n_bands or patch.size == 0:
+        return 0.0
+    band_means = np.array(
+        [patch[i * h // n_bands : (i + 1) * h // n_bands, :].mean()
+         for i in range(n_bands)],
+        dtype=np.float64,
+    )
+    return float(np.std(band_means))
+
+
+def horizontal_edge_energy(patch: np.ndarray) -> float:
+    """Mean squared horizontal Sobel response — orientation- and bandpass-selective.
+
+    Responds to horizontal edges (luminance transitions between grating bars).
+
+    Properties
+    ----------
+    - Suppressed by uniform illumination changes (no edges → no response).
+    - Selective for horizontal structure: vertical / diagonal edges from
+      eyelid motion are orthogonal to the filter and produce much weaker output.
+    - Complements :func:`horizontal_band_energy`: band energy detects
+      periodicity across the full patch height; edge energy detects individual
+      bar transitions and is sensitive to partial-coverage gratings.
+    """
+    import cv2
+    if patch.size == 0 or min(patch.shape[:2]) < 3:
+        return 0.0
+    gy = cv2.Sobel(patch, cv2.CV_32F, 0, 1, ksize=3)
+    return float(np.mean(gy ** 2))
+
+
+# =====================================================================
 # Spatial-variance-based onset detection (primary method)
 # =====================================================================
 
