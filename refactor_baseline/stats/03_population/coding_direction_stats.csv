@@ -1,0 +1,7 @@
+test,rho,p,n,H,U,median
+cd_effect_vs_session_spearman,0.010769230769230769,0.9592532204663393,25.0,,,
+cd_effect_kruskal_by_stage,,0.7425568219265721,,0.10789210789211268,,
+cd_expert_vs_learning_mwu,,0.3816703040268372,,,83.0,
+cd_cv_accuracy_expert_median,,,14.0,,,0.7540597131141213
+cd_cv_accuracy_vs_chance_wilcoxon,,6.103515625e-05,14.0,,,
+cd_cv_accuracy_kruskal_by_stage,,0.03749749081571939,,4.327672327672346,,

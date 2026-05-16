@@ -1,0 +1,4 @@
+test,W,p,median_si,n,H,n_sensory,n_motor,frac_sensory
+si_vs_zero_wilcoxon,3928476.0,6.029926810099717e-20,-0.4687056952833979,4326.0,,,,
+si_kruskal_by_stage,,0.4966051777577525,,,0.4621837104241422,,,
+fraction_sensory_vs_motor,,,,,,1792.0,2534.0,0.41423948220064727

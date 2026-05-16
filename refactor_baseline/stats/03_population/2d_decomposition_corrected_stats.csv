@@ -1,0 +1,10 @@
+test,statistic,p,mean_cos_sim,std_cos_sim,n,rho,mean_separation,std_separation,description,mean_auc,std_auc,learning_mean_auc,expert_mean_auc,learning_n,expert_n
+orthogonality_all_sessions_wilcoxon,146.0,0.6720751523971558,-0.0066802050283372135,0.07339375729037001,25.0,,,,,,,,,,
+orthogonality_Learning_wilcoxon,26.0,0.5771484375,-0.020141312754138666,0.08536753463476916,11.0,,,,,,,,,,
+orthogonality_Expert_wilcoxon,49.0,0.855224609375,0.0038963796133639275,0.06032234893429691,14.0,,,,,,,,,,
+cos_sim_trend_spearman,,0.6848831681823175,,,25.0,-0.08538461538461539,,,,,,,,,
+cos_sim_stage_comparison_mannwhitney,60.0,0.36637163773665715,,,,,,,,,,,,,
+task_separation_validation_wilcoxon,0.0,5.960464477539063e-08,,,25.0,,6.832315578801839,1.5573434105032467,Hit > Miss baseline projection (should be positive),,,,,,
+decodability_above_chance_wilcoxon,280.5,9.621151333864967e-05,,,25.0,,,,AUC > 0.5 (above chance),0.7101773076703906,0.17787551771246765,,,,
+decodability_stage_comparison_mannwhitney,106.0,0.11870568761285194,,,,,,,,,,0.7611235328053563,0.6701481307786317,11.0,14.0
+decodability_orthogonality_correlation_spearman,,0.9273024767969302,,,25.0,0.01923076923076923,,,,,,,,,

@@ -1,0 +1,5 @@
+test,rho,p,H
+delta_fr_vs_session_spearman,0.2776923076923077,0.17895216877264736,
+z_resp_vs_session_spearman,0.15692307692307692,0.45379350880333025,
+frac_resp_vs_dprime_spearman,,,
+z_resp_kruskal_by_stage,,0.9999999048847483,1.4210854715202004e-14

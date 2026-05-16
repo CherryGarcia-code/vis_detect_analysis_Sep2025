@@ -1,0 +1,8 @@
+test,t_start,t_end,cluster_stat,p,significant,n_sessions
+cluster_All,-0.3375,-0.3375,2.1374,0.7233,False,24
+cluster_All,-0.1375,-0.1375,2.3279,0.5834,False,24
+cluster_TF-resp,-0.9625,-0.9625,2.4123,0.6973,False,24
+cluster_TF-resp,-0.9125,-0.9125,2.816,0.4246,False,24
+cluster_TF-resp,-0.0125,0.0375,7.6846,0.015,True,24
+cluster_Non-TF,-0.3375,-0.3375,2.148,0.6863,False,24
+cluster_Non-TF,-0.1375,-0.1375,2.0497,0.7592,False,24

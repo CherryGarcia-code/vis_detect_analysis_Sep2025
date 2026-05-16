@@ -1,0 +1,5 @@
+test,rho,p,H,W,mean_P_hit,n
+peak_acc_vs_session_spearman,0.15000000000000002,0.4741966461552527,,,,
+peak_acc_kruskal_by_stage,,0.5840703669454941,0.2997002997003193,,,
+onset_latency_vs_session_spearman,0.17556747331336695,0.4012200115149216,,,,
+fa_transfer_P_hit_vs_0.5_wilcoxon,,0.00048828125,,1.0,0.747179416433539,13.0

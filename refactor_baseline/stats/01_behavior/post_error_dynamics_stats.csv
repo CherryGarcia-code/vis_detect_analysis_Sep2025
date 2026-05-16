@@ -1,0 +1,9 @@
+test,U,p,median_correct,median_error,delta_median,n_correct,n_error,rho,n,n_slower,n_faster,frac_slower,chi2,fa_after_correct,fa_after_error,n_after_correct,n_after_error,W,n_sessions,median_delta_fa,lag1_hr,baseline_hr,n_lag1,boost_pp,p_hit_after_fa,p_hit_after_hit,n_after_fa,n_after_hit
+mwu_hit_rt_post_correct_vs_error,1894309.0,0.00010819642803011346,0.876,0.815,-0.061000000000000054,1822.0,1938.0,,,,,,,,,,,,,,,,,,,,,
+spearman_delta_rt_vs_delta_hr,,0.16199254927892695,,,,,,-0.2884615384615385,25.0,,,,,,,,,,,,,,,,,,,
+sessions_post_error_slowing,,,,,,,,,,6.0,19.0,0.24,,,,,,,,,,,,,,,,
+chi2_catch_fa_post_correct_vs_error,,7.007276509677751e-05,,,,,,,,,,,15.808882715597449,0.16055045871559634,0.2520064205457464,654.0,623.0,,,,,,,,,,,
+wilcoxon_paired_catch_fa,,0.008038444824642506,,,,,,,,,,,,,,,,64.0,25.0,0.07142857142857145,,,,,,,,
+lag1_vs_baseline_hr,,,,,,,,,,,,,,,,,,,,,0.7806955287437899,0.6875471698113208,8454.0,9.314835893246908,,,,
+p_hit_after_fa_vs_hit,,,,,,,,,,,,,,,,,,,,,,,,,0.2561968183499815,0.3038605230386052,5406.0,4015.0
+spearman_session_vs_delta_rt,,0.16434331549306577,,,,,,0.2869230769230769,25.0,,,,,,,,,,,,,,,,,,,

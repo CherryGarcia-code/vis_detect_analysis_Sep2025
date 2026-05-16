@@ -1,0 +1,6 @@
+test,statistic_name,statistic_value,p_value,effect_size_name,effect_size_value,n,interpretation
+best_distribution_model,AIC,16314.203462388694,,ΔAIC_2nd,18.76696791755785,4725,"Best=Gamma, 2nd-best advantage=18.8"
+breakeven_fraction,fraction,0.24169312169312168,,top10_z_sum,3577.2243981215797,4725,Bottom 24% matches top 10%
+cum_z_vs_logN_linearity,r,0.9073666891666649,0.0,slope,5895.4710048275165,4725,r=0.9074; slope=5895.5 z-units per e-fold neurons
+z_abs_max_detrended_by_stage,H,0.08937268444606161,0.764976177239504,eta_sq_H,-0.0001928069692047297,4725,Small
+standard_vs_detrended_correlation,rho,0.0470671406008416,0.0012110339724849227,frac_responsive_shift,0.4855026455026455,4725,Detrended 91.4% vs standard 42.9% responsive

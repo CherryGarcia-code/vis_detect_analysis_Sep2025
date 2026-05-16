@@ -1,0 +1,4 @@
+test,W,p,median_diff,n,rho,H
+fa_vs_miss_pre_event_wilcoxon,2774251.0,5.260830575387988e-119,0.031496734045600855,4326.0,,
+fa_ramp_vs_session_spearman,,0.1679142421419649,,25.0,-0.2846153846153846,
+fa_ramp_kruskal_by_hmm_state,,0.0009810890965521425,,,,13.853694560699115

@@ -1,0 +1,7 @@
+test,H,p,value,n_sessions
+decision_var_frac_kruskal_by_stage,3.68181818181818,0.05500883362926579,,
+stimulus_var_frac_kruskal_by_stage,5.5,0.019016473672300558,,
+mean_var_frac_time,,,0.27322900837347214,10.0
+mean_var_frac_decision,,,0.3297836007276621,10.0
+mean_var_frac_stimulus,,,0.20555913846222484,10.0
+mean_var_frac_interaction,,,0.1914282524366409,10.0

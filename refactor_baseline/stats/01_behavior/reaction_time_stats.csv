@@ -1,0 +1,10 @@
+test,H,p,note,rho,U,hit_median,fa_median,median,n_trials
+hit_rt_kruskal_by_stage,154.05935986351943,2.2477935322155464e-35,RT from Change_ON,,,,,,
+hit_rt_vs_session_spearman,,0.0011407067477000074,,-0.6123076923076923,,,,,
+hit_rt_kruskal_by_state_expert,41.7203636354947,8.72043491449917e-10,"RT from Change_ON, Expert only",,,,,,
+fa_rt_kruskal_by_stage,9.395864570374735,0.0021747542409103517,RT from Baseline_ON,,,,,,
+fa_rt_vs_session_spearman,,0.521085613826922,,0.13464127965931277,,,,,
+expert_hit_vs_fa_rt_mannwhitney,,0.0,Hit from Change_ON vs FA from Baseline_ON,,1142524.5,0.77,4.695,,
+summary_hit_rt,,,from Change_ON,,,,,0.8605,4022.0
+summary_fa_rt,,,from Baseline_ON,,,,,4.39,5409.0
+summary_abort_rt,,,from Baseline_ON,,,,,3.259,3067.0

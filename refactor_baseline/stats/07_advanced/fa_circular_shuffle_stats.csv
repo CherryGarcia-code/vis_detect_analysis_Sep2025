@@ -1,0 +1,4 @@
+test,agreement_pct,cohen_kappa,n,rho,p,chi2,cramers_v
+agreement_with_threshold,21.163597544702426,0.02587890264032501,3747,,,,
+stim_driven_frac_vs_session,,,25,0.08230769230769232,0.6956981775319502,,
+hmm_state_by_fa_subtype_chi2,,,3747,,0.3505047131249145,2.096762251473036,0.02365553355574664

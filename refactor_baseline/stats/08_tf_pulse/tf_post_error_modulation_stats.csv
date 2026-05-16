@@ -1,0 +1,6 @@
+test,W,p,median_amp_correct,median_amp_error,n,median_emi,mean_emi,H,median_Splitter,median_Unilateral,median_Omni,n_Splitter,n_Unilateral,n_Omni,rho
+wilcoxon_amp_correct_vs_error,40586.0,0.468461162861859,2.7729836407370354,2.890164889267118,411.0,,,,,,,,,,
+wilcoxon_emi_vs_zero,40419.0,0.4270276644314297,,,411.0,0.015772929191064853,0.006966435727628769,,,,,,,,
+kruskal_emi_by_tier,,0.12127487925109863,,,,,,4.219391161026579,-0.024024116706829725,-0.012335395411838465,0.07232840673875514,48.0,192.0,171.0,
+spearman_session_vs_mean_emi,,0.761739933956736,,,25.0,,,,,,,,,,0.06384615384615384
+spearman_emi_vs_delta_hr,,0.1997981662941645,,,25.0,,,,,,,,,,-0.2653846153846154

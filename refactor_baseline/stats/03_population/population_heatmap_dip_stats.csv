@@ -1,0 +1,10 @@
+test,value,iqr_low,iqr_high,n_units
+hit_dip_latency_median,0.3050000000000007,0.11500000000000055,0.7350000000000011,
+frac_units_suppressed_0.1-0.5s,0.0,,,2713.0
+n_units_total,2713,,,
+n_bfa_putchange_units,2713,,,
+n_bfa_lick_units,2713,,,
+n_hit_lick_units,2713,,,
+n_both_lick_matched,2713,,,
+sort_criterion,dip (argmin),,,
+normalization,Hit-only baseline,,,

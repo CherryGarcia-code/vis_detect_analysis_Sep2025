@@ -1,0 +1,5 @@
+test,rho,p,n,H,W,median_rho
+go_dose_slope_vs_session_spearman,0.014280286845338634,0.9459853088499812,25.0,,,
+go_dose_slope_kruskal_by_stage,,0.9125118701195748,,0.01207158449607331,,
+go_sensory_frac_kruskal_by_stage,,0.7943127166337156,,0.06797202797203283,,
+expert_go_dose_slope_vs_0_wilcoxon,,0.0579833984375,14.0,,21.5,0.2

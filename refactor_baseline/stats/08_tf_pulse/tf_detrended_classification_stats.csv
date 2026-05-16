@@ -1,0 +1,2 @@
+n_total,n_standard_responsive,pct_standard,n_detrended_responsive,pct_detrended,spearman_rho,spearman_p,n_both,n_std_only,n_dt_only,n_neither,detrend_baseline_window,detrend_post_window
+4725,3037,64.27513227513228,3527,74.64550264550265,0.3632047111938666,2.6041533383981475e-147,2473,564,1054,634,"(-0.4, -0.01)","(0.0, 0.3)"

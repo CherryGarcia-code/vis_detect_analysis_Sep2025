@@ -1,0 +1,15 @@
+test,t_start,t_end,cluster_stat,p,significant,n_sessions
+cluster_All,-0.385,-0.385,2.0869,0.9491,False,24
+cluster_All,-0.285,-0.285,2.0481,0.956,False,24
+cluster_All,-0.255,-0.255,3.2284,0.4246,False,24
+cluster_All,0.215,0.215,2.6953,0.6274,False,24
+cluster_TF-resp,-0.385,-0.385,2.1369,0.982,False,24
+cluster_TF-resp,-0.125,-0.125,2.1607,0.977,False,24
+cluster_TF-resp,-0.045,-0.045,2.9497,0.5924,False,24
+cluster_TF-resp,0.065,0.065,2.105,0.987,False,24
+cluster_Non-TF,-0.335,-0.335,2.2835,0.8581,False,24
+cluster_Non-TF,-0.285,-0.285,2.3077,0.8541,False,24
+cluster_Non-TF,-0.255,-0.255,3.0728,0.4675,False,24
+cluster_Non-TF,-0.105,-0.105,2.1543,0.9241,False,24
+cluster_Non-TF,0.215,0.215,2.737,0.6124,False,24
+cluster_Non-TF,0.435,0.435,2.0155,0.964,False,24

@@ -1,0 +1,15 @@
+test,value,iqr_low,iqr_high
+n_units_total,2713,,
+n_sessions,15,,
+method,dPCA condition decomposition,,
+normalization,Hit-only baseline z-score,,
+median_readiness_var_frac,0.9564852495422039,,
+median_evidence_var_frac,2.0141552833909917,,
+pre_change_evidence_mean,0.0029949608071679922,,
+pre_change_evidence_wilcoxon_p,0.0015167682733334858,,
+pre_change_evidence_wilcoxon_r,0.07030126786582036,,
+dose_response_spearman_rho,0.8999999999999998,,
+dose_response_spearman_p,0.03738607346849874,,
+evidence_peak_latency_median,0.4250000000000008,0.3150000000000007,0.595000000000001
+median_hit_trials_per_session,155.0,,
+median_bfa_trials_per_session,164.0,,

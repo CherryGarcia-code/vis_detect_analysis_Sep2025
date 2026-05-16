@@ -1,0 +1,5 @@
+test,statistic_name,statistic_value,p_value,effect_size_name,effect_size_value,n,interpretation
+split_half_rho_vs_zero,W,0.0,5.960464477539063e-08,r,0.8744746321952063,25,Strong
+time_decode_r2_vs_null,W,0.0,5.960464477539063e-08,median_r2,0.11499595153562062,25,Median R²=0.115 vs null=-0.089
+time_decode_hit_vs_miss,W,1.0,1.1920928955078125e-07,median_diff,0.3184761683114442,25,Hit > Miss
+change_vs_lick_alignment,W,3.0,2.980232238769531e-07,median_diff,-0.3516077032614695,25,Lick-locked
