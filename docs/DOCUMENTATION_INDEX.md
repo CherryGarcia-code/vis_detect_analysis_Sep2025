@@ -1,7 +1,7 @@
 # Documentation and Plans Index
 
 **Purpose**: Master index of all documentation, plans, and runbooks in the repository.
-**Last updated**: April 1, 2026
+**Last updated**: May 16, 2026
 
 ---
 
@@ -10,7 +10,8 @@
 ### **🎯 Active Plans & Runbooks**
 | Document | Status | Location | Purpose |
 |----------|--------|----------|---------|
-| [Codebase Reorganization](docs/AI_interaction/REORGANIZATION_COMPLETE.md) | ✅ Complete | docs/AI_interaction/ | Code structure improvements |
+| [Refactor Plan](docs/REFACTOR_PLAN.md) | 📋 Active | docs/ | In-place architecture refactor |
+| [Target Architecture](docs/ARCHITECTURE.md) | 📋 Active | docs/ | Refactor "definition of done" |
 | [2D Decomposition Plan](docs/AI_interaction/2d_decomposition_plan.md) | 📋 Active | docs/AI_interaction/ | Scientific analysis plan |
 | [Concat-Sort Monitoring](docs/AI_interaction/concat-sort/MONITORING_GUIDE.md) | ✅ Complete | docs/AI_interaction/concat-sort/ | Pipeline monitoring |
 | [UnitMatch Integration](docs/AI_interaction/concat-sort/plan_unitmatch.md) | 📋 Planned | docs/AI_interaction/concat-sort/ | Cross-session tracking |
@@ -21,7 +22,7 @@
 |----------|---------|----------|
 | [Analysis Manual](docs/ANALYSIS_MANUAL.md) | Complete workflow guide | docs/ |
 | [Running Guide](RUNNING.md) | Step-by-step execution | project root |
-| [Normalization Audit](analysis_suite/NORMALIZATION_AUDIT_MARCH2026.md) | March 2026 bug fixes | analysis_suite/ |
+| [Normalization Audit & Fixes](docs/NORMALIZATION.md) | March 2026 audit + fix history | docs/ |
 | [Figure Notes](analysis_suite/figures/07_advanced/) | Advanced analysis notes | analysis_suite/figures/ |
 
 ### **🤖 AI Assistant Configuration**
@@ -69,7 +70,8 @@
 
 ### **✅ Consolidated**
 - Copilot instructions: `docs/AI_interaction/copilot-instructions.md` is **canonical**
-- Reorganization docs: All in `docs/AI_interaction/REORGANIZATION_*`
+- Reorganization docs: superseded by `docs/REFACTOR_PLAN.md`; the 3 March 2026 docs archived to `archive/reorganization_docs_2026/`
+- Normalization docs: 4 March 2026 reports consolidated into `docs/NORMALIZATION.md`
 - Concat-sort plans: All in `docs/AI_interaction/concat-sort/`
 
 ### **✅ Organized**
@@ -92,11 +94,11 @@
 - **Setting up the project**: README.md → RUNNING.md → analysis_suite/README.md
 - **Running analysis**: CLAUDE.md → docs/ANALYSIS_MANUAL.md → analysis_suite/
 - **Monitoring pipelines**: docs/AI_interaction/concat-sort/MONITORING_GUIDE.md
-- **Understanding fixes**: analysis_suite/NORMALIZATION_AUDIT_MARCH2026.md
+- **Understanding fixes**: docs/NORMALIZATION.md
 
 ### **By Status**
-- **Active plans**: `docs/AI_interaction/2d_decomposition_plan.md`
-- **Completed projects**: `docs/AI_interaction/REORGANIZATION_COMPLETE.md`
+- **Active plans**: `docs/REFACTOR_PLAN.md`, `docs/AI_interaction/2d_decomposition_plan.md`
+- **Completed projects**: `archive/reorganization_docs_2026/` (2026 reorganization, superseded)
 - **Operational guides**: `docs/AI_interaction/concat-sort/MONITORING_GUIDE.md`
 
 ---

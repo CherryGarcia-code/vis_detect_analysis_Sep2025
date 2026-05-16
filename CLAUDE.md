@@ -238,7 +238,7 @@ percent_change = 100 * (rate - baseline_mean) / max(baseline_mean, 1.0)
 | Single-unit z-score | `z = (rate - pre_mean) / pre_std` with `if pre_std < 1e-6: pre_std = 1.0` |
 | Check baseline | `print(f"Baseline window: {baseline_window}, bins: {baseline_mask.sum()}")` |
 
-See `analysis_suite/NORMALIZATION_AUDIT_MARCH2026.md` for full audit report.
+See `docs/NORMALIZATION.md` for the full audit and fix history.
 
 ### Consistency Checks (Do These for Every New Script)
 1. **Are event alignment outcomes filtered correctly?** Check against `EVENT_VALID_OUTCOMES`.
