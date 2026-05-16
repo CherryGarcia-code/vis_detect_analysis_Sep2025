@@ -58,10 +58,9 @@ notebooks/
 paper_references/
 database/
 
-# Legacy / archive directories
+# Legacy / archive directories (all consolidated under archive/, ignored via line 37)
 cleanup_archive/
 tmp_demo_qc/
-scripts/scripts_archive/
 
 # Channel map files
 chanMap_*.mat

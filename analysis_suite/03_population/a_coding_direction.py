@@ -7,7 +7,8 @@ to discriminate Hit vs Miss go-trial contexts.  The full time course around
 Change_ON is then *projected* onto this pre-defined axis, revealing how
 task-state coding evolves through the sensory response.
 
-The old Change_ON-aligned method is archived in _archive/.
+The old Change_ON-aligned method is archived in
+archive/analysis_suite_03_population_archive/.
 
 Produces:
   - Panel A: Single Expert session — Hit vs Miss projections over time
