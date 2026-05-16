@@ -54,7 +54,7 @@ repo_root = Path(__file__).resolve().parents[3]
 if str(repo_root / "src") not in sys.path:
     sys.path.insert(0, str(repo_root / "src"))
 
-from visdetect.analysis.config import load_staging_manifest
+from visdetect.analysis.config import load_staging_manifest, HMM_STATE_COLORS
 from visdetect.core.session import load_session
 from visdetect.analysis.hmm import (
     GLMHMM,
@@ -64,6 +64,7 @@ from visdetect.analysis.hmm import (
     fit_best_model,
     prepare_session_data,
 )
+from visdetect.analysis.hmm_downstream import loso_cross_validation
 from visdetect.viz.plotting import set_style, despine
 
 
@@ -114,7 +115,7 @@ def plot_state_psychometrics(model: GLMHMM, state_labels: list, out_dir: Path):
     stim_vals = np.log2(change_sizes)
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    palette = _state_palette(model.n_states)
+    palette = _state_palette(state_labels)
     for k in range(model.n_states):
         sub = psy[psy["state"] == k]
         ax.plot(sub["stimulus"], sub["p_lick"], "o-",
@@ -152,7 +153,7 @@ def plot_glm_weights(model: GLMHMM, state_labels: list, out_dir: Path):
     K = model.n_states
     D = model.n_features
     feat_names = model.feature_names if model.feature_names else [f"x{i}" for i in range(D)]
-    palette = _state_palette(K)
+    palette = _state_palette(state_labels)
 
     fig, axes = plt.subplots(1, K, figsize=(4 * K, 4), sharey=True)
     if K == 1:
@@ -187,12 +188,14 @@ def plot_session_states(posteriors: np.ndarray, df: pd.DataFrame,
     T, K = posteriors.shape
     if T == 0:
         return
-    palette = _state_palette(K)
+    palette = _state_palette(state_labels)
     trial_idx = np.arange(T)
+    ml_states = posteriors.argmax(axis=1)
 
-    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(12, 5),
-                                          gridspec_kw={"height_ratios": [1, 3]},
-                                          sharex=True)
+    fig, (ax_top, ax_vit, ax_bot) = plt.subplots(
+        3, 1, figsize=(12, 5.5),
+        gridspec_kw={"height_ratios": [1, 0.25, 3]},
+        sharex=True)
 
     # Top: outcome raster
     for i, row in df.iterrows():
@@ -212,13 +215,18 @@ def plot_session_states(posteriors: np.ndarray, df: pd.DataFrame,
     ax_top.set_ylabel("Outcome")
     ax_top.set_yticks([])
 
-    # Bottom: individual state posterior lines (not stacked / filled)
+    # Middle: Viterbi (MAP) state strip
+    for i in range(T):
+        ax_vit.axvline(i, color=palette[ml_states[i]], linewidth=0.8, alpha=0.9)
+    ax_vit.set_yticks([])
+    ax_vit.set_ylabel("MAP", fontsize=7, labelpad=2)
+
+    # Bottom: individual state posterior lines
     for k in range(K):
         ax_bot.plot(trial_idx, posteriors[:, k],
                     color=palette[k], linewidth=1.5, label=state_labels[k])
 
-    # Mark most-likely-state transitions with dashed vertical lines
-    ml_states = posteriors.argmax(axis=1)
+    # Mark MAP state transitions with dashed vertical lines
     for t in range(1, T):
         if ml_states[t] != ml_states[t - 1]:
             ax_bot.axvline(t, color="k", linestyle="--", linewidth=0.6, alpha=0.5)
@@ -230,6 +238,7 @@ def plot_session_states(posteriors: np.ndarray, df: pd.DataFrame,
 
     fig.suptitle(f"{session_name}", fontsize=12)
     despine(ax_top)
+    despine(ax_vit)
     despine(ax_bot)
     plt.tight_layout()
     sess_dir = out_dir / "session_states"
@@ -246,7 +255,7 @@ def plot_learning_state_fractions(
     out_dir: Path,
 ):
     """Stacked bar of state fractions across sessions (learning dynamics)."""
-    palette = _state_palette(n_states)
+    palette = _state_palette(state_labels)
 
     # Compute per-session fractions
     frac_rows = []
@@ -292,10 +301,11 @@ def plot_learning_state_fractions(
     plt.close(fig)
 
 
-def _state_palette(K: int) -> list:
-    """Color palette for states (sorted: disengaged → biased)."""
-    base_colors = ["#7570b3", "#1b9e77", "#d95f02", "#e7298a", "#66a61e", "#e6ab02"]
-    return base_colors[:K]
+def _state_palette(state_labels: list) -> list:
+    """Color palette for states using canonical HMM_STATE_COLORS."""
+    fallback = ["#7570b3", "#1b9e77", "#d95f02", "#e7298a", "#66a61e", "#e6ab02"]
+    return [HMM_STATE_COLORS.get(lab, fallback[i % len(fallback)])
+            for i, lab in enumerate(state_labels)]
 
 
 def _posteriors_from_assign_df(
@@ -358,12 +368,21 @@ def replot_from_saved(args):
     # 2. Per-K plots
     for K_val in all_K:
         kmodel = GLMHMM.load(data_out / f"model_K{K_val}.pkl")
-        with open(data_out / f"state_labels_K{K_val}.json") as f:
-            k_labels = json.load(f)["labels"]
+        # Re-derive labels from the loaded model (not from stale JSON)
+        k_labels = auto_label_states(kmodel)
+        # Refresh JSON with corrected labels
+        with open(data_out / f"state_labels_K{K_val}.json", "w") as f:
+            json.dump({"K": K_val, "labels": k_labels}, f, indent=2)
         k_assign_df = pd.read_csv(
             data_out / f"state_assignments_K{K_val}.csv",
             dtype={"session_name": str},
         )
+        # Refresh hmm_state_label column using corrected labels
+        if "hmm_state" in k_assign_df.columns:
+            k_assign_df["hmm_state_label"] = k_assign_df["hmm_state"].map(
+                lambda s: k_labels[int(s)]
+            )
+            k_assign_df.to_csv(data_out / f"state_assignments_K{K_val}.csv", index=False)
 
         k_dir = out_dir / f"K{K_val}"
         k_dir.mkdir(parents=True, exist_ok=True)
@@ -434,6 +453,10 @@ def main():
                         help="Number of parallel workers for K fitting (default: 1).")
     parser.add_argument("--seed", type=int, default=0,
                         help="Base random seed for reproducibility (default: 0).")
+    parser.add_argument("--cv", action="store_true",
+                        help="Run LOSO cross-validation on the best-K model after fitting.")
+    parser.add_argument("--cv-restarts", type=int, default=5,
+                        help="Random restarts per LOSO fold (default: 5).")
     args = parser.parse_args()
 
     # ---- Replot-only mode: skip fitting, load saved data ----
@@ -578,6 +601,41 @@ def main():
     assign_path = data_out / "state_assignments.csv"
     assignments_df.to_csv(assign_path, index=False)
     print(f"\nBest-K state assignments saved: {assign_path}  ({len(assignments_df)} trials)")
+
+    # ------------------------------------------------------------------
+    # 3b. LOSO cross-validation (optional)
+    # ------------------------------------------------------------------
+    if args.cv:
+        print(f"\n{'=' * 60}")
+        print(f"Running LOSO cross-validation  K={best_K}  "
+              f"({args.cv_restarts} restarts/fold)")
+        print("=" * 60)
+        cv_df = loso_cross_validation(
+            sessions_data, best_K,
+            n_restarts=args.cv_restarts,
+            max_iter=args.max_iter,
+            seed=args.seed,
+            verbose=True,
+        )
+        cv_path = data_out / f"cv_results_K{best_K}.csv"
+        cv_df.to_csv(cv_path, index=False)
+        print(f"\nCV results saved: {cv_path}")
+
+        # Per-stage summary
+        manifest_cv = manifest[["session_name", "stage"]].copy()
+        manifest_cv["session_name"] = manifest_cv["session_name"].astype(str)
+        cv_df["held_out_session"] = cv_df["held_out_session"].astype(str)
+        cv_merged = cv_df.merge(
+            manifest_cv, left_on="held_out_session", right_on="session_name", how="left"
+        )
+        print("\nPer-stage CV summary:")
+        for stage in cv_merged["stage"].dropna().unique():
+            sub = cv_merged[cv_merged["stage"] == stage]
+            mean_ll = sub["test_ll_per_trial"].mean()
+            sem_ll = sub["test_ll_per_trial"].sem()
+            mean_acc = sub["test_accuracy"].mean()
+            print(f"  {stage:12s}: LL/trial = {mean_ll:.4f} ± {sem_ll:.4f}  "
+                  f"accuracy = {mean_acc:.3f}  (n={len(sub)} sessions)")
 
     # ------------------------------------------------------------------
     # 4. Generate plots

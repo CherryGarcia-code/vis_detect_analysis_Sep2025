@@ -853,46 +853,53 @@ def fit_best_model(
 # =====================================================================
 
 def auto_label_states(model: GLMHMM) -> List[str]:
-    """Assign human-readable labels based on each state's psychometric profile.
+    """Assign human-readable labels using rank-based psychometric profiling.
 
-    Heuristic (after states are sorted by ascending bias):
-      - Compute P(lick | stimulus=0) and P(lick | stimulus=max)
-      - "Disengaged": low P at both catch and max stimulus
-      - "Engaged":    low P at catch, high P at max stimulus
-      - "Biased":     high P at catch (always licking)
+    Algorithm (always produces unique labels, no fixed thresholds):
+      K=2: argmin(sensitivity) → "Disengaged"; remaining → "Engaged"
+      K=3: argmax(p_catch) → "Impulsive";
+           argmin(sensitivity, remaining) → "Disengaged"; remaining → "Engaged"
+      K=4: same as K=3, 2 remaining → "Engaged_low" / "Engaged_high" by sensitivity
+      K≥5: same, remaining → "Engaged_1"…"Engaged_j" sorted by sensitivity ascending
 
-    Falls back to generic "State_k" if K > 3 and thresholds are ambiguous.
+    sensitivity = P(lick | high stim) - P(lick | catch) for each state.
     """
     K = model.n_states
     D = model.n_features
-    labels = []
-    # Psychometric at catch (stim=0) and high stim (stim=2.0, i.e. log2(4))
-    for k in range(K):
-        x_catch = np.zeros(D); x_catch[0] = 1.0
-        x_high  = np.zeros(D); x_high[0] = 1.0; x_high[1] = 2.0
-        p_catch = float(expit(model.weights[k] @ x_catch))
-        p_high = float(expit(model.weights[k] @ x_high))
 
-        if p_catch > 0.65:
-            labels.append("Biased")
-        elif p_high < 0.40:
-            labels.append("Disengaged")
-        else:
-            labels.append("Engaged")
+    x_catch = np.zeros(D); x_catch[0] = 1.0
+    x_high  = np.zeros(D); x_high[0] = 1.0; x_high[1] = 2.0  # log2(4) = 2.0
 
-    # De-duplicate if needed (e.g. two "Engaged" states)
-    seen = {}
-    for i, lab in enumerate(labels):
-        if lab in seen:
-            seen[lab] += 1
-            labels[i] = f"{lab}_{seen[lab]}"
-        else:
-            seen[lab] = 1
-    # Fix first occurrence if there were duplicates
-    for lab_base, count in seen.items():
-        if count > 1:
-            first_idx = next(j for j, l in enumerate(labels) if l == lab_base)
-            labels[first_idx] = f"{lab_base}_1"
+    p_catch = np.array([float(expit(model.weights[k] @ x_catch)) for k in range(K)])
+    p_high  = np.array([float(expit(model.weights[k] @ x_high))  for k in range(K)])
+    sensitivity = p_high - p_catch
+
+    labels = [""] * K
+    remaining = list(range(K))
+
+    if K >= 3:
+        # Impulsive: highest baseline lick rate (catch-trial P(lick))
+        imp_idx = int(np.argmax(p_catch))
+        labels[imp_idx] = "Impulsive"
+        remaining.remove(imp_idx)
+
+    # Disengaged: lowest sensitivity among remaining
+    dis_idx = remaining[int(np.argmin(sensitivity[remaining]))]
+    labels[dis_idx] = "Disengaged"
+    remaining.remove(dis_idx)
+
+    # Remaining → Engaged (unique label for K=3, split for K=4, indexed for K≥5)
+    if len(remaining) == 1:
+        labels[remaining[0]] = "Engaged"
+    elif len(remaining) == 2:
+        lo, hi = sorted(remaining, key=lambda i: sensitivity[i])
+        labels[lo] = "Engaged_low"
+        labels[hi] = "Engaged_high"
+    else:
+        for j, idx in enumerate(
+            sorted(remaining, key=lambda i: sensitivity[i]), start=1
+        ):
+            labels[idx] = f"Engaged_{j}"
 
     return labels
 

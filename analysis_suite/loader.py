@@ -27,6 +27,7 @@ if _src not in sys.path:
 from config import (
     CACHE_DIR,
     GLT_PATH,
+    HMM_DIR,
     HMM_LABEL_RENAME,
     HMM_PER_SESSION_PATH,
     HMM_STATE_ASSIGN_PATH,
@@ -172,7 +173,8 @@ def _rename_hmm_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_hmm_assignments(K: int = 3) -> pd.DataFrame:
     """Load per-trial HMM state assignments with renamed labels."""
-    df = pd.read_csv(HMM_STATE_ASSIGN_PATH)
+    path = os.path.join(HMM_DIR, f"state_assignments_K{K}.csv")
+    df = pd.read_csv(path)
     df["session_name"] = df["session_name"].astype(int)
     df = _rename_hmm_labels(df, "hmm_state_label")
     return df
@@ -233,9 +235,9 @@ def load_tf_traces_npz(session_name):
             z_max_fast, z_min_fast, z_max_slow, z_min_slow) or None.
     NPZ files use zero-padded session names (e.g. 01072025).
     """
-    from config import TF_TRACES_DIR
+    from config import TF_TRACES_DIR, SUBJECT
     sname_padded = str(int(session_name)).zfill(8)
-    npz_path = os.path.join(TF_TRACES_DIR, f"BG_046_{sname_padded}_traces.npz")
+    npz_path = os.path.join(TF_TRACES_DIR, f"{SUBJECT}_{sname_padded}_traces.npz")
     if not os.path.exists(npz_path):
         return None
     try:
