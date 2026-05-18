@@ -31,7 +31,6 @@ import os
 import sys
 import gc
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
@@ -44,12 +43,12 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.colors import TwoSlopeNorm
 
-from config import OUTCOME_COLORS, CACHE_DIR
-from loader import load_staging_manifest, load_session, load_hmm_assignments
-from utils import (
+from visdetect.suite.config import OUTCOME_COLORS, CACHE_DIR
+from visdetect.suite.loader import load_staging_manifest, load_session, load_hmm_assignments
+from visdetect.analysis.utils import (
     get_good_cluster_ids, build_population_tensor, smooth_psth,
 )
-from plotting import setup_style, save_figure
+from visdetect.suite.plotting import setup_style, save_figure
 
 from visdetect.analysis.align import (
     get_event_times_by_trial, align_spikes_to_events,

@@ -28,7 +28,6 @@ import os
 import sys
 import gc
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
@@ -40,11 +39,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-from config import (
+from visdetect.suite.config import (
     STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS,
     CACHE_DIR, DEFAULT_BIN_SIZE,
 )
-from loader import (
+from visdetect.suite.loader import (
     load_staging_manifest, load_session,
     load_hmm_assignments,
 )
@@ -52,7 +51,7 @@ from visdetect.analysis.utils import (
     get_good_cluster_ids, build_population_tensor, smooth_psth,
     compute_zscore_normalized, compute_lda_cd,
 )
-from plotting import setup_style, save_figure, add_stage_background
+from visdetect.suite.plotting import setup_style, save_figure, add_stage_background
 from visdetect.analysis.align import align_spikes_to_events, get_event_times_by_trial
 from visdetect.analysis.tf_pulse import _collect_pulses, TFRespPulseConfig
 from visdetect.analysis.constants import (

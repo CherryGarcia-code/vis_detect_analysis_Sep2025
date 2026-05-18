@@ -28,7 +28,6 @@ import gc
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
@@ -39,13 +38,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-from config import STAGE_ORDER, STAGE_COLORS, CACHE_DIR
-from loader import load_staging_manifest, load_session
-from utils import (
+from visdetect.suite.config import STAGE_ORDER, STAGE_COLORS, CACHE_DIR
+from visdetect.suite.loader import load_staging_manifest, load_session
+from visdetect.analysis.utils import (
     get_good_cluster_ids, build_population_tensor, smooth_psth,
     compute_zscore_normalized, bootstrap_ci,
 )
-from plotting import setup_style, save_figure
+from visdetect.suite.plotting import setup_style, save_figure
 
 from visdetect.analysis.constants import DEFAULT_BIN_SIZE
 
