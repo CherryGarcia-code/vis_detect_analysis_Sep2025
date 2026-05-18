@@ -45,9 +45,40 @@ Parity target for tests: 27 passed + the same 2 collection errors after every st
    Or diff an individual CSV against `refactor_baseline/stats/<module>/<name>.csv`.
 3. `pytest tests/ --continue-on-collection-errors` must still report 27 passed.
 
+## Reconciliation (2026-05-18)
+
+The Phase 0 snapshot grabbed on-disk CSVs assuming they were current. A fresh
+`run_all.py` (correct environment, current code) was run to validate them and
+got through 19/50 scripts before being stopped. Reconciliation of those 19:
+
+- **35/40 stats CSVs byte-identical** to the snapshot — validated.
+- **5/40 differed — all pre-refactor staleness, 0 numerical regressions:**
+  - `learning_curve` — snapshot had n=20 sessions, current manifest has 25
+  - `post_error_controls`, `post_error_streak_controls` — new
+    `hmm_Impulsive/Engaged/Disengaged` rows from the Phase-0 `auto_label_states`
+    rewrite (commit `bbfcfec`, on `main`, pre-refactor)
+  - `population_heatmap` — stat keys renamed + 2 rows added; values identical
+  - `sequence_significance` — 16th-digit float noise only
+
+The 5 stale files were refreshed from the fresh run; the snapshot + manifest
+now match current code for all 19 completed scripts. Phase 0/1/2 changed no
+analysis code — the verification holds.
+
+## Phase 3+ parity protocol — per-group self-baselining
+
+The global `run_all.py` is slow (30-min timeouts). From Phase 3 on, parity is
+checked **per module group**, self-baselined:
+
+1. Run the group's scripts on the *current* (pre-edit) code → capture outputs.
+2. Apply the refactor edits to that group.
+3. Re-run the group → assert byte-identical to step 1.
+4. `pytest` green, then commit.
+
+This compares before/after on identical code+data and does not depend on the
+(partially stale) global snapshot. The snapshot here remains a coarse
+cross-check.
+
 ## Notes
 
 - Live stats CSVs are not git-tracked, so this snapshot is the only durable
   oracle. Do not delete it until the refactor is complete and verified.
-- A full `run_all.py` run is being captured separately to validate/refresh this
-  snapshot; any discrepancies will be reconciled and noted here.

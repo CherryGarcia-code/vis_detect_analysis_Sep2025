@@ -1,8 +1,11 @@
 test,time,value,n_units,iqr_low,iqr_high
 peak_population_hit_miss_diff,0.8250000000000012,0.06175177362571595,,,
 frac_hit_preferring_response_window,,0.4751197935864357,2713.0,,
-peak_latency_median,,0.645000000000001,,0.35500000000000076,0.8850000000000012
-n_behavioral_fa_units_putchange,,2713,,,
-n_behavioral_fa_units_lick,,2713,,,
+hit_peak_latency_median,,0.645000000000001,,0.35500000000000076,0.8850000000000012
+n_units_total,,2713,,,
+n_bfa_putchange_units,,2713,,,
+n_bfa_lick_units,,2713,,,
 n_hit_lick_units,,2713,,,
+n_both_lick_matched,,2713,,,
 normalization,,Hit-only baseline,,,
+putative_change_method,,corrected_lick - state_matched_avg_RT,,,
