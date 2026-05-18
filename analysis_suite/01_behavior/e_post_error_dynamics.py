@@ -30,8 +30,6 @@ import sys
 import gc
 import warnings
 
-# Add analysis_suite to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
@@ -42,16 +40,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-from config import (
+from visdetect.suite.config import (
     STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS,
     CHANGE_SIZES, CACHE_DIR,
 )
-from loader import load_staging_manifest, load_session
-from plotting import setup_style, save_figure, add_stage_background
+from visdetect.suite.loader import load_staging_manifest, load_session
+from visdetect.suite.plotting import setup_style, save_figure, add_stage_background
 
-# Ensure visdetect is importable
 _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(_root, "src"))
 from visdetect.analysis.behavior import get_trial_dataframe
 
 setup_style()

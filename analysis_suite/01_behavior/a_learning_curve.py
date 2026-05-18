@@ -12,8 +12,6 @@ Saves statistics to figures/01_behavior/learning_curve_stats.csv.
 import os
 import sys
 
-# Add analysis_suite to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
@@ -24,12 +22,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-from config import (
+from visdetect.suite.config import (
     STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS,
     CHANGE_SIZES, CHANGE_SIZE_LABELS, CHANGE_SIZE_POSITIONS,
 )
-from loader import load_staging_manifest, load_session, session_iterator
-from plotting import setup_style, save_figure, add_stage_background, stage_legend
+from visdetect.suite.loader import load_staging_manifest, load_session, session_iterator
+from visdetect.suite.plotting import setup_style, save_figure, add_stage_background, stage_legend
 
 setup_style()
 
