@@ -228,7 +228,7 @@ def load_tf_traces_npz(session_name):
             z_max_fast, z_min_fast, z_max_slow, z_min_slow) or None.
     NPZ files use zero-padded session names (e.g. 01072025).
     """
-    from config import TF_TRACES_DIR, SUBJECT
+    from .config import TF_TRACES_DIR, SUBJECT
     sname_padded = str(int(session_name)).zfill(8)
     npz_path = os.path.join(TF_TRACES_DIR, f"{SUBJECT}_{sname_padded}_traces.npz")
     if not os.path.exists(npz_path):
@@ -264,7 +264,7 @@ def load_tf_responsiveness_detrended() -> pd.DataFrame:
 
     Returns empty DataFrame if the cache file does not exist yet.
     """
-    from config import CACHE_DIR
+    from .config import CACHE_DIR
     path = os.path.join(CACHE_DIR, "tf_responsiveness_detrended.csv")
     if os.path.exists(path):
         return pd.read_csv(path)
@@ -279,7 +279,7 @@ def load_tf_classification_detrended() -> pd.DataFrame:
 
     Returns empty DataFrame if the cache file does not exist yet.
     """
-    from config import CACHE_DIR
+    from .config import CACHE_DIR
     path = os.path.join(CACHE_DIR, "tf_cell_classification_detrended.csv")
     if os.path.exists(path):
         return pd.read_csv(path)
