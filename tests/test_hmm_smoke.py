@@ -1,6 +1,5 @@
 """Quick smoke test for the GLM-HMM implementation."""
 import sys
-sys.path.insert(0, 'src')
 
 import numpy as np
 from scipy.special import expit
