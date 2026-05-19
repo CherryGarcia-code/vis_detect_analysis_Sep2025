@@ -22,7 +22,6 @@ import sys
 import gc
 import warnings
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
@@ -34,24 +33,22 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-from config import (
+from visdetect.suite.config import (
     STAGE_ORDER, STAGE_COLORS, CACHE_DIR,
     HMM_STATE_ORDER, HMM_STATE_COLORS,
     FA_SUBTYPE_COLORS,
 )
-from loader import (
+from visdetect.suite.loader import (
     load_staging_manifest, load_session,
     load_hmm_assignments,
 )
-from plotting import setup_style, save_figure, add_stage_background
+from visdetect.suite.plotting import setup_style, save_figure, add_stage_background
 from _fa_helpers import (
     extract_baseline_tf_trace,
     extract_lta_segment,
     original_threshold_classify,
 )
 
-_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(_root, "src"))
 from visdetect.analysis.constants import TF_FAST_THRESH_LOG2
 
 setup_style()

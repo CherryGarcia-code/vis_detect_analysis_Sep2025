@@ -20,7 +20,6 @@ import os
 import sys
 import gc
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
@@ -32,17 +31,17 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from sklearn.decomposition import PCA
 
-from config import (
+from visdetect.suite.config import (
     STAGE_ORDER, STAGE_COLORS, OUTCOME_COLORS,
     SMALL_CHANGE_SIZES, BIG_CHANGE_SIZES,
     CACHE_DIR, DEFAULT_BIN_SIZE,
 )
-from loader import load_staging_manifest, load_session
-from utils import (
+from visdetect.suite.loader import load_staging_manifest, load_session
+from visdetect.analysis.utils import (
     get_good_cluster_ids, build_population_tensor,
     compute_zscore_normalized,
 )
-from plotting import setup_style, save_figure
+from visdetect.suite.plotting import setup_style, save_figure
 
 setup_style()
 

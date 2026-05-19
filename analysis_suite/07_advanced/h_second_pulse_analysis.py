@@ -45,7 +45,6 @@ import argparse
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
@@ -55,10 +54,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-from config import CACHE_DIR, ROOT, SUBJECT, FA_SUBTYPE_COLORS, TF_PULSE_WINDOW
-from loader import load_staging_manifest, load_session
+from visdetect.suite.config import CACHE_DIR, ROOT, SUBJECT, FA_SUBTYPE_COLORS, TF_PULSE_WINDOW
+from visdetect.suite.loader import load_staging_manifest, load_session
 from visdetect.analysis.utils import get_good_cluster_ids, compute_zscore_normalized, smooth_psth
-from plotting import setup_style, save_figure
+from visdetect.suite.plotting import setup_style, save_figure
 from _fa_helpers import compute_timeresolved_auc, _find_clusters, grand_auc_cluster_test
 
 from visdetect.analysis.align import (

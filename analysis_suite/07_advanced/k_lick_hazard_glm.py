@@ -38,7 +38,6 @@ import sys
 import gc
 import warnings
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
@@ -53,20 +52,17 @@ import matplotlib.gridspec as gridspec
 import statsmodels.api as sm
 from patsy import dmatrix
 
-from config import (
+from visdetect.suite.config import (
     STAGE_ORDER, STAGE_COLORS, CACHE_DIR,
     HMM_STATE_ORDER, HMM_STATE_COLORS,
     OUTCOME_COLORS,
 )
-from loader import (
+from visdetect.suite.loader import (
     load_staging_manifest, load_session,
     load_hmm_assignments,
 )
-from plotting import setup_style, save_figure
+from visdetect.suite.plotting import setup_style, save_figure
 
-# Ensure visdetect is importable
-_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(_root, "src"))
 
 setup_style()
 warnings.filterwarnings("ignore")
