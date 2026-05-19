@@ -26,8 +26,6 @@ from matplotlib import gridspec
 # ── Project paths ────────────────────────────────────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
-sys.path.insert(0, os.path.join(_PROJECT_ROOT, "analysis_suite"))
-sys.path.insert(0, _PROJECT_ROOT)
 
 from src.visdetect.core.video_sync import (
     find_camera_files,
@@ -70,7 +68,7 @@ os.makedirs(FIG_DIR, exist_ok=True)
 
 def load_session_data(session_name):
     """Load session .pkl via analysis_suite loader."""
-    from loader import load_session as suite_load_session
+    from visdetect.suite.loader import load_session as suite_load_session
     return suite_load_session(session_name)
 
 

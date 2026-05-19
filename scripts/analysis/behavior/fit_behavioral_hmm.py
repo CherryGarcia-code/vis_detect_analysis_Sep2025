@@ -49,10 +49,6 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-# Ensure repo root is importable
-repo_root = Path(__file__).resolve().parents[3]
-if str(repo_root / "src") not in sys.path:
-    sys.path.insert(0, str(repo_root / "src"))
 
 from visdetect.analysis.config import load_staging_manifest, HMM_STATE_COLORS
 from visdetect.core.session import load_session

@@ -1,7 +1,5 @@
 """Quick script to regenerate the v2 manifest and compare."""
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from scripts.analysis.stage_sessions import stage_sessions
 

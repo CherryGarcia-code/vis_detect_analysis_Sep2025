@@ -24,7 +24,6 @@ import math
 import concurrent.futures
 import gc
 
-# Add src to path
 repo_root = Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(repo_root / "src"))
 

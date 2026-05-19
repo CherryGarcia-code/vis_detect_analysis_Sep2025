@@ -1,6 +1,5 @@
 """Quick yield summary: old pipeline vs new concat-sort with stability filter."""
 import sys, pickle
-sys.path.insert(0, 'src')
 from pathlib import Path
 
 OLD_DIR = Path('data/pkls/BG_046')

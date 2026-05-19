@@ -5,9 +5,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import gaussian_filter1d
 
-# Ensure repo root/src is in path
-repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-sys.path.insert(0, os.path.join(repo_root, 'src'))
 
 from visdetect.core.session import load_session, Session
 from visdetect.analysis import align

@@ -93,7 +93,6 @@ def main():
         return
     
     if not config_path.exists():
-        # Try looking relative to repo root if not found
         repo_root = Path(__file__).resolve().parents[2]
         config_path = repo_root / args.config
         if not config_path.exists():

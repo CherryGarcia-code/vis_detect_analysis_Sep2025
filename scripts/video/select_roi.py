@@ -44,8 +44,6 @@ from matplotlib.patches import Polygon as MplPolygon
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
-sys.path.insert(0, os.path.join(_PROJECT_ROOT, "analysis_suite"))
-sys.path.insert(0, _PROJECT_ROOT)
 
 from src.visdetect.core.video_sync import find_camera_files, load_camera_metadata
 from src.visdetect.analysis.config import VIDEO_SYNC_DIR
@@ -331,7 +329,7 @@ def main():
     sample_frame = args.frame
 
     if args.all:
-        from loader import load_staging_manifest
+        from visdetect.suite.loader import load_staging_manifest
         manifest = load_staging_manifest(qc_only=True)
         sessions = [
             str(int(row["session_name"])).zfill(8)

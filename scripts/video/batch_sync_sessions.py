@@ -33,8 +33,6 @@ from matplotlib import gridspec
 # ── Project paths ────────────────────────────────────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
-sys.path.insert(0, os.path.join(_PROJECT_ROOT, "analysis_suite"))
-sys.path.insert(0, _PROJECT_ROOT)
 
 from src.visdetect.core.video_sync import (
     find_camera_files,
@@ -426,7 +424,7 @@ def main():
                         help="Skip validation figure generation")
     args = parser.parse_args()
 
-    from loader import load_staging_manifest, load_session
+    from visdetect.suite.loader import load_staging_manifest, load_session
 
     # Load per-session ROI overrides (created by select_roi.py)
     roi_override_path = os.path.join(VIDEO_SYNC_DIR, "session_rois.json")

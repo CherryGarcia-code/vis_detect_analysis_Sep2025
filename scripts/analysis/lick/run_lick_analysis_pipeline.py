@@ -26,7 +26,6 @@ HTML_TEMPLATE = """
 
 def run(cmd):
     print(f"Running: {cmd}")
-    # Ensure visdetect package is importable by child processes
     repo_root = str(Path(__file__).resolve().parents[3])
     env = os.environ.copy()
     src_path = os.path.join(repo_root, "src")

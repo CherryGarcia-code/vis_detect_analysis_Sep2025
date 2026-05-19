@@ -31,10 +31,6 @@ from pathlib import Path
 
 import numpy as np
 
-# Add repo root to path
-repo_root = Path(__file__).resolve().parents[2]
-if str(repo_root / "src") not in sys.path:
-    sys.path.insert(0, str(repo_root / "src"))
 
 from visdetect.core.ingest import load_ni_events
 from visdetect.core.spikeglx import (

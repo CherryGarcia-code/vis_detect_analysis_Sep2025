@@ -43,12 +43,7 @@ matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 
-# Ensure the project is importable
 _script_dir = os.path.dirname(os.path.abspath(__file__))
-_root = os.path.dirname(os.path.dirname(_script_dir))
-_src = os.path.join(_root, "src")
-if _src not in sys.path:
-    sys.path.insert(0, _src)
 
 from visdetect.analysis.tf_labeling import (
     VALID_TIERS, VALID_SUB_TYPES, TIER_COLORS,

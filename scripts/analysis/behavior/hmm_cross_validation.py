@@ -47,9 +47,6 @@ except ImportError:
     def tqdm(it, **kw):
         return it
 
-repo_root = Path(__file__).resolve().parents[3]
-if str(repo_root / "src") not in sys.path:
-    sys.path.insert(0, str(repo_root / "src"))
 
 from visdetect.core.session import load_session
 from visdetect.analysis.hmm import GLMHMM, GLMHMMConfig, prepare_session_data

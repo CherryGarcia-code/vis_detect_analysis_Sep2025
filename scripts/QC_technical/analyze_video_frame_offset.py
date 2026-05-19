@@ -19,7 +19,6 @@ import numpy as np
 import pandas as pd
 
 repo_root = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(repo_root))
 
 
 def setup_logging(verbose: bool = False):

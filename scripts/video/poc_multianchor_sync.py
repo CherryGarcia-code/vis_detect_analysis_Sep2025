@@ -32,10 +32,8 @@ from sklearn.mixture import GaussianMixture
 # ── Project paths ────────────────────────────────────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
-sys.path.insert(0, _PROJECT_ROOT)
-sys.path.insert(0, os.path.join(_PROJECT_ROOT, "analysis_suite"))
 
-from loader import load_session
+from visdetect.suite.loader import load_session
 from src.visdetect.core.video_sync import (
     find_camera_files,
     load_camera_metadata,

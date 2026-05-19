@@ -16,9 +16,6 @@ from tqdm import tqdm
 import sys
 import concurrent.futures
 
-# Ensure repo root/src is in path
-repo_root = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.core.session import load_session
 from visdetect.analysis.lick import MatlabLickAnalyzer, MatlabLickConfig

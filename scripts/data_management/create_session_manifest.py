@@ -15,9 +15,6 @@ from tqdm import tqdm
 from datetime import datetime
 import sys
 
-# Ensure repo root/src is in path to import visdetect
-repo_root = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.core.session import load_session
 from visdetect.analysis.behavior import compute_session_performance

@@ -25,7 +25,6 @@ from scipy.stats import ks_2samp
 from scipy.spatial.distance import euclidean
 import sys
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from session_io import load_session
 

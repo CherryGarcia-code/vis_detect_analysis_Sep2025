@@ -13,8 +13,6 @@ from pathlib import Path
 import sys
 
 REPO = Path(__file__).resolve().parents[2]
-if str(REPO / 'src') not in sys.path:
-    sys.path.insert(0, str(REPO / 'src'))
 
 from visdetect.core.io import load_mat_file_to_session
 from visdetect.core.session import save_session, session_summary

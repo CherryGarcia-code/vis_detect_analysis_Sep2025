@@ -26,8 +26,6 @@ import time
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-repo_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(repo_root / "src"))
 
 import numpy as np
 import pandas as pd

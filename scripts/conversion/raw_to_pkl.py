@@ -26,10 +26,6 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-# Add repo root to path
-repo_root = Path(__file__).resolve().parents[2]
-if str(repo_root / "src") not in sys.path:
-    sys.path.insert(0, str(repo_root / "src"))
 
 from visdetect.core.ingest import build_session_from_raw
 from visdetect.core.session import save_session

@@ -13,9 +13,6 @@ import sys
 from pathlib import Path
 from tqdm import tqdm
 
-# Ensure repo root/src is in path
-repo_root = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.core.session import load_session, save_session
 

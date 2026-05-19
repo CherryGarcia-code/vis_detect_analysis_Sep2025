@@ -10,9 +10,6 @@ import sys
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-# Add repo root/src to path
-repo_root = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.core.session import load_session
 from visdetect.analysis.tf_pulse import TFRespPulseConfig, plot_tf_pulse_grid

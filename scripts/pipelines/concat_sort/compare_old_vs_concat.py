@@ -22,7 +22,6 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from visdetect.core.session import load_session
 from visdetect.core.qc import run_qc

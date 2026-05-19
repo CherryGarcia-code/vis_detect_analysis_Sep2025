@@ -17,10 +17,6 @@ import pandas as pd
 import numpy as np
 import sys
 
-# Ensure repo root is in path
-repo_root = Path(__file__).resolve().parents[3]
-if str(repo_root / 'src') not in sys.path:
-    sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.core.session import load_session
 from visdetect.analysis.behavior import compute_rolling_performance, compute_psychometric_data, get_trial_dataframe

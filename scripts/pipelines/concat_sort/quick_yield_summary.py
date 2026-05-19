@@ -14,7 +14,6 @@ import pandas as pd
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT / "src"))
 from visdetect.core.session import load_session
 
 SUBJECT = "BG_046"

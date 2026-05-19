@@ -21,7 +21,6 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 repo_root = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.core.session import load_session
 

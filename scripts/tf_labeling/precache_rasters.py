@@ -31,16 +31,10 @@ import numpy as np
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# Ensure project is importable
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _root = os.path.dirname(os.path.dirname(_script_dir))
-_src = os.path.join(_root, "src")
-if _src not in sys.path:
-    sys.path.insert(0, _src)
 # Also add analysis_suite for loader/config
 _suite = os.path.join(_root, "analysis_suite")
-if _suite not in sys.path:
-    sys.path.insert(0, _suite)
 
 from visdetect.analysis.tf_labeling import (
     CLASSIFICATION_CSV, RASTER_CACHE_DIR,
@@ -49,7 +43,7 @@ from visdetect.analysis.tf_pulse import (
     TFRespPulseConfig, _collect_pulses,
 )
 from visdetect.analysis.constants import TF_PULSE_PRE_WINDOW, TF_PULSE_POST_WINDOW, TF_PULSE_TRACE_PRE
-from loader import load_session
+from visdetect.suite.loader import load_session
 
 try:
     from tqdm import tqdm

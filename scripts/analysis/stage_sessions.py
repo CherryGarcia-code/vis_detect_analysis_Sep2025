@@ -52,10 +52,6 @@ from datetime import datetime
 # Ensure project root is in path
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 src_dir = os.path.join(repo_root, 'src')
-if src_dir not in sys.path:
-    sys.path.insert(0, src_dir)
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
 
 from visdetect.core.session import load_session
 from visdetect.analysis.behavior import compute_session_performance

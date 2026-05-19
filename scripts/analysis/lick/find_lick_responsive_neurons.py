@@ -13,7 +13,6 @@ import argparse
 import sys
 from pathlib import Path
 import pandas as pd
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'src'))
 
 from visdetect.analysis import lick as lick_mod
 from visdetect.core.session import load_session

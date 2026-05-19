@@ -5,9 +5,6 @@ Run with the repo conda environment (we expect to run via the conda run wrapper)
 import sys
 from pathlib import Path
 repo_root = Path(__file__).resolve().parents[2]
-# ensure repo root and src are importable (helps unpickle legacy objects referencing old package names)
-sys.path.insert(0, str(repo_root))
-sys.path.insert(0, str(repo_root / 'src'))
 
 from visdetect.core.session import load_session
 from visdetect.analysis import align as align_mod

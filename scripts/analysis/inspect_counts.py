@@ -1,6 +1,5 @@
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src'))
 
 from visdetect.core.session import load_session
 import numpy as np
