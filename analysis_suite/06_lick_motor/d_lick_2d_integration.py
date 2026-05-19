@@ -24,16 +24,15 @@ import scipy.stats as stats
 from pathlib import Path
 
 # Suite infrastructure
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import STAGE_COLORS, OUTCOME_COLORS, CACHE_DIR, SESSION_FILTER, DEFAULT_BIN_SIZE
-from loader import (
+from visdetect.suite.config import STAGE_COLORS, OUTCOME_COLORS, CACHE_DIR, SESSION_FILTER, DEFAULT_BIN_SIZE
+from visdetect.suite.loader import (
     load_staging_manifest,
     load_session,
     load_lick_responsiveness,
     load_all_lick_responsiveness,
     load_tf_traces_npz
 )
-from utils import (
+from visdetect.analysis.utils import (
     get_good_cluster_ids,
     build_population_tensor,
     compute_zscore_normalized,
@@ -41,7 +40,7 @@ from utils import (
     permutation_test,
     bootstrap_ci
 )
-from plotting import setup_style, save_figure, add_stage_background
+from visdetect.suite.plotting import setup_style, save_figure, add_stage_background
 
 # Library imports
 from visdetect.analysis.constants import (
