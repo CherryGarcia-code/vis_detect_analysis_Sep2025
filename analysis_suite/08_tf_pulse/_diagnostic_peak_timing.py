@@ -6,8 +6,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from plotting import setup_style
+from visdetect.suite.plotting import setup_style
 
 setup_style()
 

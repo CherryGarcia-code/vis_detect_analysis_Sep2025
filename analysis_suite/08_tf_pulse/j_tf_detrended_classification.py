@@ -12,7 +12,6 @@ import os
 import sys
 import gc
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
@@ -22,9 +21,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-from config import CACHE_DIR, STAGE_ORDER, STAGE_COLORS
-from loader import load_staging_manifest, load_tf_traces_npz
-from plotting import setup_style, save_figure
+from visdetect.suite.config import CACHE_DIR, STAGE_ORDER, STAGE_COLORS
+from visdetect.suite.loader import load_staging_manifest, load_tf_traces_npz
+from visdetect.suite.plotting import setup_style, save_figure
 from visdetect.analysis.tf_pulse import detrend_tf_traces
 from visdetect.analysis.constants import DEFAULT_Z_THRESH_TF
 

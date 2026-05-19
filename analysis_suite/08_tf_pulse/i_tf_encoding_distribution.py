@@ -40,7 +40,6 @@ import os
 import sys
 import gc
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
@@ -52,10 +51,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-from config import STAGE_ORDER, STAGE_COLORS, CACHE_DIR
-from loader import load_staging_manifest, load_tf_traces_npz
-from utils import bootstrap_ci
-from plotting import setup_style, save_figure
+from visdetect.suite.config import STAGE_ORDER, STAGE_COLORS, CACHE_DIR
+from visdetect.suite.loader import load_staging_manifest, load_tf_traces_npz
+from visdetect.analysis.utils import bootstrap_ci
+from visdetect.suite.plotting import setup_style, save_figure
 
 setup_style()
 

@@ -18,7 +18,6 @@ import argparse
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pandas as pd
@@ -30,15 +29,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-from config import (
+from visdetect.suite.config import (
     STAGE_ORDER, STAGE_COLORS, CELLTYPE_COLORS, CACHE_DIR,
     DEFAULT_Z_THRESH_TF,
 )
-from loader import (
+from visdetect.suite.loader import (
     load_staging_manifest, load_waveform_labels, load_tf_traces_npz,
     session_iterator,
 )
-from plotting import setup_style, save_figure
+from visdetect.suite.plotting import setup_style, save_figure
 
 try:
     from tqdm import tqdm
