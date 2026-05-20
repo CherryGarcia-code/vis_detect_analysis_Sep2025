@@ -149,3 +149,12 @@ superseded by a current equivalent is archived. Triage decisions are logged.
 After every refactor step: `pytest tests/` green (27 passed + the 2 known
 pre-existing collection errors) and the `refactor_baseline/` stats CSVs
 reproduced bit-for-bit. See `refactor_baseline/README.md`.
+
+## Guardrail (Phase 6)
+
+`scripts/qc/check_refactor_guardrails.py` enforces Rules 1, 3, 4 statically:
+no new `sys.path.insert` in maintained code, no flat
+`from config/loader/plotting/utils import …`. It also reports (non-blocking)
+the remaining hardcoded `BG_046` / `X:/` paths — the Phase 5 worklist. Run
+from repo root; exit 1 on any hard violation. Wire into pre-commit or CI as
+desired; Claude's `pre-commit-checker` skill can invoke it.
