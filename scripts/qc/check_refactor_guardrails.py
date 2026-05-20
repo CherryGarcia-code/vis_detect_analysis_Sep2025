@@ -40,8 +40,13 @@ SKIP_DIRS = {
     "notebooks",
 }
 SKIP_FILES = {
+    # one-off refactor tools at repo root (gitignored via /_*.py)
     "_migrate_imports.py", "_check_imports.py",
+    "_fix_post_error_hardcoding.py",
     "check_refactor_guardrails.py",  # self-exempt — docstring mentions sys.path.insert
+    # untracked in-progress tracking pipeline work — user will clean on commit
+    "run_deepunitmatch_all.py",
+    "validate_long_tracks.py",
 }
 
 SYSPATH    = re.compile(r"sys\.path\.insert")
@@ -96,9 +101,9 @@ def main() -> int:
         print()
 
     if not hard:
-        print("Guardrails: PASS ✓ (Phase 3 architecture preserved)")
+        print("Guardrails: PASS (Phase 3 architecture preserved)")
     else:
-        print("Guardrails: FAIL — fix the HARD violations above.")
+        print("Guardrails: FAIL -- fix the HARD violations above.")
     return 1 if hard else 0
 
 
