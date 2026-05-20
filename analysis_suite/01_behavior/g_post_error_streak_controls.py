@@ -57,11 +57,11 @@ from visdetect.suite.config import (
     STAGE_ORDER, STAGE_COLORS,
     CHANGE_SIZES, CHANGE_SIZE_LABELS, CHANGE_SIZE_POSITIONS,
     FA_RT_SPLIT, CACHE_DIR,
+    PKL_DIR, SUBJECT,
 )
 from visdetect.suite.loader import load_staging_manifest, load_session
 from visdetect.suite.plotting import setup_style, save_figure
 
-_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from visdetect.analysis.behavior import get_trial_dataframe
 
 setup_style()
@@ -69,7 +69,6 @@ warnings.filterwarnings("ignore")
 
 # ── Constants ─────────────────────────────────────────────────────────
 MIN_TRIALS = 5
-PKL_DIR = os.path.join(_root, "data", "pkls", "BG_046")
 TRIAL_CACHE = os.path.join(CACHE_DIR, "all_trials_behavior.csv")
 BOOL_COLS = ["is_hit", "is_miss", "is_fa", "is_abort", "is_ref",
              "is_go", "is_catch"]
@@ -125,7 +124,7 @@ def load_trials(manifest):
         stage = row["stage"]
         sidx = row["session_idx"]
         date_str = str(sname).zfill(8)
-        pkl_path = os.path.join(PKL_DIR, f"BG_046_{date_str}.pkl")
+        pkl_path = os.path.join(PKL_DIR, f"{SUBJECT}_{date_str}.pkl")
         if not os.path.exists(pkl_path):
             continue
         sess = load_session(sname)
