@@ -110,3 +110,27 @@ def test_composite_two_warns_is_suspect():
 def test_composite_any_fail_is_suspect():
     assert qc.composite_verdict(["pass", "pass", "pass", "fail"]) == "suspect"
     assert qc.composite_verdict(["pass", "warn", "fail", "pass"]) == "suspect"
+
+
+def test_badges_at_pass_boundary():
+    # value == pass_thr should be "pass" (>= for high, <= for low)
+    assert qc.badge_isi(qc.ISI_PASS) == "pass"            # 0.75
+    assert qc.badge_depth(qc.DEPTH_PASS_UM) == "pass"     # 15.0
+    assert qc.badge_waveform(qc.WAVE_PASS_R) == "pass"    # 0.95
+    assert qc.badge_fr(qc.FR_CV_PASS) == "pass"           # 0.35
+
+
+def test_badges_at_warn_boundary():
+    # value == warn_thr should be "warn"
+    assert qc.badge_isi(qc.ISI_WARN) == "warn"            # 0.65
+    assert qc.badge_depth(qc.DEPTH_WARN_UM) == "warn"     # 30.0
+    assert qc.badge_waveform(qc.WAVE_WARN_R) == "warn"    # 0.90
+    assert qc.badge_fr(qc.FR_CV_WARN) == "warn"           # 0.60
+
+
+def test_badge_waveform_nan_is_fail():
+    assert qc.badge_waveform(float("nan")) == "fail"
+
+
+def test_badge_fr_nan_is_fail():
+    assert qc.badge_fr(float("nan")) == "fail"
