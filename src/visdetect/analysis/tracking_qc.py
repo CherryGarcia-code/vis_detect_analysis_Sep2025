@@ -104,3 +104,62 @@ def fr_cv(rates_hz: np.ndarray) -> float:
     if abs(mean) < 1e-9:
         return float("nan")
     return float(np.std(arr, ddof=0) / mean)
+
+
+# ─── Badge / verdict logic ────────────────────────────────────────────
+
+def _badge_threshold(value: float, pass_thr: float, warn_thr: float,
+                     direction: str) -> str:
+    """Apply pass/warn/fail thresholds.
+
+    direction='high' : pass if value >= pass_thr, warn between, fail below.
+    direction='low'  : pass if value <= pass_thr, warn between, fail above.
+    NaN always returns 'fail'.
+    """
+    if not np.isfinite(value):
+        return "fail"
+    if direction == "high":
+        if value >= pass_thr:
+            return "pass"
+        if value >= warn_thr:
+            return "warn"
+        return "fail"
+    elif direction == "low":
+        if value <= pass_thr:
+            return "pass"
+        if value <= warn_thr:
+            return "warn"
+        return "fail"
+    raise ValueError(f"direction must be 'high' or 'low', got {direction!r}")
+
+
+def badge_isi(median_corr: float) -> str:
+    return _badge_threshold(median_corr, ISI_PASS, ISI_WARN, direction="high")
+
+
+def badge_depth(std_um: float) -> str:
+    return _badge_threshold(std_um, DEPTH_PASS_UM, DEPTH_WARN_UM, direction="low")
+
+
+def badge_waveform(mean_pairwise_r: float) -> str:
+    return _badge_threshold(mean_pairwise_r, WAVE_PASS_R, WAVE_WARN_R, direction="high")
+
+
+def badge_fr(cv: float) -> str:
+    return _badge_threshold(cv, FR_CV_PASS, FR_CV_WARN, direction="low")
+
+
+def composite_verdict(badges: Sequence[str]) -> str:
+    """Spec §7 composite logic.
+
+    trusted = all pass
+    review  = ≤1 warn AND no fails
+    suspect = any fail OR ≥2 warns
+    """
+    n_fail = sum(1 for b in badges if b == "fail")
+    n_warn = sum(1 for b in badges if b == "warn")
+    if n_fail >= 1 or n_warn >= 2:
+        return "suspect"
+    if n_warn == 1:
+        return "review"
+    return "trusted"

@@ -67,3 +67,46 @@ def test_fr_cv_zero_mean_returns_nan():
 def test_fr_cv_handles_nans():
     rates = np.array([10.0, np.nan, 12.0])
     assert qc.fr_cv(rates) == pytest.approx(np.std([10.0, 12.0]) / 11.0, rel=1e-3)
+
+
+def test_badge_isi():
+    assert qc.badge_isi(0.91) == "pass"
+    assert qc.badge_isi(0.70) == "warn"
+    assert qc.badge_isi(0.28) == "fail"
+    assert qc.badge_isi(float("nan")) == "fail"
+
+
+def test_badge_depth():
+    assert qc.badge_depth(8.0) == "pass"
+    assert qc.badge_depth(20.0) == "warn"
+    assert qc.badge_depth(45.0) == "fail"
+    assert qc.badge_depth(float("nan")) == "fail"
+
+
+def test_badge_waveform():
+    assert qc.badge_waveform(0.97) == "pass"
+    assert qc.badge_waveform(0.92) == "warn"
+    assert qc.badge_waveform(0.50) == "fail"
+
+
+def test_badge_fr():
+    assert qc.badge_fr(0.20) == "pass"
+    assert qc.badge_fr(0.45) == "warn"
+    assert qc.badge_fr(0.80) == "fail"
+
+
+def test_composite_all_pass_is_trusted():
+    assert qc.composite_verdict(["pass", "pass", "pass", "pass"]) == "trusted"
+
+
+def test_composite_one_warn_is_review():
+    assert qc.composite_verdict(["pass", "warn", "pass", "pass"]) == "review"
+
+
+def test_composite_two_warns_is_suspect():
+    assert qc.composite_verdict(["pass", "warn", "warn", "pass"]) == "suspect"
+
+
+def test_composite_any_fail_is_suspect():
+    assert qc.composite_verdict(["pass", "pass", "pass", "fail"]) == "suspect"
+    assert qc.composite_verdict(["pass", "warn", "fail", "pass"]) == "suspect"
