@@ -34,3 +34,73 @@ SMALL_POOL: Set[float] = {1.25, 1.35}
 # ─── Footprint extraction ─────────────────────────────────────────────
 # How many channels above/below the peak to include in the footprint snippet.
 FOOTPRINT_HALFWIDTH_CHANS: int = 8
+
+
+# ─── Cross-session metric functions ───────────────────────────────────
+
+def depth_std_um(depths_um: np.ndarray) -> float:
+    """Std of peak-channel depth across sessions, in microns.
+
+    NaN values are ignored. Returns NaN if fewer than 2 finite values.
+    """
+    arr = np.asarray(depths_um, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < 2:
+        return float("nan")
+    return float(np.std(arr, ddof=0))
+
+
+def waveform_corr(waveforms: np.ndarray) -> float:
+    """Mean pairwise Pearson r of L2-normalized peak-channel waveforms.
+
+    Parameters
+    ----------
+    waveforms : ndarray, shape (n_sessions, n_samples)
+        Per-session mean waveform on the peak channel.
+
+    Returns
+    -------
+    float
+        Mean over the (n*(n-1)/2) cross-session pairwise correlations.
+        NaN if fewer than 2 sessions or if normalization fails.
+    """
+    arr = np.asarray(waveforms, dtype=float)
+    if arr.ndim != 2 or arr.shape[0] < 2:
+        return float("nan")
+
+    # L2-normalize per row; drop rows that are all-zero
+    norms = np.linalg.norm(arr, axis=1, keepdims=True)
+    keep = norms.flatten() > 1e-12
+    if keep.sum() < 2:
+        return float("nan")
+    normed = arr[keep] / norms[keep]
+
+    # Pearson r of normalized vectors == cosine == dot product after mean removal
+    # We want Pearson, not cosine — subtract row mean first
+    normed = normed - normed.mean(axis=1, keepdims=True)
+    # Renormalize after mean-subtraction
+    norms2 = np.linalg.norm(normed, axis=1, keepdims=True)
+    norms2[norms2 < 1e-12] = 1.0
+    normed = normed / norms2
+
+    n = normed.shape[0]
+    pairs = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            pairs.append(float(np.dot(normed[i], normed[j])))
+    return float(np.mean(pairs))
+
+
+def fr_cv(rates_hz: np.ndarray) -> float:
+    """Coefficient of variation (std/mean) of baseline firing rate.
+
+    NaNs are dropped. Returns NaN for empty / zero-mean / single-session inputs.
+    """
+    arr = np.asarray(rates_hz, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < 2:
+        return float("nan")
+    mean = float(np.mean(arr))
+    if abs(mean) < 1e-9:
+        return float("nan")
+    return float(np.std(arr, ddof=0) / mean)
