@@ -292,3 +292,25 @@ def render_page2(uid: UIDIntermediate, isi_score: float, depth_std: float,
     )
 
     return fig
+
+
+def write_uid_pdf(out_path: Path, uid: UIDIntermediate,
+                  um_pair_scores: Optional[np.ndarray],
+                  isi_score: float, depth_std: float,
+                  wave_corr: float, fr_cv_val: float) -> str:
+    """Write the 2-page PDF; return the composite verdict string."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with PdfPages(out_path) as pdf:
+        f1 = render_page1(uid, um_pair_scores, isi_score, depth_std, wave_corr, fr_cv_val)
+        pdf.savefig(f1); plt.close(f1)
+        f2 = render_page2(uid, isi_score, depth_std, wave_corr, fr_cv_val)
+        pdf.savefig(f2); plt.close(f2)
+    # Re-run the composite using the same inputs (cheap; keeps the API tidy)
+    from visdetect.analysis.tracking_qc import (
+        badge_isi, badge_depth, badge_waveform, badge_fr, composite_verdict,
+    )
+    return composite_verdict([
+        badge_isi(isi_score), badge_depth(depth_std),
+        badge_waveform(wave_corr), badge_fr(fr_cv_val),
+    ])
