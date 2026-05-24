@@ -289,3 +289,76 @@ def load_channel_positions(raw_wf_root, session_name: str) -> Optional[np.ndarra
         if os.path.exists(path):
             return np.load(path).astype(np.float32)
     return None
+
+
+from visdetect.analysis.utils import build_population_tensor, smooth_psth
+from visdetect.analysis.constants import (
+    DEFAULT_BIN_SIZE, DEFAULT_SIGMA_MS, EVENT_RESPONSIVENESS_WINDOWS,
+)
+
+# Spec §5 / §4: PSTH conditions per UID per session.
+# Keys are stable IDs used as dict keys in the intermediate record.
+PSTH_CONDITIONS: Dict[str, Dict] = {
+    "baseline_on":        {"event": "Baseline_ON", "outcomes": None,           "sizes": None,       "window": (-0.5, 1.5)},
+    "change_on_big_hit":  {"event": "Change_ON",   "outcomes": {"hit"},        "sizes": BIG_POOL,   "window": (-0.5, 0.5)},
+    "change_on_big_miss": {"event": "Change_ON",   "outcomes": {"miss"},       "sizes": BIG_POOL,   "window": (-0.5, 0.5)},
+    "change_on_sm_hit":   {"event": "Change_ON",   "outcomes": {"hit"},        "sizes": SMALL_POOL, "window": (-0.5, 0.5)},
+    "change_on_sm_miss":  {"event": "Change_ON",   "outcomes": {"miss"},       "sizes": SMALL_POOL, "window": (-0.5, 0.5)},
+    "hit_lick":           {"event": "Hit",         "outcomes": {"hit"},        "sizes": None,       "window": (-1.0, 1.0)},
+}
+
+
+def _trial_indices_for_sizes(session, sizes: Optional[Set[float]]) -> Optional[List[int]]:
+    """Return trial indices whose change_size is in `sizes`, or None for no filter."""
+    if sizes is None:
+        return None
+    out = []
+    for i, t in enumerate(session.trials):
+        cs = getattr(t, "change_size", None)
+        if cs is None:
+            continue
+        # Match within tolerance because change sizes are floats
+        for sz in sizes:
+            if abs(float(cs) - sz) < 1e-3:
+                out.append(i)
+                break
+    return out
+
+
+def extract_unit_psths(session, ks_unit_id: int
+                        ) -> Dict[str, Tuple[np.ndarray, np.ndarray, int]]:
+    """Build PSTHs for all spec conditions for one (session, unit).
+
+    Returns
+    -------
+    dict[condition_key] -> (psth_smoothed_hz, bin_centers, n_trials)
+        psth shape: (n_bins,)
+        bin_centers shape: (n_bins,)
+        n_trials: int — number of trials averaged
+        If no trials match, value is (None, None, 0).
+    """
+    out: Dict[str, Tuple[np.ndarray, np.ndarray, int]] = {}
+    for key, cfg in PSTH_CONDITIONS.items():
+        trial_idx = _trial_indices_for_sizes(session, cfg["sizes"])
+        if trial_idx is not None and len(trial_idx) == 0:
+            out[key] = (None, None, 0)
+            continue
+        try:
+            tensor, centers, valid = build_population_tensor(
+                session,
+                cluster_ids=[ks_unit_id],
+                event_name=cfg["event"],
+                window=cfg["window"],
+                bin_size=DEFAULT_BIN_SIZE,
+                outcome_filter=cfg["outcomes"],
+                trial_indices=trial_idx,
+            )
+        except ValueError:
+            out[key] = (None, None, 0)
+            continue
+        # tensor: (n_trials, n_bins, 1) — collapse units, mean over trials, smooth
+        mean_rate = tensor[:, :, 0].mean(axis=0)
+        smoothed = smooth_psth(mean_rate, bin_size=DEFAULT_BIN_SIZE,
+                                sigma_ms=DEFAULT_SIGMA_MS)
+        out[key] = (smoothed, centers, len(valid))
+    return out
