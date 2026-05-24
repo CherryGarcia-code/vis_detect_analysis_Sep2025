@@ -362,3 +362,104 @@ def extract_unit_psths(session, ks_unit_id: int
                                 sigma_ms=DEFAULT_SIGMA_MS)
         out[key] = (smoothed, centers, len(valid))
     return out
+
+
+import gc
+
+
+@dataclass
+class SessionRecord:
+    """Per-session extracted data for one UID."""
+    session_name: str
+    ks_unit_id: int
+    stage: str
+    peak_chan: int
+    peak_depth_um: float
+    amplitude: float
+    baseline_fr_hz: float
+    waveform_peak: np.ndarray             # (n_samples,)
+    footprint: np.ndarray                 # (n_samples, n_channels_kept)
+    footprint_channels: np.ndarray        # (n_channels_kept,)
+    isi_hist: np.ndarray                  # (50,)
+    isi_centers: np.ndarray               # (50,)
+    psths: Dict[str, Tuple[np.ndarray, np.ndarray, int]] = field(default_factory=dict)
+
+
+@dataclass
+class UIDIntermediate:
+    """Everything needed to render one UID's QC sheet."""
+    global_uid: int
+    span: int
+    has_naive_to_expert: bool
+    suspect_known: bool
+    sessions: List[SessionRecord] = field(default_factory=list)
+
+
+def _compute_baseline_fr(cluster, session) -> float:
+    """Spikes during the pre-Baseline_ON window / total ITI duration.
+
+    Cheap robust proxy: total spikes / max-spike-time.  Same convention as
+    visdetect.analysis.utils.get_good_cluster_ids.
+    """
+    if cluster.spike_times is None or len(cluster.spike_times) == 0:
+        return float("nan")
+    duration = float(cluster.spike_times[-1])
+    if duration < 1.0:
+        return float("nan")
+    return len(cluster.spike_times) / duration
+
+
+def extract_session_records(session, ks_unit_ids: Sequence[int], session_name: str,
+                             stage: str, raw_wf_root, channel_positions: Optional[np.ndarray]
+                             ) -> Dict[int, SessionRecord]:
+    """Extract per-UID SessionRecord for every (uid, ks_id) in this session.
+
+    Returns a dict keyed by ks_unit_id.  Caller maps ks_id -> global_uid.
+    """
+    out: Dict[int, SessionRecord] = {}
+    cluster_map = {c.cluster_id: c for c in session.clusters}
+    for kid in ks_unit_ids:
+        cluster = cluster_map.get(int(kid))
+        if cluster is None:
+            continue
+
+        # Waveform / footprint
+        mean_wf = load_raw_mean_waveform(raw_wf_root, session_name, int(kid))
+        if mean_wf is None:
+            # Cluster exists but no raw waveform file — skip
+            continue
+        peak_chan = extract_peak_channel(mean_wf)
+        peak_wave = mean_wf[:, peak_chan]
+        footprint, fp_chans = extract_footprint(mean_wf, peak_chan)
+
+        # Depth & amplitude
+        if channel_positions is not None and peak_chan < channel_positions.shape[0]:
+            depth_um = float(channel_positions[peak_chan, 1])
+        else:
+            depth_um = float("nan")
+        amplitude = float(peak_wave.max() - peak_wave.min())
+
+        # FR / ISI
+        baseline_fr = _compute_baseline_fr(cluster, session)
+        spike_times = np.asarray(cluster.spike_times)
+        isi_h, isi_c = isi_log_histogram(spike_times)
+
+        # PSTHs
+        psths = extract_unit_psths(session, int(kid))
+
+        out[int(kid)] = SessionRecord(
+            session_name=session_name,
+            ks_unit_id=int(kid),
+            stage=stage,
+            peak_chan=peak_chan,
+            peak_depth_um=depth_um,
+            amplitude=amplitude,
+            baseline_fr_hz=baseline_fr,
+            waveform_peak=peak_wave.astype(np.float32),
+            footprint=footprint.astype(np.float32),
+            footprint_channels=fp_chans,
+            isi_hist=isi_h.astype(np.float32),
+            isi_centers=isi_c.astype(np.float32),
+            psths=psths,
+        )
+    return out
