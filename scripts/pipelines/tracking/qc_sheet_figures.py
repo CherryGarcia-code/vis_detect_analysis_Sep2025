@@ -156,3 +156,139 @@ def render_page1(uid: UIDIntermediate, um_pair_scores: Optional[np.ndarray],
         ax_um.set_axis_off()
 
     return fig
+
+
+def _psth_matrix(uid: UIDIntermediate, key: str) -> Optional[tuple]:
+    """Stack per-session PSTH rows into (n_sessions, n_bins) + bin_centers + stages.
+
+    Returns (matrix, centers, stages, n_trials_per_session) or None if every session is empty.
+    """
+    rows, centers, stages, n_trials = [], None, [], []
+    for rec in uid.sessions:
+        psth, c, n = rec.psths.get(key, (None, None, 0))
+        if psth is None:
+            continue
+        rows.append(psth)
+        centers = c
+        stages.append(rec.stage)
+        n_trials.append(n)
+    if not rows:
+        return None
+    return np.vstack(rows), centers, stages, n_trials
+
+
+def _draw_heatmap_with_inset(parent_gs, uid: UIDIntermediate, key: str,
+                              title: str, miss_keys: Optional[List[str]] = None) -> None:
+    """Render a chronological PSTH heatmap with a stage-mean inset.
+
+    miss_keys (optional): list of keys whose stage-mean traces to overlay in the
+    inset for hit/miss comparison (Change_ON only).
+    """
+    fig = parent_gs.get_gridspec().figure
+    ax_main = fig.add_subplot(parent_gs)
+    data = _psth_matrix(uid, key)
+    if data is None:
+        ax_main.text(0.5, 0.5, f"no trials for {key}", ha="center", va="center",
+                     transform=ax_main.transAxes, fontsize=9, color="0.5")
+        ax_main.set_axis_off()
+        return
+
+    mat, centers, stages, _ = data
+    vmax = np.percentile(mat, 99)
+    ax_main.imshow(mat, aspect="auto", origin="lower", cmap="magma",
+                   extent=[centers[0], centers[-1], 0, mat.shape[0]],
+                   vmin=0, vmax=max(vmax, 1e-6))
+    ax_main.axvline(0, color="white", linewidth=0.8, alpha=0.7)
+    ax_main.set_title(title, fontsize=10)
+    ax_main.set_xlabel("time (s)"); ax_main.set_ylabel("session #")
+
+    # Inset: L vs E stage-mean
+    bbox = ax_main.get_position()
+    iw, ih = 0.18 * bbox.width / 0.4, 0.20 * bbox.height / 0.4   # roughly 1.2:1
+    inset = fig.add_axes([bbox.x0 + bbox.width - iw - 0.005,
+                          bbox.y0 + bbox.height - ih - 0.005,
+                          iw, ih])
+    inset.set_facecolor("#0d0d0d")
+    for st in STAGE_ORDER:
+        mask = np.array([s == st for s in stages])
+        if mask.sum() == 0:
+            continue
+        inset.plot(centers, mat[mask].mean(axis=0), color=STAGE_COLORS[st],
+                   linewidth=1.0, label=st)
+    if miss_keys:
+        for mk in miss_keys:
+            mdata = _psth_matrix(uid, mk)
+            if mdata is None:
+                continue
+            mmat, mcenters, mstages, _ = mdata
+            for st in STAGE_ORDER:
+                mask = np.array([s == st for s in mstages])
+                if mask.sum() == 0:
+                    continue
+                inset.plot(mcenters, mmat[mask].mean(axis=0),
+                           color=STAGE_COLORS[st], linewidth=1.0,
+                           linestyle="--", alpha=0.7)
+    inset.axvline(0, color="white", linewidth=0.6, alpha=0.5)
+    inset.tick_params(labelsize=6)
+    inset.set_xticks([centers[0], 0.0, centers[-1]])
+    inset.set_yticks([])
+
+
+def render_page2(uid: UIDIntermediate, isi_score: float, depth_std: float,
+                 wave_corr: float, fr_cv_val: float) -> plt.Figure:
+    fig = plt.figure(figsize=(8.5, 11.0))
+    gs = gridspec.GridSpec(
+        nrows=5, ncols=2,
+        height_ratios=[0.9, 1.6, 1.8, 2.2, 1.8],
+        width_ratios=[1, 1],
+        hspace=0.55, wspace=0.25,
+        top=0.96, bottom=0.04, left=0.09, right=0.96,
+        figure=fig,
+    )
+
+    # Header (spans both columns)
+    ax_hdr = fig.add_subplot(gs[0, :])
+    draw_header(ax_hdr, uid, isi_score, depth_std, wave_corr, fr_cv_val)
+
+    # Row 1: ISI overlay + baseline FR
+    ax_isi = fig.add_subplot(gs[1, 0])
+    for rec in uid.sessions:
+        ax_isi.semilogx(rec.isi_centers, rec.isi_hist,
+                        color=_waveform_color(rec.stage),
+                        linewidth=0.7, alpha=0.6)
+    ax_isi.set_xlabel("ISI (s, log)"); ax_isi.set_ylabel("prob")
+    ax_isi.set_title("ISI distribution", fontsize=10)
+
+    ax_fr = fig.add_subplot(gs[1, 1])
+    xs = np.arange(len(uid.sessions))
+    colors = [_waveform_color(r.stage) for r in uid.sessions]
+    ax_fr.scatter(xs, [r.baseline_fr_hz for r in uid.sessions], c=colors, s=18)
+    ax_fr.plot(xs, [r.baseline_fr_hz for r in uid.sessions], color="0.5", linewidth=0.7)
+    ax_fr.set_xlabel("session #"); ax_fr.set_ylabel("FR (Hz)")
+    ax_fr.set_title("Baseline FR", fontsize=10)
+
+    # Row 2: Baseline_ON heatmap (full width)
+    _draw_heatmap_with_inset(
+        gs[2, :], uid, "baseline_on",
+        title="PSTH · Baseline_ON · all outcomes pooled [TODO: split by outcome in v2]",
+    )
+
+    # Row 3: Change_ON Big-Hit | Small-Hit
+    _draw_heatmap_with_inset(
+        gs[3, 0], uid, "change_on_big_hit",
+        title="Change_ON · Big-Hit (2.0× + 4.0×)",
+        miss_keys=["change_on_big_miss"],
+    )
+    _draw_heatmap_with_inset(
+        gs[3, 1], uid, "change_on_sm_hit",
+        title="Change_ON · Small-Hit (1.25× + 1.35×)",
+        miss_keys=["change_on_sm_miss"],
+    )
+
+    # Row 4: Hit lick (full width)
+    _draw_heatmap_with_inset(
+        gs[4, :], uid, "hit_lick",
+        title="PSTH · Hit lick",
+    )
+
+    return fig
