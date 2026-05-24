@@ -163,3 +163,20 @@ def composite_verdict(badges: Sequence[str]) -> str:
     if n_warn == 1:
         return "review"
     return "trusted"
+
+
+import pandas as pd
+from pathlib import Path
+from collections import defaultdict
+
+
+def load_isi_scores(csv_path) -> Dict[int, float]:
+    """Read the median ISI corr per global_uid from validate_long_tracks output.
+
+    Missing UIDs are returned as NaN via a defaultdict.
+    """
+    df = pd.read_csv(csv_path)
+    scores = defaultdict(lambda: float("nan"))
+    for _, row in df.iterrows():
+        scores[int(row["global_uid"])] = float(row["median"])
+    return scores

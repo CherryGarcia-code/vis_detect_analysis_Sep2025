@@ -134,3 +134,21 @@ def test_badge_waveform_nan_is_fail():
 
 def test_badge_fr_nan_is_fail():
     assert qc.badge_fr(float("nan")) == "fail"
+
+
+import pandas as pd
+import tempfile
+from pathlib import Path
+
+
+def test_load_isi_scores(tmp_path):
+    csv = tmp_path / "track_validation_stats.csv"
+    csv.write_text(
+        "global_uid,mean,median,min,count,span,nonmatched_rank_pct\n"
+        "334,0.73,0.91,-0.39,725,27,82.9\n"
+        "779,0.30,0.28,-0.40,500,15,5.0\n"
+    )
+    scores = qc.load_isi_scores(csv)
+    assert scores[334] == pytest.approx(0.91)
+    assert scores[779] == pytest.approx(0.28)
+    assert scores.get(9999, float("nan")) != scores.get(9999, float("nan"))  # NaN sentinel for missing
