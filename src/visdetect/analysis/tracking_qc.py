@@ -247,3 +247,45 @@ def extract_footprint(mean_waveform: np.ndarray, peak_chan: int,
     channels = np.arange(lo, hi)
     snippet = mean_waveform[:, lo:hi]
     return snippet, channels
+
+
+import os
+
+
+def load_raw_mean_waveform(raw_wf_root, session_name: str, ks_unit_id: int
+                            ) -> Optional[np.ndarray]:
+    """Load Unit{kid}_RawSpikes.npy and return mean across CV halves.
+
+    Parameters
+    ----------
+    raw_wf_root : str or Path
+        e.g. ``data/unit_match/input/BG_046``
+    session_name : str
+        DDMMYYYY (8-digit) — matches the unit-match input layout.
+    ks_unit_id : int
+
+    Returns
+    -------
+    mean_waveform : ndarray, shape (n_samples, n_channels), or None if file missing.
+    """
+    candidates = [session_name, session_name.zfill(8)]
+    for cand in candidates:
+        path = os.path.join(str(raw_wf_root), cand, "RawWaveforms",
+                            f"Unit{ks_unit_id}_RawSpikes.npy")
+        if os.path.exists(path):
+            raw = np.load(path)   # (n_samples, n_channels, n_cv)
+            if raw.ndim == 3:
+                return raw.mean(axis=-1).astype(np.float32)
+            elif raw.ndim == 2:
+                return raw.astype(np.float32)
+            return None
+    return None
+
+
+def load_channel_positions(raw_wf_root, session_name: str) -> Optional[np.ndarray]:
+    """Load channel_positions.npy for a session.  Shape (n_channels, 2) [x_um, y_um]."""
+    for cand in (session_name, session_name.zfill(8)):
+        path = os.path.join(str(raw_wf_root), cand, "channel_positions.npy")
+        if os.path.exists(path):
+            return np.load(path).astype(np.float32)
+    return None
