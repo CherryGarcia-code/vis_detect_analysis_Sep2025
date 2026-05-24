@@ -463,3 +463,78 @@ def extract_session_records(session, ks_unit_ids: Sequence[int], session_name: s
             psths=psths,
         )
     return out
+
+
+# ─── Task 9: cohort selection + cache I/O ─────────────────────────────
+import pickle
+
+
+KNOWN_SUSPECTS: Set[int] = {779, 873, 872}
+
+
+def select_long_tracks(unit_index_csv, isi_stats_csv,
+                       min_span: int = 10) -> pd.DataFrame:
+    """Long-track cohort: UIDs with span >= min_span.
+
+    Span is taken from isi_stats_csv (authoritative). UIDs not present there
+    fall back to counting unique sessions in unit_index.
+
+    Returns
+    -------
+    DataFrame with columns: global_uid, span, has_naive_to_expert, suspect_known
+    """
+    ui = pd.read_csv(unit_index_csv)
+    span_by_uid = ui.groupby("global_uid")["session"].nunique().to_dict()
+
+    if Path(isi_stats_csv).exists():
+        stats = pd.read_csv(isi_stats_csv)
+        for _, r in stats.iterrows():
+            span_by_uid[int(r["global_uid"])] = int(r["span"])
+
+    rows = []
+    for uid, span in span_by_uid.items():
+        if span < min_span:
+            continue
+        sessions = ui.loc[ui["global_uid"] == uid, "session"].astype(str).tolist()
+        rows.append({
+            "global_uid": int(uid),
+            "span": int(span),
+            "sessions": sessions,
+            "suspect_known": int(uid) in KNOWN_SUSPECTS,
+        })
+    return pd.DataFrame(rows).sort_values("global_uid").reset_index(drop=True)
+
+
+def annotate_naive_to_expert(cohort: pd.DataFrame, manifest: pd.DataFrame
+                              ) -> pd.DataFrame:
+    """Add has_naive_to_expert column based on manifest stage assignments.
+
+    A UID is N→E if it spans (any of first 8 sessions) and (any of last 8 sessions).
+    Uses chronological order from manifest.session_name.
+    """
+    chrono = manifest.sort_values("session_name").reset_index(drop=True)
+    first_eight = set(chrono["session_name"].astype(str).head(8))
+    last_eight  = set(chrono["session_name"].astype(str).tail(8))
+
+    flags = []
+    for _, row in cohort.iterrows():
+        sess = set(str(s) for s in row["sessions"])
+        flags.append(bool(sess & first_eight) and bool(sess & last_eight))
+    cohort = cohort.copy()
+    cohort["has_naive_to_expert"] = flags
+    return cohort
+
+
+def save_cache(intermediates: Dict[int, UIDIntermediate], path) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as f:
+        pickle.dump(intermediates, f)
+
+
+def load_cache(path) -> Optional[Dict[int, UIDIntermediate]]:
+    p = Path(path)
+    if not p.exists():
+        return None
+    with open(p, "rb") as f:
+        return pickle.load(f)
+
