@@ -180,3 +180,70 @@ def load_isi_scores(csv_path) -> Dict[int, float]:
     for _, row in df.iterrows():
         scores[int(row["global_uid"])] = float(row["median"])
     return scores
+
+
+# ─── ISI histogram ────────────────────────────────────────────────────
+# Matches the binning used by validate_long_tracks.py (1 ms .. 10 s, log).
+_ISI_BIN_EDGES = np.logspace(-3, 1, 51)
+_ISI_CENTERS = 0.5 * (_ISI_BIN_EDGES[:-1] + _ISI_BIN_EDGES[1:])
+
+
+def isi_log_histogram(spike_times: np.ndarray, n_bins: int = 50
+                      ) -> Tuple[np.ndarray, np.ndarray]:
+    """Normalised log-ISI histogram, 1 ms .. 10 s, 50 bins by default.
+
+    Returns
+    -------
+    h : ndarray, shape (n_bins,)
+        Probability mass per bin (sums to 1).  All-NaN if too few spikes.
+    centers : ndarray, shape (n_bins,)
+        Bin centres (s).
+    """
+    if n_bins != 50:
+        edges = np.logspace(-3, 1, n_bins + 1)
+        centers = 0.5 * (edges[:-1] + edges[1:])
+    else:
+        edges = _ISI_BIN_EDGES
+        centers = _ISI_CENTERS
+
+    if spike_times is None or len(spike_times) < 20:
+        return np.full(n_bins, np.nan), centers
+    isis = np.diff(np.sort(spike_times))
+    isis = isis[(isis > 0) & (isis < 10)]
+    if len(isis) < 10:
+        return np.full(n_bins, np.nan), centers
+    h, _ = np.histogram(isis, bins=edges)
+    if h.sum() == 0:
+        return np.full(n_bins, np.nan), centers
+    return h.astype(float) / h.sum(), centers
+
+
+# ─── Waveform / footprint extraction ──────────────────────────────────
+
+def extract_peak_channel(mean_waveform: np.ndarray) -> int:
+    """Index of the channel with the largest peak-to-peak amplitude.
+
+    Parameters
+    ----------
+    mean_waveform : ndarray, shape (n_samples, n_channels)
+    """
+    ptp = mean_waveform.max(axis=0) - mean_waveform.min(axis=0)
+    return int(np.argmax(ptp))
+
+
+def extract_footprint(mean_waveform: np.ndarray, peak_chan: int,
+                      halfwidth: int = FOOTPRINT_HALFWIDTH_CHANS
+                      ) -> Tuple[np.ndarray, np.ndarray]:
+    """Footprint snippet: (n_samples, 2*halfwidth+1) clipped at probe edges.
+
+    Returns
+    -------
+    snippet : ndarray, shape (n_samples, n_channels_kept)
+    channel_indices : ndarray, shape (n_channels_kept,)
+    """
+    n_ch = mean_waveform.shape[1]
+    lo = max(0, peak_chan - halfwidth)
+    hi = min(n_ch, peak_chan + halfwidth + 1)
+    channels = np.arange(lo, hi)
+    snippet = mean_waveform[:, lo:hi]
+    return snippet, channels

@@ -152,3 +152,47 @@ def test_load_isi_scores(tmp_path):
     assert scores[334] == pytest.approx(0.91)
     assert scores[779] == pytest.approx(0.28)
     assert scores.get(9999, float("nan")) != scores.get(9999, float("nan"))  # NaN sentinel for missing
+
+
+def test_isi_log_histogram():
+    rng = np.random.default_rng(0)
+    spike_times = np.sort(rng.exponential(0.1, size=1000).cumsum())
+    h, centers = qc.isi_log_histogram(spike_times, n_bins=50)
+    assert h.shape == (50,)
+    assert centers.shape == (50,)
+    assert h.sum() == pytest.approx(1.0, rel=1e-6)
+
+
+def test_isi_log_histogram_too_few_spikes_returns_nans():
+    h, centers = qc.isi_log_histogram(np.array([0.1, 0.2]), n_bins=50)
+    assert np.all(np.isnan(h))
+    assert centers.shape == (50,)
+
+
+def test_extract_peak_channel_picks_max_amplitude():
+    # raw waveform shape: (n_samples, n_channels, n_cv_halves)
+    n_samp, n_ch, n_cv = 82, 384, 2
+    waveforms = np.zeros((n_samp, n_ch, n_cv), dtype=np.float32)
+    # channel 17 has a clean spike
+    waveforms[30:40, 17, :] = -1.5
+    waveforms[40, 17, :] = 0.5
+    mean_wave = waveforms.mean(axis=-1)  # (n_samp, n_ch)
+    peak_chan = qc.extract_peak_channel(mean_wave)
+    assert peak_chan == 17
+
+
+def test_extract_footprint_centered_on_peak():
+    n_samp, n_ch = 82, 384
+    mean_wave = np.zeros((n_samp, n_ch), dtype=np.float32)
+    mean_wave[:, 100] = np.linspace(-1.0, 1.0, n_samp)
+    fp, channels = qc.extract_footprint(mean_wave, peak_chan=100, halfwidth=8)
+    assert fp.shape == (n_samp, 17)        # 2*8 + 1
+    assert channels.tolist() == list(range(92, 109))
+
+
+def test_extract_footprint_clips_at_probe_edge():
+    n_samp, n_ch = 82, 384
+    mean_wave = np.zeros((n_samp, n_ch), dtype=np.float32)
+    fp, channels = qc.extract_footprint(mean_wave, peak_chan=2, halfwidth=8)
+    assert fp.shape[1] == 11               # 0..10 inclusive
+    assert channels.tolist() == list(range(0, 11))
