@@ -481,7 +481,7 @@ def select_long_tracks(unit_index_csv, isi_stats_csv,
 
     Returns
     -------
-    DataFrame with columns: global_uid, span, has_naive_to_expert, suspect_known
+    DataFrame with columns: global_uid, span, sessions, suspect_known
     """
     ui = pd.read_csv(unit_index_csv)
     span_by_uid = ui.groupby("global_uid")["session"].nunique().to_dict()
@@ -510,15 +510,15 @@ def annotate_naive_to_expert(cohort: pd.DataFrame, manifest: pd.DataFrame
     """Add has_naive_to_expert column based on manifest stage assignments.
 
     A UID is N→E if it spans (any of first 8 sessions) and (any of last 8 sessions).
-    Uses chronological order from manifest.session_name.
+    Uses chronological order from manifest.session_idx.
     """
-    chrono = manifest.sort_values("session_name").reset_index(drop=True)
-    first_eight = set(chrono["session_name"].astype(str).head(8))
-    last_eight  = set(chrono["session_name"].astype(str).tail(8))
+    chrono = manifest.sort_values("session_idx").reset_index(drop=True)
+    first_eight = set(chrono["session_name"].astype(str).str.zfill(8).head(8))
+    last_eight  = set(chrono["session_name"].astype(str).str.zfill(8).tail(8))
 
     flags = []
     for _, row in cohort.iterrows():
-        sess = set(str(s) for s in row["sessions"])
+        sess = set(str(s).zfill(8) for s in row["sessions"])
         flags.append(bool(sess & first_eight) and bool(sess & last_eight))
     cohort = cohort.copy()
     cohort["has_naive_to_expert"] = flags
