@@ -196,3 +196,19 @@ def test_extract_footprint_clips_at_probe_edge():
     fp, channels = qc.extract_footprint(mean_wave, peak_chan=2, halfwidth=8)
     assert fp.shape[1] == 11               # 0..10 inclusive
     assert channels.tolist() == list(range(0, 11))
+
+
+def test_extract_footprint_clips_at_top_edge():
+    n_samp, n_ch = 82, 384
+    mean_wave = np.zeros((n_samp, n_ch), dtype=np.float32)
+    fp, channels = qc.extract_footprint(mean_wave, peak_chan=n_ch - 1, halfwidth=8)
+    # peak at 383, halfwidth 8 → channels 375..383 inclusive (9 channels)
+    assert fp.shape[1] == 9
+    assert channels.tolist() == list(range(n_ch - 9, n_ch))
+
+
+def test_extract_peak_channel_all_zero_returns_first_channel():
+    # Document current behaviour: argmax of all-zero ptp array → 0.
+    # Callers should treat a peak_chan of 0 with zero amplitude as a dead-unit sentinel.
+    mean_wave = np.zeros((82, 384), dtype=np.float32)
+    assert qc.extract_peak_channel(mean_wave) == 0
