@@ -8,10 +8,19 @@ See docs/superpowers/specs/2026-05-21-tracking-qc-sheets-design.md
 
 from __future__ import annotations
 
+import gc
+import os
+import pickle
+from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
+import pandas as pd
+
+from visdetect.analysis.utils import build_population_tensor, smooth_psth
+from visdetect.analysis.constants import DEFAULT_BIN_SIZE, DEFAULT_SIGMA_MS
 
 # ─── Badge thresholds (tweakable; documented in spec §7) ──────────────
 ISI_PASS: float = 0.75
@@ -27,7 +36,9 @@ FR_CV_PASS: float = 0.35
 FR_CV_WARN: float = 0.60
 
 # ─── Change-size pools for Change_ON heatmaps ─────────────────────────
-# Spec excludes 1.5× from heatmaps (ambiguous mid).
+# Change-size pools for Change_ON heatmaps.
+# Deliberately differs from visdetect.analysis.constants.{BIG,SMALL}_CHANGE_SIZES:
+# 1.5× is excluded here because the spec treats it as ambiguous mid (spec §4).
 BIG_POOL: Set[float] = {2.0, 4.0}
 SMALL_POOL: Set[float] = {1.25, 1.35}
 
@@ -165,11 +176,6 @@ def composite_verdict(badges: Sequence[str]) -> str:
     return "trusted"
 
 
-import pandas as pd
-from pathlib import Path
-from collections import defaultdict
-
-
 def load_isi_scores(csv_path) -> Dict[int, float]:
     """Read the median ISI corr per global_uid from validate_long_tracks output.
 
@@ -249,9 +255,6 @@ def extract_footprint(mean_waveform: np.ndarray, peak_chan: int,
     return snippet, channels
 
 
-import os
-
-
 def load_raw_mean_waveform(raw_wf_root, session_name: str, ks_unit_id: int
                             ) -> Optional[np.ndarray]:
     """Load Unit{kid}_RawSpikes.npy and return mean across CV halves.
@@ -290,11 +293,6 @@ def load_channel_positions(raw_wf_root, session_name: str) -> Optional[np.ndarra
             return np.load(path).astype(np.float32)
     return None
 
-
-from visdetect.analysis.utils import build_population_tensor, smooth_psth
-from visdetect.analysis.constants import (
-    DEFAULT_BIN_SIZE, DEFAULT_SIGMA_MS, EVENT_RESPONSIVENESS_WINDOWS,
-)
 
 # Spec §5 / §4: PSTH conditions per UID per session.
 # Keys are stable IDs used as dict keys in the intermediate record.
@@ -364,9 +362,6 @@ def extract_unit_psths(session, ks_unit_id: int
     return out
 
 
-import gc
-
-
 @dataclass
 class SessionRecord:
     """Per-session extracted data for one UID."""
@@ -396,10 +391,12 @@ class UIDIntermediate:
 
 
 def _compute_baseline_fr(cluster, session) -> float:
-    """Spikes during the pre-Baseline_ON window / total ITI duration.
+    """Per-session baseline firing rate proxy: spikes per second over the cluster's own active span.
 
-    Cheap robust proxy: total spikes / max-spike-time.  Same convention as
-    visdetect.analysis.utils.get_good_cluster_ids.
+    Implementation note: this uses the cluster's last spike time as the denominator
+    (not the session-wide recording duration), so units that go silent near the end
+    of a session will have an inflated rate. Adequate for QC trending; precise
+    per-trial pre-stimulus rates can be computed in a v2.
     """
     if cluster.spike_times is None or len(cluster.spike_times) == 0:
         return float("nan")
@@ -466,9 +463,6 @@ def extract_session_records(session, ks_unit_ids: Sequence[int], session_name: s
 
 
 # ─── Task 9: cohort selection + cache I/O ─────────────────────────────
-import pickle
-
-
 KNOWN_SUSPECTS: Set[int] = {779, 873, 872}
 
 
