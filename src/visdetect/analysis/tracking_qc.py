@@ -532,3 +532,54 @@ def load_cache(path) -> Optional[Dict[int, UIDIntermediate]]:
     with open(p, "rb") as f:
         return pickle.load(f)
 
+
+
+def load_um_pair_scores(um_output_root, uid_to_sessions: Dict[int, List[str]],
+                         uid_to_ks: Dict[int, Dict[str, int]]
+                         ) -> Dict[int, np.ndarray]:
+    """Read batch0/output_prob_matrix.npy + batch0/unit_index.csv, then
+    return per-UID arrays of consecutive-session match probabilities.
+
+    Parameters
+    ----------
+    um_output_root : Path
+        e.g. ``X:/.../unit_match/output/all42``
+    uid_to_sessions : dict[uid -> chronological list of session names (strings)]
+    uid_to_ks : dict[uid -> dict[session_name -> ks_unit_id]]
+
+    Returns
+    -------
+    dict[uid] -> ndarray of shape (n_sessions_for_uid - 1,)
+        Empty array if matrix or rows are missing.
+    """
+    root = Path(um_output_root)
+    matrix_path = root / "batch0" / "output_prob_matrix.npy"
+    index_path  = root / "batch0" / "unit_index.csv"
+    if not matrix_path.exists() or not index_path.exists():
+        return {uid: np.array([]) for uid in uid_to_sessions}
+
+    mat = np.load(matrix_path)
+    idx = pd.read_csv(index_path)
+    idx["session"] = idx["session"].astype(str)
+    lookup: Dict[Tuple[str, int], int] = {}
+    for i, row in idx.iterrows():
+        lookup[(str(row["session"]), int(row["ks_unit_id"]))] = i
+
+    out = {}
+    for uid, sess_list in uid_to_sessions.items():
+        ks_map = uid_to_ks.get(uid, {})
+        rows = []
+        for s in sess_list:
+            kid = ks_map.get(s)
+            if kid is None:
+                rows.append(None)
+                continue
+            rows.append(lookup.get((s, int(kid))))
+        scores = []
+        for a, b in zip(rows[:-1], rows[1:]):
+            if a is None or b is None:
+                scores.append(np.nan)
+                continue
+            scores.append(float(mat[a, b]))
+        out[uid] = np.array(scores, dtype=float)
+    return out
