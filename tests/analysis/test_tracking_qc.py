@@ -212,3 +212,65 @@ def test_extract_peak_channel_all_zero_returns_first_channel():
     # Callers should treat a peak_chan of 0 with zero amplitude as a dead-unit sentinel.
     mean_wave = np.zeros((82, 384), dtype=np.float32)
     assert qc.extract_peak_channel(mean_wave) == 0
+
+
+def test_isi_peak_agreement_all_same():
+    # All 5 sessions peak at bin 15 → perfect agreement
+    h = np.zeros(50); h[15] = 0.5; h[14] = 0.25; h[16] = 0.25
+    hists = [h.copy() for _ in range(5)]
+    assert qc.isi_peak_agreement(hists) == pytest.approx(1.0)
+
+
+def test_isi_peak_agreement_bimodal():
+    # 3 sessions peak at bin 15, 2 sessions peak at bin 35 → 3/5 = 0.6 agreement
+    h_a = np.zeros(50); h_a[15] = 0.5; h_a[14] = 0.25; h_a[16] = 0.25
+    h_b = np.zeros(50); h_b[35] = 0.5; h_b[34] = 0.25; h_b[36] = 0.25
+    hists = [h_a, h_a, h_a, h_b, h_b]
+    assert qc.isi_peak_agreement(hists) == pytest.approx(0.6)
+
+
+def test_isi_peak_agreement_within_tolerance():
+    # Peaks at bins 14, 15, 16 all count as agreeing with mode bin 15 (±2 tolerance)
+    hists = []
+    for peak in [14, 15, 16, 15, 17]:
+        h = np.zeros(50); h[peak] = 1.0
+        hists.append(h)
+    assert qc.isi_peak_agreement(hists) == pytest.approx(1.0)
+
+
+def test_isi_peak_agreement_drops_nan():
+    h = np.zeros(50); h[15] = 1.0
+    h_nan = np.full(50, np.nan)
+    hists = [h, h, h_nan, h, h_nan]
+    # 3 valid sessions, all peak at 15 → 1.0
+    assert qc.isi_peak_agreement(hists) == pytest.approx(1.0)
+
+
+def test_isi_peak_agreement_too_few_valid_returns_nan():
+    h = np.zeros(50); h[15] = 1.0
+    hists = [h, np.full(50, np.nan)]
+    assert np.isnan(qc.isi_peak_agreement(hists))
+
+
+def test_isi_peak_agreement_empty_returns_nan():
+    assert np.isnan(qc.isi_peak_agreement([]))
+
+
+def test_badge_isi_peak_thresholds():
+    assert qc.badge_isi_peak(0.95) == "pass"
+    assert qc.badge_isi_peak(qc.ISI_PEAK_AGREE_PASS) == "pass"
+    assert qc.badge_isi_peak(0.75) == "warn"
+    assert qc.badge_isi_peak(qc.ISI_PEAK_AGREE_WARN) == "warn"
+    assert qc.badge_isi_peak(0.30) == "fail"
+    assert qc.badge_isi_peak(float("nan")) == "fail"
+
+
+def test_composite_still_works_with_5_badges():
+    # 5 pass → trusted
+    assert qc.composite_verdict(["pass"]*5) == "trusted"
+    # 4 pass + 1 warn → review
+    assert qc.composite_verdict(["pass","pass","pass","pass","warn"]) == "review"
+    # 3 pass + 2 warns → suspect
+    assert qc.composite_verdict(["pass","pass","pass","warn","warn"]) == "suspect"
+    # any fail → suspect
+    assert qc.composite_verdict(["pass","pass","pass","pass","fail"]) == "suspect"

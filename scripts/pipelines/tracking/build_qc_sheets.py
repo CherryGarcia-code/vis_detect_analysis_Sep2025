@@ -29,8 +29,9 @@ from visdetect.analysis.tracking_qc import (        # noqa: E402
     select_long_tracks, annotate_naive_to_expert,
     extract_session_records, load_channel_positions,
     load_isi_scores, load_um_pair_scores,
-    depth_std_um, waveform_corr, fr_cv,
-    badge_isi, badge_depth, badge_waveform, badge_fr, composite_verdict,
+    depth_std_um, waveform_corr, fr_cv, isi_peak_agreement,
+    badge_isi, badge_depth, badge_waveform, badge_fr, badge_isi_peak,
+    composite_verdict,
     save_cache, load_cache,
 )
 from visdetect.core.session import load_session                 # noqa: E402
@@ -120,7 +121,7 @@ def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
 
 
 def compute_uid_metrics(uid: UIDIntermediate) -> Dict[str, float]:
-    """Depth std, waveform corr, FR CV for one UID across its sessions."""
+    """Depth std, waveform corr, FR CV, ISI peak agreement for one UID across its sessions."""
     depths = np.array([r.peak_depth_um for r in uid.sessions], dtype=float)
     rates  = np.array([r.baseline_fr_hz for r in uid.sessions], dtype=float)
     waves = [r.waveform_peak for r in uid.sessions if r.waveform_peak is not None]
@@ -129,10 +130,12 @@ def compute_uid_metrics(uid: UIDIntermediate) -> Dict[str, float]:
         wf_stack = np.stack([w[:min_len] for w in waves])
     else:
         wf_stack = np.zeros((0, 0), dtype=np.float32)
+    isi_hists = [r.isi_hist for r in uid.sessions]
     return {
-        "depth_std_um": depth_std_um(depths),
-        "wave_corr":    waveform_corr(wf_stack),
-        "fr_cv":        fr_cv(rates),
+        "depth_std_um":     depth_std_um(depths),
+        "wave_corr":        waveform_corr(wf_stack),
+        "fr_cv":            fr_cv(rates),
+        "isi_peak_agree":   isi_peak_agreement(isi_hists),
     }
 
 
@@ -188,13 +191,24 @@ def main() -> int:
         metrics = compute_uid_metrics(iv)
         isi = isi_scores[uid]
         out_path = OUT_DIR / f"uid_{uid:04d}.pdf"
-        verdict = write_uid_pdf(
+        # PDF stays at 4-badge layout (visual unchanged); write_uid_pdf returns
+        # the 4-badge composite verdict it renders in the header.
+        verdict_pdf = write_uid_pdf(
             out_path, iv, pair_scores.get(uid),
             isi_score=isi,
             depth_std=metrics["depth_std_um"],
             wave_corr=metrics["wave_corr"],
             fr_cv_val=metrics["fr_cv"],
         )
+        # CSV verdict incorporates the 5th badge (ISI peak-agreement) so the
+        # cross-session bimodality detector is auditable. Intentionally may
+        # differ from verdict_pdf — pdf_csv_disagree flags those rows.
+        b_isi   = badge_isi(isi)
+        b_depth = badge_depth(metrics["depth_std_um"])
+        b_wave  = badge_waveform(metrics["wave_corr"])
+        b_fr    = badge_fr(metrics["fr_cv"])
+        b_peak  = badge_isi_peak(metrics["isi_peak_agree"])
+        verdict_csv = composite_verdict([b_isi, b_depth, b_wave, b_fr, b_peak])
         rows.append({
             "global_uid": uid,
             "span": iv.span,
@@ -205,13 +219,17 @@ def main() -> int:
             "depth_std_um": metrics["depth_std_um"],
             "wave_corr": metrics["wave_corr"],
             "fr_cv": metrics["fr_cv"],
-            "badge_isi":   badge_isi(isi),
-            "badge_depth": badge_depth(metrics["depth_std_um"]),
-            "badge_wave":  badge_waveform(metrics["wave_corr"]),
-            "badge_fr":    badge_fr(metrics["fr_cv"]),
-            "verdict": verdict,
+            "isi_peak_agree": metrics["isi_peak_agree"],
+            "badge_isi":      b_isi,
+            "badge_depth":    b_depth,
+            "badge_wave":     b_wave,
+            "badge_fr":       b_fr,
+            "badge_isi_peak": b_peak,
+            "verdict": verdict_csv,
+            "verdict_pdf": verdict_pdf,
+            "pdf_csv_disagree": verdict_csv != verdict_pdf,
         })
-        print(f"  uid {uid}: {verdict}", flush=True)
+        print(f"  uid {uid}: csv={verdict_csv} pdf={verdict_pdf}", flush=True)
 
     pd.DataFrame(rows).to_csv(VERDICTS_CSV, index=False)
     print(f"Wrote {VERDICTS_CSV}", flush=True)

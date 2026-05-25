@@ -35,6 +35,14 @@ WAVE_WARN_R: float = 0.90
 FR_CV_PASS: float = 0.35
 FR_CV_WARN: float = 0.60
 
+# ISI peak-agreement (cross-session bimodality detector).
+# Fraction of sessions whose ISI peak bin is within +/- 2 of the modal peak bin.
+# Low agreement -> per-session ISI peaks land in different places -> likely
+# UnitMatch matched two biologically distinct units with similar templates.
+ISI_PEAK_AGREE_PASS: float = 0.85
+ISI_PEAK_AGREE_WARN: float = 0.65
+ISI_PEAK_AGREE_TOL_BINS: int = 2
+
 # ─── Change-size pools for Change_ON heatmaps ─────────────────────────
 # Change-size pools for Change_ON heatmaps.
 # Deliberately differs from visdetect.analysis.constants.{BIG,SMALL}_CHANGE_SIZES:
@@ -117,6 +125,40 @@ def fr_cv(rates_hz: np.ndarray) -> float:
     return float(np.std(arr, ddof=0) / mean)
 
 
+def isi_peak_agreement(per_session_isi_hists: Sequence[np.ndarray]) -> float:
+    """Fraction of sessions whose ISI peak bin agrees with the modal peak bin.
+
+    Bimodal cross-session ISI overlays (a fingerprint of UnitMatch matching
+    two distinct neurons with similar waveforms) produce low agreement scores.
+
+    Parameters
+    ----------
+    per_session_isi_hists : sequence of (50,) ndarrays
+        Each is the normalised log-ISI histogram for one session. NaN-only
+        histograms are ignored (sessions with too few spikes for an ISI hist).
+
+    Returns
+    -------
+    float in [0, 1], or NaN if fewer than 2 valid sessions.
+        1.0 = all sessions peak at the same (+/- ISI_PEAK_AGREE_TOL_BINS) bin.
+    """
+    from collections import Counter
+    peaks: List[int] = []
+    for h in per_session_isi_hists:
+        if h is None:
+            continue
+        h_arr = np.asarray(h, dtype=float)
+        if h_arr.size == 0 or np.all(np.isnan(h_arr)):
+            continue
+        peaks.append(int(np.argmax(h_arr)))
+    if len(peaks) < 2:
+        return float("nan")
+    mode_peak = Counter(peaks).most_common(1)[0][0]
+    peaks_arr = np.asarray(peaks)
+    fraction = float(np.mean(np.abs(peaks_arr - mode_peak) <= ISI_PEAK_AGREE_TOL_BINS))
+    return fraction
+
+
 # ─── Badge / verdict logic ────────────────────────────────────────────
 
 def _badge_threshold(value: float, pass_thr: float, warn_thr: float,
@@ -158,6 +200,11 @@ def badge_waveform(mean_pairwise_r: float) -> str:
 
 def badge_fr(cv: float) -> str:
     return _badge_threshold(cv, FR_CV_PASS, FR_CV_WARN, direction="low")
+
+
+def badge_isi_peak(agreement: float) -> str:
+    return _badge_threshold(agreement, ISI_PEAK_AGREE_PASS,
+                            ISI_PEAK_AGREE_WARN, direction="high")
 
 
 def composite_verdict(badges: Sequence[str]) -> str:
