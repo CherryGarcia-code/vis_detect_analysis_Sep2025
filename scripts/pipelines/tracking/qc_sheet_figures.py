@@ -30,7 +30,7 @@ setup_style()
 
 # Per-criterion colors
 BADGE_COLORS = {"pass": "#2d5a2d", "warn": "#5a5a2d", "fail": "#5a2d2d"}
-BADGE_SYMBOLS = {"pass": "✅", "warn": "⚠", "fail": "❌"}
+BADGE_SYMBOLS = {"pass": "[PASS]", "warn": "[WARN]", "fail": "[FAIL]"}
 
 
 def draw_header(ax, uid: UIDIntermediate,
@@ -46,7 +46,7 @@ def draw_header(ax, uid: UIDIntermediate,
     verdict = composite_verdict([b_isi, b_dep, b_wave, b_fr])
 
     ne_flag = " · N→E" if uid.has_naive_to_expert else ""
-    suspect = " · ⚠ KNOWN SUSPECT" if uid.suspect_known else ""
+    suspect = " · KNOWN SUSPECT" if uid.suspect_known else ""
     title = (f"UID {uid.global_uid} · span {uid.span}{ne_flag}{suspect}"
              f"   composite: {verdict.upper()}")
     ax.text(0.0, 0.92, title, fontsize=13, fontweight="bold",
