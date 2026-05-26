@@ -26,8 +26,8 @@ from visdetect.analysis.constants import DEFAULT_BIN_SIZE, DEFAULT_SIGMA_MS
 ISI_PASS: float = 0.75
 ISI_WARN: float = 0.65
 
-DEPTH_PASS_UM: float = 15.0
-DEPTH_WARN_UM: float = 30.0
+DEPTH_PASS_UM: float = 25.0
+DEPTH_WARN_UM: float = 40.0
 
 WAVE_PASS_R: float = 0.95
 WAVE_WARN_R: float = 0.90

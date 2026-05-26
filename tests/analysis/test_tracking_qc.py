@@ -5,8 +5,8 @@ from visdetect.analysis import tracking_qc as qc
 def test_thresholds_present():
     assert qc.ISI_PASS == 0.75
     assert qc.ISI_WARN == 0.65
-    assert qc.DEPTH_PASS_UM == 15.0
-    assert qc.DEPTH_WARN_UM == 30.0
+    assert qc.DEPTH_PASS_UM == 25.0
+    assert qc.DEPTH_WARN_UM == 40.0
     assert qc.WAVE_PASS_R == 0.95
     assert qc.WAVE_WARN_R == 0.90
     assert qc.FR_CV_PASS == 0.35
@@ -78,7 +78,7 @@ def test_badge_isi():
 
 def test_badge_depth():
     assert qc.badge_depth(8.0) == "pass"
-    assert qc.badge_depth(20.0) == "warn"
+    assert qc.badge_depth(32.0) == "warn"
     assert qc.badge_depth(45.0) == "fail"
     assert qc.badge_depth(float("nan")) == "fail"
 
@@ -115,7 +115,7 @@ def test_composite_any_fail_is_suspect():
 def test_badges_at_pass_boundary():
     # value == pass_thr should be "pass" (>= for high, <= for low)
     assert qc.badge_isi(qc.ISI_PASS) == "pass"            # 0.75
-    assert qc.badge_depth(qc.DEPTH_PASS_UM) == "pass"     # 15.0
+    assert qc.badge_depth(qc.DEPTH_PASS_UM) == "pass"     # 25.0
     assert qc.badge_waveform(qc.WAVE_PASS_R) == "pass"    # 0.95
     assert qc.badge_fr(qc.FR_CV_PASS) == "pass"           # 0.35
 
@@ -123,7 +123,7 @@ def test_badges_at_pass_boundary():
 def test_badges_at_warn_boundary():
     # value == warn_thr should be "warn"
     assert qc.badge_isi(qc.ISI_WARN) == "warn"            # 0.65
-    assert qc.badge_depth(qc.DEPTH_WARN_UM) == "warn"     # 30.0
+    assert qc.badge_depth(qc.DEPTH_WARN_UM) == "warn"     # 40.0
     assert qc.badge_waveform(qc.WAVE_WARN_R) == "warn"    # 0.90
     assert qc.badge_fr(qc.FR_CV_WARN) == "warn"           # 0.60
 
