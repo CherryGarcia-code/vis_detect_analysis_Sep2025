@@ -62,17 +62,8 @@ def draw_header(ax, uid: UIDIntermediate,
     suspect = " · KNOWN SUSPECT" if uid.suspect_known else ""
     title = (f"UID {uid.global_uid} · span {uid.span}{ne_flag}{suspect}"
              f"   composite: {verdict.upper()}")
-    ax.text(0.0, 0.92, title, fontsize=13, fontweight="bold",
+    ax.text(0.0, 0.95, title, fontsize=13, fontweight="bold",
             transform=ax.transAxes, va="top")
-
-    # Optional second line: only annotate when something was actually dropped.
-    # When nothing is dropped, the kept-count would just be visual noise.
-    if n_kept is not None and trimmed_verdict is not None and dropped_set:
-        n_total = len(uid.sessions)
-        ax.text(0.0, 0.76,
-                f"Trimmed: kept {n_kept}/{n_total} sessions "
-                f"(verdict on trimmed: {trimmed_verdict})",
-                fontsize=10, transform=ax.transAxes, va="top", color="0.25")
 
     # Badge row
     badges = [
@@ -84,19 +75,19 @@ def draw_header(ax, uid: UIDIntermediate,
     x = 0.0
     for label, level in badges:
         text = f"{BADGE_SYMBOLS[level]} {label}"
-        ax.text(x, 0.55, text, fontsize=10,
+        ax.text(x, 0.65, text, fontsize=10,
                 transform=ax.transAxes, va="center",
                 bbox=dict(facecolor=BADGE_COLORS[level], edgecolor="none",
                           pad=4, alpha=0.85),
                 color="white")
         x += 0.20
 
-    # Stage stripe at the bottom: one cell per session in chronological order.
+    # Stage stripe: one cell per session in chronological order.
     # Dropped sessions get a diagonal hatch overlay so the user can SEE which
     # sessions were excluded by find_stable_subset without opening the CSV.
     if uid.sessions:
         n = len(uid.sessions)
-        bar_y = 0.05
+        bar_y = 0.30
         bar_h = 0.18
         for i, rec in enumerate(uid.sessions):
             color = STAGE_COLORS.get(rec.stage, "#888888")
@@ -108,6 +99,17 @@ def draw_header(ax, uid: UIDIntermediate,
                                         transform=ax.transAxes,
                                         facecolor="none", edgecolor="black",
                                         hatch="///", linewidth=0.5))
+
+    # Optional trim annotation at the BOTTOM of the header axes, below the
+    # stage stripe.  Only shown when something was actually dropped; an
+    # all-kept run would just be visual noise.
+    if n_kept is not None and trimmed_verdict is not None and dropped_set:
+        n_total = len(uid.sessions)
+        ax.text(0.0, 0.10,
+                f"Trimmed: kept {n_kept}/{n_total} sessions "
+                f"(verdict on trimmed: {trimmed_verdict})",
+                fontsize=9, transform=ax.transAxes,
+                ha="left", va="bottom", color="0.4")
 
     return verdict
 
@@ -154,7 +156,7 @@ def render_page1(uid: UIDIntermediate, um_pair_scores: Optional[np.ndarray],
 
     gs = gridspec.GridSpec(
         nrows=5, ncols=1,
-        height_ratios=[0.9, 1.8, 1.4, 1.4, 1.6],
+        height_ratios=[1.25, 1.75, 1.35, 1.35, 1.55],
         hspace=0.65, top=0.96, bottom=0.05, left=0.08, right=0.96,
     )
 
@@ -387,7 +389,7 @@ def render_page2(uid: UIDIntermediate, isi_score: float, depth_std: float,
     fig = plt.figure(figsize=(8.5, 11.0))
     gs = gridspec.GridSpec(
         nrows=5, ncols=2,
-        height_ratios=[1.1, 1.8, 1.8, 1.8, 1.8],
+        height_ratios=[1.25, 1.75, 1.75, 1.75, 1.75],
         width_ratios=[1, 1],
         hspace=0.70, wspace=0.30,
         top=0.96, bottom=0.05, left=0.09, right=0.96,
