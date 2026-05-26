@@ -185,21 +185,65 @@ def main() -> int:
         uids_to_render = uids_to_render[: args.max_uids]
     print(f"Rendering {len(uids_to_render)} UIDs ...", flush=True)
 
+    # Precompute the per-UID stable subset (used by both the PDF renderer and
+    # the trimmed-CSV loop).  Built once here so we don't recompute inside the
+    # trimmed loop or duplicate metric work; both downstream consumers read
+    # from `uid_trim_info`.
+    uid_trim_info: Dict[int, Dict[str, object]] = {}
+    for uid in uids_to_render:
+        iv = intermediates[uid]
+        if not iv.sessions:
+            continue
+        stable = find_stable_subset(iv)
+        kept = stable["kept_indices"]
+        dropped = stable["dropped_indices"]
+        if kept:
+            kept_sessions = [iv.sessions[i] for i in kept]
+            trimmed_iv = UIDIntermediate(
+                global_uid=iv.global_uid, span=len(kept_sessions),
+                has_naive_to_expert=iv.has_naive_to_expert,
+                suspect_known=iv.suspect_known, sessions=kept_sessions,
+            )
+            tm = compute_uid_metrics(trimmed_iv)
+            tv = composite_verdict([
+                badge_isi(isi_scores[uid]),
+                badge_depth(tm["depth_std_um"]),
+                badge_waveform(tm["wave_corr"]),
+                badge_fr(tm["fr_cv"]),
+                badge_isi_peak(tm["isi_peak_agree"]),
+            ])
+        else:
+            tm = None
+            tv = "suspect"
+        uid_trim_info[uid] = {
+            "stable": stable,
+            "kept_indices": kept,
+            "dropped_indices": dropped,
+            "trimmed_metrics": tm,
+            "trimmed_verdict": tv,
+        }
+
     for uid in uids_to_render:
         iv = intermediates[uid]
         if not iv.sessions:
             print(f"  uid {uid}: no sessions extracted, skipping"); continue
         metrics = compute_uid_metrics(iv)
         isi = isi_scores[uid]
+        trim = uid_trim_info[uid]
         out_path = OUT_DIR / f"uid_{uid:04d}.pdf"
         # PDF stays at 4-badge layout (visual unchanged); write_uid_pdf returns
-        # the 4-badge composite verdict it renders in the header.
+        # the 4-badge composite verdict it renders in the header.  Trim info
+        # (dropped sessions, kept-count, trimmed verdict) is forwarded so the
+        # renderer can visually mark dropped sessions throughout the PDF.
         verdict_pdf = write_uid_pdf(
             out_path, iv, pair_scores.get(uid),
             isi_score=isi,
             depth_std=metrics["depth_std_um"],
             wave_corr=metrics["wave_corr"],
             fr_cv_val=metrics["fr_cv"],
+            dropped_indices=list(trim["dropped_indices"]),
+            n_kept=len(trim["kept_indices"]),
+            trimmed_verdict=str(trim["trimmed_verdict"]),
         )
         # CSV verdict incorporates the 5th badge (ISI peak-agreement) so the
         # cross-session bimodality detector is auditable. Intentionally may
@@ -235,39 +279,29 @@ def main() -> int:
     pd.DataFrame(rows).to_csv(VERDICTS_CSV, index=False)
     print(f"Wrote {VERDICTS_CSV}", flush=True)
 
-    # Per-UID stable-subset (Tier-2 rescue) analysis
+    # Per-UID stable-subset (Tier-2 rescue) analysis — reuses the precomputed
+    # trim info to avoid recomputing find_stable_subset or trimmed metrics.
     trimmed_rows = []
     for uid in uids_to_render:
         iv = intermediates[uid]
         if not iv.sessions:
             continue
-        stable = find_stable_subset(iv)
-        kept = stable["kept_indices"]
+        trim = uid_trim_info[uid]
+        kept = trim["kept_indices"]
+        dropped = trim["dropped_indices"]
+        tm = trim["trimmed_metrics"]
+        tv = trim["trimmed_verdict"]
         if not kept:
             trimmed_rows.append({
                 "global_uid": uid, "original_span": iv.span,
-                "trimmed_span": 0, "dropped_sessions": ";".join(r.session_name for r in iv.sessions),
+                "trimmed_span": 0,
+                "dropped_sessions": ";".join(r.session_name for r in iv.sessions),
                 "kept_sessions": "", "trimmed_verdict": "suspect",
                 "rescued": False,
             })
             continue
         kept_sessions = [iv.sessions[i] for i in kept]
-        dropped_sessions = [iv.sessions[i] for i in stable["dropped_indices"]]
-        # Recompute metrics on the trimmed subset
-        trimmed_iv = UIDIntermediate(
-            global_uid=iv.global_uid, span=len(kept_sessions),
-            has_naive_to_expert=iv.has_naive_to_expert,
-            suspect_known=iv.suspect_known, sessions=kept_sessions,
-        )
-        tm = compute_uid_metrics(trimmed_iv)
-        # ISI median is a per-pair stat we don't recompute here; use the original.
-        tv = composite_verdict([
-            badge_isi(isi_scores[uid]),
-            badge_depth(tm["depth_std_um"]),
-            badge_waveform(tm["wave_corr"]),
-            badge_fr(tm["fr_cv"]),
-            badge_isi_peak(tm["isi_peak_agree"]),
-        ])
+        dropped_sessions = [iv.sessions[i] for i in dropped]
         # Look up the original CSV verdict for comparison
         original_verdict = next((r["verdict"] for r in rows if r["global_uid"] == uid), "")
         rescued = (original_verdict == "suspect" and tv in ("trusted", "review")
