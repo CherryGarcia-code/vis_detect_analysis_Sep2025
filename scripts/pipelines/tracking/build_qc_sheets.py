@@ -33,6 +33,7 @@ from visdetect.analysis.tracking_qc import (        # noqa: E402
     badge_isi, badge_depth, badge_waveform, badge_fr, badge_isi_peak,
     composite_verdict,
     save_cache, load_cache,
+    find_stable_subset,
 )
 from visdetect.core.session import load_session                 # noqa: E402
 from visdetect.suite.loader import load_staging_manifest        # noqa: E402
@@ -233,6 +234,63 @@ def main() -> int:
 
     pd.DataFrame(rows).to_csv(VERDICTS_CSV, index=False)
     print(f"Wrote {VERDICTS_CSV}", flush=True)
+
+    # Per-UID stable-subset (Tier-2 rescue) analysis
+    trimmed_rows = []
+    for uid in uids_to_render:
+        iv = intermediates[uid]
+        if not iv.sessions:
+            continue
+        stable = find_stable_subset(iv)
+        kept = stable["kept_indices"]
+        if not kept:
+            trimmed_rows.append({
+                "global_uid": uid, "original_span": iv.span,
+                "trimmed_span": 0, "dropped_sessions": ";".join(r.session_name for r in iv.sessions),
+                "kept_sessions": "", "trimmed_verdict": "suspect",
+                "rescued": False,
+            })
+            continue
+        kept_sessions = [iv.sessions[i] for i in kept]
+        dropped_sessions = [iv.sessions[i] for i in stable["dropped_indices"]]
+        # Recompute metrics on the trimmed subset
+        trimmed_iv = UIDIntermediate(
+            global_uid=iv.global_uid, span=len(kept_sessions),
+            has_naive_to_expert=iv.has_naive_to_expert,
+            suspect_known=iv.suspect_known, sessions=kept_sessions,
+        )
+        tm = compute_uid_metrics(trimmed_iv)
+        # ISI median is a per-pair stat we don't recompute here; use the original.
+        tv = composite_verdict([
+            badge_isi(isi_scores[uid]),
+            badge_depth(tm["depth_std_um"]),
+            badge_waveform(tm["wave_corr"]),
+            badge_fr(tm["fr_cv"]),
+            badge_isi_peak(tm["isi_peak_agree"]),
+        ])
+        # Look up the original CSV verdict for comparison
+        original_verdict = next((r["verdict"] for r in rows if r["global_uid"] == uid), "")
+        rescued = (original_verdict == "suspect" and tv in ("trusted", "review")
+                   and len(kept) >= 5)
+        trimmed_rows.append({
+            "global_uid": uid,
+            "original_span": iv.span,
+            "trimmed_span": len(kept),
+            "n_dropped": len(dropped_sessions),
+            "dropped_sessions": ";".join(r.session_name for r in dropped_sessions),
+            "kept_sessions": ";".join(r.session_name for r in kept_sessions),
+            "trimmed_depth_std_um": tm["depth_std_um"],
+            "trimmed_wave_corr":    tm["wave_corr"],
+            "trimmed_fr_cv":        tm["fr_cv"],
+            "trimmed_isi_peak_agree": tm["isi_peak_agree"],
+            "original_verdict": original_verdict,
+            "trimmed_verdict": tv,
+            "rescued": rescued,
+        })
+
+    trimmed_csv = REPO_ROOT / "FIGURES" / "tracking_qc" / "verdicts_trimmed.csv"
+    pd.DataFrame(trimmed_rows).to_csv(trimmed_csv, index=False)
+    print(f"Wrote {trimmed_csv}  ({sum(1 for r in trimmed_rows if r['rescued'])} rescued)", flush=True)
     return 0
 
 

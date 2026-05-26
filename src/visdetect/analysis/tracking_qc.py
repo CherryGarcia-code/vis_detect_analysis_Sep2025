@@ -630,3 +630,155 @@ def load_um_pair_scores(um_output_root, uid_to_sessions: Dict[int, List[str]],
             scores.append(float(mat[a, b]))
         out[uid] = np.array(scores, dtype=float)
     return out
+
+
+# ----- Per-session outlier detection & longest contiguous good-run -----
+
+# Session-outlier thresholds (used by find_stable_subset).
+SESSION_ISI_PEAK_TOL_BINS: int = 2
+SESSION_FR_MAD_THRESH: float = 3.0
+SESSION_WAVE_CORR_THRESH: float = 0.70
+SESSION_DEPTH_DEVIATION_UM: float = 30.0
+
+
+def _mad(x: np.ndarray) -> float:
+    """Median absolute deviation, scaled to std for normal data."""
+    arr = np.asarray(x, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < 2:
+        return float("nan")
+    med = float(np.median(arr))
+    return float(1.4826 * np.median(np.abs(arr - med)))
+
+
+def session_outlier_flags(uid: "UIDIntermediate") -> Dict[str, List[bool]]:
+    """For each session in this UID, flag whether it's an outlier on each criterion.
+
+    A session is "bad" if it's an outlier on >=2 criteria, OR if its ISI peak
+    bin diverges by >SESSION_ISI_PEAK_TOL_BINS from the modal peak across
+    sessions (the strongest single signal of matching failure).
+
+    Returns
+    -------
+    dict with keys 'isi_peak', 'fr', 'wave', 'depth', 'is_outlier' — each a
+    list of bools aligned with uid.sessions.
+    """
+    n = len(uid.sessions)
+    out = {
+        "isi_peak": [False] * n,
+        "fr":       [False] * n,
+        "wave":     [False] * n,
+        "depth":    [False] * n,
+        "is_outlier": [False] * n,
+    }
+    if n == 0:
+        return out
+
+    # ISI peak deviation
+    peaks: List[Optional[int]] = []
+    for r in uid.sessions:
+        h = np.asarray(r.isi_hist, dtype=float)
+        if h.size == 0 or np.all(np.isnan(h)):
+            peaks.append(None)
+        else:
+            peaks.append(int(np.argmax(h)))
+    valid_peaks = [p for p in peaks if p is not None]
+    if len(valid_peaks) >= 2:
+        from collections import Counter
+        mode_peak = Counter(valid_peaks).most_common(1)[0][0]
+        for i, p in enumerate(peaks):
+            if p is not None and abs(p - mode_peak) > SESSION_ISI_PEAK_TOL_BINS:
+                out["isi_peak"][i] = True
+
+    # FR MAD-based outlier
+    rates = np.array([r.baseline_fr_hz for r in uid.sessions], dtype=float)
+    finite = np.isfinite(rates)
+    if finite.sum() >= 3:
+        med = float(np.median(rates[finite]))
+        mad = _mad(rates)
+        if np.isfinite(mad) and mad > 1e-6:
+            for i, rate in enumerate(rates):
+                if np.isfinite(rate) and abs(rate - med) / mad > SESSION_FR_MAD_THRESH:
+                    out["fr"][i] = True
+
+    # Waveform correlation to median waveform (per session)
+    waves = [r.waveform_peak for r in uid.sessions if r.waveform_peak is not None]
+    if len(waves) >= 2:
+        min_len = min(w.size for w in waves)
+        stack = np.stack([w[:min_len] for w in waves]).astype(float)
+        median_wave = np.median(stack, axis=0)
+        mw_centered = median_wave - median_wave.mean()
+        mw_norm = np.linalg.norm(mw_centered)
+        if mw_norm > 1e-9:
+            mw_unit = mw_centered / mw_norm
+            for i, r in enumerate(uid.sessions):
+                if r.waveform_peak is None:
+                    continue
+                w = np.asarray(r.waveform_peak, dtype=float)[:min_len]
+                w_centered = w - w.mean()
+                w_norm = np.linalg.norm(w_centered)
+                if w_norm < 1e-9:
+                    continue
+                corr = float(np.dot(mw_centered, w_centered) / (mw_norm * w_norm))
+                if corr < SESSION_WAVE_CORR_THRESH:
+                    out["wave"][i] = True
+
+    # Depth deviation
+    depths = np.array([r.peak_depth_um for r in uid.sessions], dtype=float)
+    finite_d = np.isfinite(depths)
+    if finite_d.sum() >= 2:
+        med_d = float(np.median(depths[finite_d]))
+        for i, d in enumerate(depths):
+            if np.isfinite(d) and abs(d - med_d) > SESSION_DEPTH_DEVIATION_UM:
+                out["depth"][i] = True
+
+    # Composite outlier rule
+    for i in range(n):
+        strikes = sum([out["isi_peak"][i], out["fr"][i], out["wave"][i], out["depth"][i]])
+        # ISI peak divergence alone is sufficient (strongest single signal);
+        # otherwise need >=2 criteria.
+        out["is_outlier"][i] = out["isi_peak"][i] or strikes >= 2
+
+    return out
+
+
+def longest_good_run(is_outlier: Sequence[bool]) -> Tuple[int, int]:
+    """Return (start_idx, end_idx_exclusive) of the longest contiguous run of
+    non-outlier sessions. (0, 0) if no good sessions."""
+    best_start, best_end = 0, 0
+    cur_start = None
+    arr = list(is_outlier) + [True]  # sentinel
+    for i, bad in enumerate(arr):
+        if not bad:
+            if cur_start is None:
+                cur_start = i
+        else:
+            if cur_start is not None:
+                length = i - cur_start
+                if length > (best_end - best_start):
+                    best_start, best_end = cur_start, i
+                cur_start = None
+    return best_start, best_end
+
+
+def find_stable_subset(uid: "UIDIntermediate") -> Dict[str, object]:
+    """Identify the longest contiguous good-session subset for this UID.
+
+    Returns
+    -------
+    dict with keys:
+        outlier_flags : Dict[str, List[bool]]  (from session_outlier_flags)
+        kept_indices  : List[int]              (indices into uid.sessions)
+        dropped_indices : List[int]
+        trimmed_span  : int
+    """
+    flags = session_outlier_flags(uid)
+    start, end = longest_good_run(flags["is_outlier"])
+    kept = list(range(start, end))
+    dropped = [i for i in range(len(uid.sessions)) if i not in set(kept)]
+    return {
+        "outlier_flags": flags,
+        "kept_indices": kept,
+        "dropped_indices": dropped,
+        "trimmed_span": len(kept),
+    }

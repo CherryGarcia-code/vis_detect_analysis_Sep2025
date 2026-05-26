@@ -274,3 +274,75 @@ def test_composite_still_works_with_5_badges():
     assert qc.composite_verdict(["pass","pass","pass","warn","warn"]) == "suspect"
     # any fail → suspect
     assert qc.composite_verdict(["pass","pass","pass","pass","fail"]) == "suspect"
+
+
+def _make_synthetic_uid(specs):
+    """Build a UIDIntermediate from a list of (peak_bin, fr, wave_scale, depth) tuples."""
+    recs = []
+    for i, (peak_bin, fr, wave_scale, depth) in enumerate(specs):
+        h = np.zeros(50, dtype=np.float32); h[int(peak_bin)] = 1.0
+        wave = (np.array([0.0, 1.0, 0.0, -1.0, 0.0] * 16 + [0.0, 1.0])
+                * wave_scale).astype(np.float32)
+        rec = qc.SessionRecord(
+            session_name=f"s{i:02d}", ks_unit_id=0, stage="Learning",
+            peak_chan=0, peak_depth_um=float(depth), amplitude=1.0,
+            baseline_fr_hz=float(fr),
+            waveform_peak=wave,
+            footprint=np.zeros((82, 17), dtype=np.float32),
+            footprint_channels=np.arange(17),
+            isi_hist=h, isi_centers=np.zeros(50, dtype=np.float32),
+        )
+        recs.append(rec)
+    return qc.UIDIntermediate(
+        global_uid=1, span=len(specs), has_naive_to_expert=False,
+        suspect_known=False, sessions=recs,
+    )
+
+
+def test_session_outlier_flags_clean_uid():
+    # 5 nearly-identical sessions
+    specs = [(15, 5.0, 1.0, 1000.0)] * 5
+    uid = _make_synthetic_uid(specs)
+    f = qc.session_outlier_flags(uid)
+    assert not any(f["is_outlier"])
+
+
+def test_session_outlier_flags_one_bimodal_session():
+    # 4 good sessions + 1 with very different ISI peak bin
+    specs = [(15, 5.0, 1.0, 1000.0)] * 4 + [(35, 5.0, 1.0, 1000.0)]
+    uid = _make_synthetic_uid(specs)
+    f = qc.session_outlier_flags(uid)
+    assert f["is_outlier"] == [False, False, False, False, True]
+
+
+def test_longest_good_run_basic():
+    # 0..2 good, 3 bad, 4..7 good (length 4) → best (4,8)
+    flags = [False, False, False, True, False, False, False, False]
+    assert qc.longest_good_run(flags) == (4, 8)
+
+
+def test_longest_good_run_all_bad_returns_zero():
+    assert qc.longest_good_run([True, True, True]) == (0, 0)
+
+
+def test_longest_good_run_all_good_returns_full():
+    assert qc.longest_good_run([False, False, False, False]) == (0, 4)
+
+
+def test_find_stable_subset_trims_outlier_at_end():
+    specs = [(15, 5.0, 1.0, 1000.0)] * 4 + [(35, 5.0, 1.0, 1000.0)]
+    uid = _make_synthetic_uid(specs)
+    out = qc.find_stable_subset(uid)
+    assert out["kept_indices"] == [0, 1, 2, 3]
+    assert out["dropped_indices"] == [4]
+    assert out["trimmed_span"] == 4
+
+
+def test_find_stable_subset_picks_longer_run():
+    # bad/good/good/bad/good/good/good → kept = [4,5,6] (length 3)
+    specs = ([(35, 5.0, 1.0, 1000.0)] + [(15, 5.0, 1.0, 1000.0)] * 2 +
+             [(35, 5.0, 1.0, 1000.0)] + [(15, 5.0, 1.0, 1000.0)] * 3)
+    uid = _make_synthetic_uid(specs)
+    out = qc.find_stable_subset(uid)
+    assert out["kept_indices"] == [4, 5, 6]
+    assert out["trimmed_span"] == 3
