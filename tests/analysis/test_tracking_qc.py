@@ -346,3 +346,62 @@ def test_find_stable_subset_picks_longer_run():
     out = qc.find_stable_subset(uid)
     assert out["kept_indices"] == [4, 5, 6]
     assert out["trimmed_span"] == 3
+
+
+# ─── Functional-response stability (6th badge) ────────────────────────
+
+def test_baseline_psth_corr_identical_returns_one():
+    psth = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
+    psths = [psth.copy() for _ in range(5)]
+    assert qc.baseline_psth_corr(psths) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_baseline_psth_corr_handles_magnitude_scaling():
+    # Same shape, different magnitudes — Pearson r should still be 1
+    base = np.array([1.0, 3.0, 5.0, 3.0, 1.0])
+    psths = [base, base * 2.0, base * 0.5]
+    assert qc.baseline_psth_corr(psths) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_baseline_psth_corr_flipped_polarity():
+    base = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
+    psths = [base, -base, base]
+    # pairs: (a,-a)=-1, (a,a)=+1, (-a,a)=-1 → median = -1
+    assert qc.baseline_psth_corr(psths) == pytest.approx(-1.0, abs=1e-6)
+
+
+def test_baseline_psth_corr_drops_none_sessions():
+    base = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
+    psths = [base, None, base, None, base]
+    # 3 valid sessions, all identical → r = 1
+    assert qc.baseline_psth_corr(psths) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_baseline_psth_corr_too_few_returns_nan():
+    base = np.array([1.0, 2.0, 3.0])
+    assert np.isnan(qc.baseline_psth_corr([base]))
+    assert np.isnan(qc.baseline_psth_corr([base, None]))
+
+
+def test_baseline_psth_corr_zero_variance_drops_session():
+    # Session with zero-variance PSTH (flat all-zeros) cannot be correlated → drop it
+    flat = np.zeros(5)
+    base = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
+    # 2 valid (after dropping flat), both identical → r = 1
+    assert qc.baseline_psth_corr([base, flat, base]) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_badge_func_resp_thresholds():
+    assert qc.badge_func_resp(0.85) == "pass"
+    assert qc.badge_func_resp(qc.FUNC_RESP_PASS) == "pass"
+    assert qc.badge_func_resp(0.60) == "warn"
+    assert qc.badge_func_resp(qc.FUNC_RESP_WARN) == "warn"
+    assert qc.badge_func_resp(0.30) == "fail"
+    assert qc.badge_func_resp(float("nan")) == "fail"
+
+
+def test_composite_with_6_badges():
+    assert qc.composite_verdict(["pass"] * 6) == "trusted"
+    assert qc.composite_verdict(["pass"]*5 + ["warn"]) == "review"
+    assert qc.composite_verdict(["pass"]*4 + ["warn"]*2) == "suspect"
+    assert qc.composite_verdict(["pass"]*5 + ["fail"]) == "suspect"

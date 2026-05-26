@@ -43,6 +43,14 @@ ISI_PEAK_AGREE_PASS: float = 0.85
 ISI_PEAK_AGREE_WARN: float = 0.65
 ISI_PEAK_AGREE_TOL_BINS: int = 2
 
+# Functional response stability (cross-session Baseline_ON PSTH shape correlation).
+# Median pairwise Pearson r across all session pairs. Uses only the stimulus-
+# locked baseline response — robust to learning-driven magnitude changes (Pearson r
+# normalizes by std) but sensitive to genuinely different stimulus tuning (which
+# would indicate UM matched two distinct neurons with similar waveforms).
+FUNC_RESP_PASS: float = 0.70
+FUNC_RESP_WARN: float = 0.50
+
 # ─── Change-size pools for Change_ON heatmaps ─────────────────────────
 # Change-size pools for Change_ON heatmaps.
 # Deliberately differs from visdetect.analysis.constants.{BIG,SMALL}_CHANGE_SIZES:
@@ -159,6 +167,50 @@ def isi_peak_agreement(per_session_isi_hists: Sequence[np.ndarray]) -> float:
     return fraction
 
 
+def baseline_psth_corr(per_session_psths: Sequence[Optional[np.ndarray]]) -> float:
+    """Median pairwise Pearson r of per-session Baseline_ON PSTHs.
+
+    Pearson r is invariant to per-session magnitude scaling, so this catches
+    SHAPE changes (e.g., a different neuron with different stimulus tuning)
+    rather than magnitude changes (e.g., learning-driven gain changes for the
+    same neuron).
+
+    Parameters
+    ----------
+    per_session_psths : sequence of (n_bins,) ndarrays, or None
+        One PSTH per session. None entries (sessions with no trials for this
+        condition) are dropped.
+
+    Returns
+    -------
+    float
+        Median over all (n*(n-1)/2) cross-session pairwise correlations. NaN
+        if fewer than 2 valid sessions, or if all valid PSTHs are flat.
+    """
+    arrs: List[np.ndarray] = []
+    for p in per_session_psths:
+        if p is None:
+            continue
+        a = np.asarray(p, dtype=float)
+        if a.size == 0 or np.all(np.isnan(a)) or float(np.std(a)) < 1e-12:
+            continue
+        arrs.append(a)
+    if len(arrs) < 2:
+        return float("nan")
+    # Pad / truncate to common length (PSTHs should already share length, but
+    # be defensive in case of off-by-one in edge cases).
+    min_len = min(a.size for a in arrs)
+    stack = np.stack([a[:min_len] for a in arrs])
+    # Pearson r via mean-subtract + L2-normalize
+    centered = stack - stack.mean(axis=1, keepdims=True)
+    norms = np.linalg.norm(centered, axis=1, keepdims=True)
+    norms[norms < 1e-12] = 1.0
+    unit = centered / norms
+    n = unit.shape[0]
+    pairs = [float(np.dot(unit[i], unit[j])) for i in range(n) for j in range(i + 1, n)]
+    return float(np.median(pairs))
+
+
 # ─── Badge / verdict logic ────────────────────────────────────────────
 
 def _badge_threshold(value: float, pass_thr: float, warn_thr: float,
@@ -205,6 +257,10 @@ def badge_fr(cv: float) -> str:
 def badge_isi_peak(agreement: float) -> str:
     return _badge_threshold(agreement, ISI_PEAK_AGREE_PASS,
                             ISI_PEAK_AGREE_WARN, direction="high")
+
+
+def badge_func_resp(median_r: float) -> str:
+    return _badge_threshold(median_r, FUNC_RESP_PASS, FUNC_RESP_WARN, direction="high")
 
 
 def composite_verdict(badges: Sequence[str]) -> str:
