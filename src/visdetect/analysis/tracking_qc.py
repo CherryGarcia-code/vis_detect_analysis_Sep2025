@@ -223,6 +223,204 @@ def baseline_psth_corr(per_session_psths: Sequence[Optional[np.ndarray]]) -> flo
     return float(np.median(pairs))
 
 
+# ─── Cross-session probe drift correction ─────────────────────────────
+# Anchored on UM consecutive-pair matches with prob > DRIFT_ANCHOR_PROB.
+# The probe physically drifts a small amount between chronic sessions; for some
+# tracked units, what looks like "depth instability across sessions" is actually
+# the probe moving, not the unit moving. We estimate per-session Z-offset from
+# high-confidence (prob>0.95) consecutive-pair matches, then subtract it from
+# each session's peak depth to get a drift-corrected depth.
+DRIFT_ANCHOR_PROB: float = 0.95
+DRIFT_MIN_ANCHORS: int = 5
+
+
+def estimate_session_drift(unit_index_df: pd.DataFrame,
+                           prob_matrix: np.ndarray,
+                           raw_wf_root,
+                           sessions_chronological: List[str],
+                           anchor_prob: float = DRIFT_ANCHOR_PROB,
+                           min_anchors: int = DRIFT_MIN_ANCHORS,
+                           ) -> Dict[str, float]:
+    """Estimate per-session Z-offset relative to the first session.
+
+    For each consecutive session pair (i -> i+1), the drift is the median
+    Z-difference of high-confidence UM matches (prob > anchor_prob). Drifts
+    are cumulative: session i's offset is the sum of all i'-> i'+1 drifts
+    for i' < i, anchored at session 0 -> 0.
+
+    Parameters
+    ----------
+    unit_index_df : pd.DataFrame
+        UM unit_index.csv loaded; columns include 'session', 'ks_unit_id'.
+        Row order must align with `prob_matrix`.
+    prob_matrix : ndarray, shape (n_um_units, n_um_units)
+        UM output_prob_matrix.npy; index aligned with unit_index_df row order.
+    raw_wf_root : Path
+        Root of unit_match input data (e.g. data/unit_match/input/BG_046).
+        Used to load channel_positions per session.
+    sessions_chronological : list of str
+        Session names in chronological order. The first is the anchor (offset=0).
+    anchor_prob : float
+        Min match prob to count a pair as an anchor.
+    min_anchors : int
+        If a session pair has fewer than this many anchor matches, drift for
+        that pair is NaN and the cumulative chain breaks (remaining sessions
+        get NaN).
+
+    Returns
+    -------
+    dict[session_name -> Z-offset in microns relative to first session]
+        Offset NaN for sessions where the cumulative chain breaks.
+    """
+    # Normalize session-name format: UM unit_index sometimes stores 7-char names
+    # (e.g. '1072025' for July 1) while the staging manifest pads to 8 ('01072025').
+    # All comparisons happen in zfill(8) space; lookups back to the raw UM rows
+    # use a per-session original-string remember.
+    def _norm(s: str) -> str:
+        return str(s).zfill(8)
+
+    idx = unit_index_df.copy().reset_index(drop=True)
+    idx["session_raw"] = idx["session"].astype(str)
+    idx["session"] = idx["session_raw"].map(_norm)
+
+    sessions_norm = [_norm(s) for s in sessions_chronological]
+    # Map normalized name -> the raw UM/file-system name (some UM rows store
+    # '1072025'; load_channel_positions / load_raw_mean_waveform tolerate both,
+    # but we keep the raw form for clarity in cache keys).
+    raw_by_norm: Dict[str, str] = {}
+    for raw, norm in zip(idx["session_raw"].values, idx["session"].values):
+        raw_by_norm.setdefault(str(norm), str(raw))
+    # Sessions in `sessions_chronological` that don't appear in UM at all
+    # get a fallback raw form equal to their input string.
+    for raw, norm in zip(sessions_chronological, sessions_norm):
+        raw_by_norm.setdefault(str(norm), str(raw))
+
+    # Pre-load channel_positions per session (cheap; one .npy per session).
+    chan_pos_by_session: Dict[str, Optional[np.ndarray]] = {}
+    for snorm in sessions_norm:
+        chan_pos_by_session[snorm] = load_channel_positions(
+            raw_wf_root, raw_by_norm[snorm]
+        )
+
+    # Per-(session, ks_id) peak-channel cache. Sentinel -1 = file missing.
+    peak_chan_cache: Dict[Tuple[str, int], int] = {}
+
+    def _peak_z(session_norm: str, ks_id: int) -> Optional[float]:
+        key = (session_norm, int(ks_id))
+        if key not in peak_chan_cache:
+            mw = load_raw_mean_waveform(
+                raw_wf_root, raw_by_norm[session_norm], int(ks_id)
+            )
+            if mw is None:
+                peak_chan_cache[key] = -1
+            else:
+                peak_chan_cache[key] = extract_peak_channel(mw)
+        pc = peak_chan_cache[key]
+        if pc < 0:
+            return None
+        chan_pos = chan_pos_by_session.get(session_norm)
+        if chan_pos is None or pc >= chan_pos.shape[0]:
+            return None
+        return float(chan_pos[pc, 1])
+
+    # Pre-index UM rows by session (normalized) for fast sub-matrix slicing.
+    rows_by_session: Dict[str, np.ndarray] = {
+        s: np.where(idx["session"].values == s)[0]
+        for s in sessions_norm
+    }
+    ks_by_session: Dict[str, np.ndarray] = {
+        s: idx["ks_unit_id"].values[rows_by_session[s]]
+        for s in sessions_norm
+    }
+
+    # Output keyed by ORIGINAL input strings so the caller can look up offsets
+    # by whatever session-name form they used (which is what's also stored in
+    # SessionRecord.session_name).
+    sess_to_offset: Dict[str, float] = {sessions_chronological[0]: 0.0}
+    # Also publish the normalized form for robust downstream lookups.
+    sess_to_offset[sessions_norm[0]] = 0.0
+    running_offset = 0.0
+    n_sess = len(sessions_chronological)
+    # Chain policy: if a pair has too few anchors, we mark THAT session's offset
+    # as NaN (so depth_std_um_corrected drops it) but continue the chain at the
+    # previous running_offset for downstream sessions. This loses correction
+    # for the gap session itself but preserves coverage for everything that
+    # follows — a defensible trade for chronic recordings where ~all gap sessions
+    # are isolated bad days rather than systematic chain failures.
+    for i in range(n_sess - 1):
+        s_a_orig = sessions_chronological[i]
+        s_b_orig = sessions_chronological[i + 1]
+        s_a = sessions_norm[i]
+        s_b = sessions_norm[i + 1]
+        rows_a = rows_by_session.get(s_a, np.array([], dtype=int))
+        rows_b = rows_by_session.get(s_b, np.array([], dtype=int))
+        if rows_a.size == 0 or rows_b.size == 0:
+            sess_to_offset[s_b_orig] = float("nan")
+            sess_to_offset[s_b] = float("nan")
+            print(f"  drift {s_a}->{s_b}: session missing from UM index", flush=True)
+            continue
+
+        # Vectorized: pull the (rows_a x rows_b) sub-block of the prob matrix
+        # in one call, then locate cells exceeding anchor_prob.
+        sub = prob_matrix[np.ix_(rows_a, rows_b)]
+        hit_a, hit_b = np.where(sub > anchor_prob)
+        if hit_a.size == 0:
+            sess_to_offset[s_b_orig] = float("nan")
+            sess_to_offset[s_b] = float("nan")
+            print(f"  drift {s_a}->{s_b}: 0 anchors (this session uncorrectable)",
+                  flush=True)
+            continue
+
+        ks_a_arr = ks_by_session[s_a]
+        ks_b_arr = ks_by_session[s_b]
+        deltas: List[float] = []
+        for ka_idx, kb_idx in zip(hit_a, hit_b):
+            z_a = _peak_z(s_a, int(ks_a_arr[ka_idx]))
+            z_b = _peak_z(s_b, int(ks_b_arr[kb_idx]))
+            if z_a is None or z_b is None:
+                continue
+            deltas.append(z_b - z_a)
+        if len(deltas) >= min_anchors:
+            pair_drift = float(np.median(deltas))
+            running_offset += pair_drift
+            sess_to_offset[s_b_orig] = running_offset
+            sess_to_offset[s_b] = running_offset
+            print(f"  drift {s_a}->{s_b}: {len(deltas)} anchors, "
+                  f"d={pair_drift:+.2f} um, cum={running_offset:+.2f} um",
+                  flush=True)
+        else:
+            sess_to_offset[s_b_orig] = float("nan")
+            sess_to_offset[s_b] = float("nan")
+            print(f"  drift {s_a}->{s_b}: only {len(deltas)} anchors "
+                  f"(< {min_anchors}); this session uncorrectable",
+                  flush=True)
+    return sess_to_offset
+
+
+def depth_std_um_corrected(uid: "UIDIntermediate",
+                            drift_offsets: Dict[str, float]) -> float:
+    """Depth std after subtracting per-session drift offsets.
+
+    The lookup is tolerant of session-name padding differences ('1072025' vs
+    '01072025') so the caller doesn't need to normalize.
+
+    Returns NaN if fewer than 2 sessions have a finite drift correction available.
+    """
+    corrected: List[float] = []
+    for r in uid.sessions:
+        sname = str(r.session_name)
+        offset = drift_offsets.get(sname, float("nan"))
+        if not np.isfinite(offset):
+            # Try zfill(8) fallback for padding-mismatch sessions
+            offset = drift_offsets.get(sname.zfill(8), float("nan"))
+        if not np.isfinite(offset) or not np.isfinite(r.peak_depth_um):
+            continue
+        corrected.append(r.peak_depth_um - offset)
+    if len(corrected) < 2:
+        return float("nan")
+    return float(np.std(np.asarray(corrected), ddof=0))
+
+
 # ─── Badge / verdict logic ────────────────────────────────────────────
 
 def _badge_threshold(value: float, pass_thr: float, warn_thr: float,

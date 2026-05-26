@@ -31,6 +31,7 @@ from visdetect.analysis.tracking_qc import (        # noqa: E402
     load_isi_scores, load_um_pair_scores,
     depth_std_um, waveform_corr, fr_cv, isi_peak_agreement,
     baseline_psth_corr,
+    estimate_session_drift, depth_std_um_corrected,
     badge_isi, badge_depth, badge_waveform, badge_fr, badge_isi_peak,
     badge_func_resp,
     composite_verdict,
@@ -123,8 +124,14 @@ def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
     return intermediates
 
 
-def compute_uid_metrics(uid: UIDIntermediate) -> Dict[str, float]:
-    """Depth std, waveform corr, FR CV, ISI peak agreement, functional-response corr."""
+def compute_uid_metrics(uid: UIDIntermediate,
+                         drift_offsets: Optional[Dict[str, float]] = None,
+                         ) -> Dict[str, float]:
+    """Depth std, waveform corr, FR CV, ISI peak agreement, functional-response corr.
+
+    If `drift_offsets` is provided, also compute depth_std_corrected_um (informational
+    only — not used by badge logic yet).
+    """
     depths = np.array([r.peak_depth_um for r in uid.sessions], dtype=float)
     rates  = np.array([r.baseline_fr_hz for r in uid.sessions], dtype=float)
     waves = [r.waveform_peak for r in uid.sessions if r.waveform_peak is not None]
@@ -135,13 +142,18 @@ def compute_uid_metrics(uid: UIDIntermediate) -> Dict[str, float]:
         wf_stack = np.zeros((0, 0), dtype=np.float32)
     isi_hists = [r.isi_hist for r in uid.sessions]
     baseline_psths = [r.psths.get("baseline_on", (None, None, 0))[0] for r in uid.sessions]
-    return {
+    out = {
         "depth_std_um":     depth_std_um(depths),
         "wave_corr":        waveform_corr(wf_stack),
         "fr_cv":            fr_cv(rates),
         "isi_peak_agree":   isi_peak_agreement(isi_hists),
         "func_resp_corr":   baseline_psth_corr(baseline_psths),
     }
+    if drift_offsets:
+        out["depth_std_corrected_um"] = depth_std_um_corrected(uid, drift_offsets)
+    else:
+        out["depth_std_corrected_um"] = float("nan")
+    return out
 
 
 def main() -> int:
@@ -181,6 +193,46 @@ def main() -> int:
 
     isi_scores = load_isi_scores(ISI_STATS)
 
+    # Estimate per-session probe drift from high-confidence UM matches.
+    # output_prob_matrix.npy lives under batch0/ and is row-aligned with the
+    # top-level unit_index.csv (same row order, same length — verified).
+    #
+    # NOTE: we walk ALL UM sessions (not just the 26 QC-filtered manifest
+    # sessions). The manifest skips QC-failing sessions, which can leave
+    # multi-week gaps between consecutive pairs — too long for reliable
+    # high-prob anchors. Using all 42 UM sessions gives a dense chain that
+    # is then sampled by SessionRecord.session_name at lookup time.
+    prob_matrix_path = UM_ROOT / "batch0" / "output_prob_matrix.npy"
+    if prob_matrix_path.exists():
+        prob_matrix = np.load(prob_matrix_path)
+        # Chronological order over all UM sessions. UM stores names in
+        # DDMMYYYY (sometimes D-MMYYYY with leading zero stripped); pad to 8
+        # chars then sort by (year, month, day) for a true date order.
+        def _date_key(s: str) -> Tuple[int, int, int]:
+            p = str(s).zfill(8)
+            return (int(p[4:8]), int(p[2:4]), int(p[0:2]))
+        um_sessions_all = sorted(
+            unit_index_df["session"].astype(str).unique().tolist(),
+            key=_date_key,
+        )
+        print(f"Estimating cross-session probe drift across {len(um_sessions_all)} "
+              f"UM sessions ...", flush=True)
+        drift_offsets = estimate_session_drift(
+            unit_index_df, prob_matrix, RAW_WF_ROOT, um_sessions_all,
+        )
+        n_finite = sum(1 for v in drift_offsets.values() if np.isfinite(v))
+        # drift_offsets has 2 keys per session (raw + zfill(8)); count uniques.
+        unique_sess = set(str(s).zfill(8) for s in drift_offsets.keys())
+        n_finite_unique = sum(
+            1 for s in unique_sess
+            if np.isfinite(drift_offsets.get(s, drift_offsets.get(s.lstrip("0"), float("nan"))))
+        )
+        print(f"  drift offsets computed for {n_finite_unique}/{len(um_sessions_all)} "
+              f"sessions", flush=True)
+    else:
+        drift_offsets = {}
+        print("UM prob matrix missing — drift correction disabled", flush=True)
+
     rows = []
     uids_to_render = sorted(intermediates)
     if args.uids:
@@ -208,7 +260,7 @@ def main() -> int:
                 has_naive_to_expert=iv.has_naive_to_expert,
                 suspect_known=iv.suspect_known, sessions=kept_sessions,
             )
-            tm = compute_uid_metrics(trimmed_iv)
+            tm = compute_uid_metrics(trimmed_iv, drift_offsets=drift_offsets)
             tv = composite_verdict([
                 badge_isi(isi_scores[uid]),
                 badge_depth(tm["depth_std_um"]),
@@ -232,7 +284,7 @@ def main() -> int:
         iv = intermediates[uid]
         if not iv.sessions:
             print(f"  uid {uid}: no sessions extracted, skipping"); continue
-        metrics = compute_uid_metrics(iv)
+        metrics = compute_uid_metrics(iv, drift_offsets=drift_offsets)
         isi = isi_scores[uid]
         trim = uid_trim_info[uid]
         out_path = OUT_DIR / f"uid_{uid:04d}.pdf"
@@ -269,6 +321,7 @@ def main() -> int:
             "suspect_known": iv.suspect_known,
             "isi_median": isi,
             "depth_std_um": metrics["depth_std_um"],
+            "depth_std_corrected_um": metrics["depth_std_corrected_um"],
             "wave_corr": metrics["wave_corr"],
             "fr_cv": metrics["fr_cv"],
             "isi_peak_agree": metrics["isi_peak_agree"],
@@ -322,11 +375,12 @@ def main() -> int:
             "n_dropped": len(dropped_sessions),
             "dropped_sessions": ";".join(r.session_name for r in dropped_sessions),
             "kept_sessions": ";".join(r.session_name for r in kept_sessions),
-            "trimmed_depth_std_um":   tm["depth_std_um"],
-            "trimmed_wave_corr":      tm["wave_corr"],
-            "trimmed_fr_cv":          tm["fr_cv"],
-            "trimmed_isi_peak_agree": tm["isi_peak_agree"],
-            "trimmed_func_resp_corr": tm["func_resp_corr"],
+            "trimmed_depth_std_um":            tm["depth_std_um"],
+            "trimmed_depth_std_corrected_um": tm["depth_std_corrected_um"],
+            "trimmed_wave_corr":               tm["wave_corr"],
+            "trimmed_fr_cv":                   tm["fr_cv"],
+            "trimmed_isi_peak_agree":          tm["isi_peak_agree"],
+            "trimmed_func_resp_corr":          tm["func_resp_corr"],
             "original_verdict": original_verdict,
             "trimmed_verdict": tv,
             "rescued": rescued,

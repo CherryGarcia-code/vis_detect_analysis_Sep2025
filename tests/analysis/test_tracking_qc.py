@@ -417,3 +417,68 @@ def test_composite_with_6_badges():
     assert qc.composite_verdict(["pass"]*5 + ["warn"]) == "review"
     assert qc.composite_verdict(["pass"]*4 + ["warn"]*2) == "suspect"
     assert qc.composite_verdict(["pass"]*5 + ["fail"]) == "suspect"
+
+
+# ─── Cross-session probe drift correction ─────────────────────────────
+
+def test_depth_std_um_corrected_basic():
+    # 3 sessions with depths 100, 110, 120 and matching drift offsets 0, 10, 20
+    # Corrected depths: 100, 100, 100 → std = 0
+    from visdetect.analysis import tracking_qc as qc_local
+    recs = []
+    for i, (sess, depth) in enumerate([("a", 100.0), ("b", 110.0), ("c", 120.0)]):
+        recs.append(qc_local.SessionRecord(
+            session_name=sess, ks_unit_id=0, stage="Learning", peak_chan=0,
+            peak_depth_um=depth, amplitude=1.0, baseline_fr_hz=5.0,
+            waveform_peak=np.zeros(82, np.float32),
+            footprint=np.zeros((82, 17), np.float32),
+            footprint_channels=np.arange(17),
+            isi_hist=np.zeros(50, np.float32),
+            isi_centers=np.zeros(50, np.float32),
+        ))
+    uid = qc_local.UIDIntermediate(
+        global_uid=1, span=3, has_naive_to_expert=False, suspect_known=False,
+        sessions=recs,
+    )
+    offsets = {"a": 0.0, "b": 10.0, "c": 20.0}
+    assert qc.depth_std_um_corrected(uid, offsets) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_depth_std_um_corrected_skips_nan_offset_sessions():
+    from visdetect.analysis import tracking_qc as qc_local
+    recs = []
+    for sess, depth in [("a", 100.0), ("b", 110.0), ("c", 120.0)]:
+        recs.append(qc_local.SessionRecord(
+            session_name=sess, ks_unit_id=0, stage="Learning", peak_chan=0,
+            peak_depth_um=depth, amplitude=1.0, baseline_fr_hz=5.0,
+            waveform_peak=np.zeros(82, np.float32),
+            footprint=np.zeros((82, 17), np.float32),
+            footprint_channels=np.arange(17),
+            isi_hist=np.zeros(50, np.float32),
+            isi_centers=np.zeros(50, np.float32),
+        ))
+    uid = qc_local.UIDIntermediate(
+        global_uid=1, span=3, has_naive_to_expert=False, suspect_known=False,
+        sessions=recs,
+    )
+    # Session 'b' has NaN offset → dropped. Remaining sessions a (corrected=100) and c (corrected=100) → std=0.
+    offsets = {"a": 0.0, "b": float("nan"), "c": 20.0}
+    assert qc.depth_std_um_corrected(uid, offsets) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_depth_std_um_corrected_too_few_returns_nan():
+    from visdetect.analysis import tracking_qc as qc_local
+    recs = [qc_local.SessionRecord(
+        session_name="a", ks_unit_id=0, stage="Learning", peak_chan=0,
+        peak_depth_um=100.0, amplitude=1.0, baseline_fr_hz=5.0,
+        waveform_peak=np.zeros(82, np.float32),
+        footprint=np.zeros((82, 17), np.float32),
+        footprint_channels=np.arange(17),
+        isi_hist=np.zeros(50, np.float32),
+        isi_centers=np.zeros(50, np.float32),
+    )]
+    uid = qc_local.UIDIntermediate(
+        global_uid=1, span=1, has_naive_to_expert=False, suspect_known=False,
+        sessions=recs,
+    )
+    assert np.isnan(qc.depth_std_um_corrected(uid, {"a": 0.0}))
