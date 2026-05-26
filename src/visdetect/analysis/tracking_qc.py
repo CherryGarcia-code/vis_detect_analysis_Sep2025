@@ -48,8 +48,14 @@ ISI_PEAK_AGREE_TOL_BINS: int = 2
 # locked baseline response — robust to learning-driven magnitude changes (Pearson r
 # normalizes by std) but sensitive to genuinely different stimulus tuning (which
 # would indicate UM matched two distinct neurons with similar waveforms).
-FUNC_RESP_PASS: float = 0.70
-FUNC_RESP_WARN: float = 0.50
+#
+# Calibrated to BG_046 cohort distribution (May 2026): striatal Baseline_ON
+# PSTHs are weakly modulated, so absolute correlations are systematically low.
+# Gold-standard UID 942 scores ~0.62; the metric still rank-orders correctly
+# but absolute scale needs cohort-appropriate thresholds.
+FUNC_RESP_PASS: float = 0.40
+FUNC_RESP_WARN: float = 0.15
+FUNC_RESP_MIN_PSTH_STD: float = 0.5   # Hz; below this, PSTHs are too flat to discriminate
 
 # ─── Change-size pools for Change_ON heatmaps ─────────────────────────
 # Change-size pools for Change_ON heatmaps.
@@ -201,6 +207,12 @@ def baseline_psth_corr(per_session_psths: Sequence[Optional[np.ndarray]]) -> flo
     # be defensive in case of off-by-one in edge cases).
     min_len = min(a.size for a in arrs)
     stack = np.stack([a[:min_len] for a in arrs])
+    # Modulation gate: if PSTHs are essentially flat, the correlation is
+    # meaningless. Return NaN to signal "can't discriminate" (which
+    # badge_func_resp interprets as pass-by-default).
+    per_session_std = np.std(stack, axis=1)
+    if float(np.median(per_session_std)) < FUNC_RESP_MIN_PSTH_STD:
+        return float("nan")
     # Pearson r via mean-subtract + L2-normalize
     centered = stack - stack.mean(axis=1, keepdims=True)
     norms = np.linalg.norm(centered, axis=1, keepdims=True)
@@ -260,6 +272,15 @@ def badge_isi_peak(agreement: float) -> str:
 
 
 def badge_func_resp(median_r: float) -> str:
+    """Functional response stability badge.
+
+    NOTE: NaN -> "pass" (not "fail"), unlike other badges. NaN here means the
+    Baseline_ON PSTH is too flat to discriminate (quiet cell), not that anything
+    is wrong with the tracking. Absence of stimulus modulation is not evidence
+    of matching failure.
+    """
+    if not np.isfinite(median_r):
+        return "pass"
     return _badge_threshold(median_r, FUNC_RESP_PASS, FUNC_RESP_WARN, direction="high")
 
 

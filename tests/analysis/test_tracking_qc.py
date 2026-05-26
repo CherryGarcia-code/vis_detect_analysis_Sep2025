@@ -392,12 +392,24 @@ def test_baseline_psth_corr_zero_variance_drops_session():
 
 
 def test_badge_func_resp_thresholds():
-    assert qc.badge_func_resp(0.85) == "pass"
+    assert qc.badge_func_resp(0.50) == "pass"
     assert qc.badge_func_resp(qc.FUNC_RESP_PASS) == "pass"
-    assert qc.badge_func_resp(0.60) == "warn"
+    assert qc.badge_func_resp(0.25) == "warn"
     assert qc.badge_func_resp(qc.FUNC_RESP_WARN) == "warn"
-    assert qc.badge_func_resp(0.30) == "fail"
-    assert qc.badge_func_resp(float("nan")) == "fail"
+    assert qc.badge_func_resp(0.05) == "fail"
+
+
+def test_badge_func_resp_nan_is_pass():
+    # NaN means "no measurable baseline modulation" — not evidence of matching failure.
+    assert qc.badge_func_resp(float("nan")) == "pass"
+
+
+def test_baseline_psth_corr_flat_returns_nan():
+    # All PSTHs have std < FUNC_RESP_MIN_PSTH_STD → modulation gate returns NaN
+    flat_a = np.ones(40) * 5.0 + np.random.default_rng(0).standard_normal(40) * 0.1
+    flat_b = np.ones(40) * 5.0 + np.random.default_rng(1).standard_normal(40) * 0.1
+    flat_c = np.ones(40) * 5.0 + np.random.default_rng(2).standard_normal(40) * 0.1
+    assert np.isnan(qc.baseline_psth_corr([flat_a, flat_b, flat_c]))
 
 
 def test_composite_with_6_badges():
