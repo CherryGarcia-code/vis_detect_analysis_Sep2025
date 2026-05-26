@@ -1,7 +1,7 @@
 """Figure-rendering helpers for the per-UID QC sheets.
 
-Two pages per UID.  All gridspec ratios are picked per
-docs/superpowers/specs/2026-05-21-tracking-qc-sheets-design.md §6.
+Two pages per UID.  Layout reference: docs/superpowers/plans/
+2026-05-22-tracking-qc-sheets-plan.md Tasks 11 (page 1) and 12 (page 2).
 """
 
 from __future__ import annotations
@@ -90,21 +90,28 @@ def _waveform_color(stage: str) -> str:
 def render_page1(uid: UIDIntermediate, um_pair_scores: Optional[np.ndarray],
                  isi_score: float, depth_std: float, wave_corr: float,
                  fr_cv_val: float) -> plt.Figure:
-    """Render page 1 (physical) — returns the Figure."""
+    """Render page 1 (physical) — returns the Figure.
+
+    Layout (5 rows × 1 col master):
+      Row 0: header
+      Row 1: 3 footprints (first / mid / last)
+      Row 2: peak-channel waveform overlay | UM consecutive-pair match probability
+      Row 3: ISI distribution | Baseline FR
+      Row 4: Depth on probe | Amplitude
+    """
     fig = plt.figure(figsize=(8.5, 11.0))
 
-    # Master gridspec: header / footprints / waveform / depth-amp / um-scores
     gs = gridspec.GridSpec(
         nrows=5, ncols=1,
-        height_ratios=[0.9, 2.5, 1.5, 1.8, 0.9],
-        hspace=0.55, top=0.96, bottom=0.04, left=0.08, right=0.96,
+        height_ratios=[0.9, 1.8, 1.4, 1.4, 1.6],
+        hspace=0.65, top=0.96, bottom=0.05, left=0.08, right=0.96,
     )
 
-    # Header
+    # ── Row 0: Header
     ax_hdr = fig.add_subplot(gs[0])
     draw_header(ax_hdr, uid, isi_score, depth_std, wave_corr, fr_cv_val)
 
-    # Footprints @ first / mid / last
+    # ── Row 1: Footprints @ first / mid / last
     fp_gs = gridspec.GridSpecFromSubplotSpec(1, 3, subplot_spec=gs[1], wspace=0.25)
     n = len(uid.sessions)
     if n >= 1:
@@ -113,47 +120,67 @@ def render_page1(uid: UIDIntermediate, um_pair_scores: Optional[np.ndarray],
         for col, (idx, lab) in enumerate(zip(idxs, labels)):
             ax = fig.add_subplot(fp_gs[col])
             rec = uid.sessions[idx]
-            # Footprint: lines per channel stacked vertically by channel index
             fp = rec.footprint                                # (n_samples, n_chans)
             offsets = np.arange(fp.shape[1])[None, :] * (np.abs(fp).max() + 1e-6) * 1.2
             ax.plot(fp + offsets, color=_waveform_color(rec.stage), linewidth=0.6)
             ax.set_title(f"{lab}: {rec.session_name}", fontsize=9)
             ax.set_xticks([]); ax.set_yticks([])
 
-    # Peak-channel waveform overlay (~2:1)
-    ax_wf = fig.add_subplot(gs[2])
+    # ── Row 2: Peak-channel waveform overlay | UM consecutive-pair match probability
+    wf_um_gs = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=gs[2], wspace=0.30)
+    ax_wf = fig.add_subplot(wf_um_gs[0])
     for rec in uid.sessions:
         ax_wf.plot(rec.waveform_peak, color=_waveform_color(rec.stage),
                    linewidth=0.6, alpha=0.6)
     ax_wf.set_title("Peak-channel waveform overlay", fontsize=10)
     ax_wf.set_xlabel("samples"); ax_wf.set_ylabel("µV (raw)")
 
-    # Depth + amplitude side by side (~3:1 each)
-    da_gs = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=gs[3], wspace=0.30)
-    ax_d = fig.add_subplot(da_gs[0])
-    ax_a = fig.add_subplot(da_gs[1])
-    xs = np.arange(len(uid.sessions))
-    depths = [r.peak_depth_um for r in uid.sessions]
-    amps   = [r.amplitude for r in uid.sessions]
-    colors = [_waveform_color(r.stage) for r in uid.sessions]
-    ax_d.scatter(xs, depths, c=colors, s=18); ax_d.plot(xs, depths, color="0.5", linewidth=0.7)
-    ax_d.set_xlabel("session #"); ax_d.set_ylabel("peak depth (µm)")
-    ax_d.set_title("Depth on probe", fontsize=10)
-    ax_a.scatter(xs, amps, c=colors, s=18);   ax_a.plot(xs, amps,   color="0.5", linewidth=0.7)
-    ax_a.set_xlabel("session #"); ax_a.set_ylabel("amplitude (µV)")
-    ax_a.set_title("Amplitude", fontsize=10)
-
-    # UM pairwise scores
-    ax_um = fig.add_subplot(gs[4])
+    ax_um = fig.add_subplot(wf_um_gs[1])
     if um_pair_scores is not None and len(um_pair_scores) > 0:
         ax_um.bar(np.arange(len(um_pair_scores)), um_pair_scores, color="0.4")
         ax_um.set_ylim(0, 1)
-        ax_um.set_title("UM consecutive-session match probability", fontsize=10)
+        ax_um.set_title("UM consecutive-pair match probability", fontsize=10)
         ax_um.set_xlabel("pair # (session i, i+1)")
+        ax_um.set_ylabel("match prob")
     else:
         ax_um.text(0.5, 0.5, "UM pair scores unavailable", ha="center", va="center",
                    transform=ax_um.transAxes, fontsize=10, color="0.5")
-        ax_um.set_axis_off()
+        ax_um.set_title("UM consecutive-pair match probability", fontsize=10)
+        ax_um.set_xticks([]); ax_um.set_yticks([])
+
+    # ── Row 3: ISI distribution | Baseline FR (moved from old page 2)
+    isi_fr_gs = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=gs[3], wspace=0.30)
+    ax_isi = fig.add_subplot(isi_fr_gs[0])
+    for rec in uid.sessions:
+        ax_isi.semilogx(rec.isi_centers, rec.isi_hist,
+                        color=_waveform_color(rec.stage),
+                        linewidth=0.7, alpha=0.6)
+    ax_isi.set_xlabel("ISI (s, log)"); ax_isi.set_ylabel("prob")
+    ax_isi.set_title("ISI distribution", fontsize=10)
+
+    ax_fr = fig.add_subplot(isi_fr_gs[1])
+    xs = np.arange(len(uid.sessions))
+    colors = [_waveform_color(r.stage) for r in uid.sessions]
+    fr_vals = [r.baseline_fr_hz for r in uid.sessions]
+    ax_fr.scatter(xs, fr_vals, c=colors, s=18)
+    ax_fr.plot(xs, fr_vals, color="0.5", linewidth=0.7)
+    ax_fr.set_xlabel("session #"); ax_fr.set_ylabel("FR (Hz)")
+    ax_fr.set_title("Baseline FR", fontsize=10)
+
+    # ── Row 4: Depth on probe | Amplitude
+    da_gs = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=gs[4], wspace=0.30)
+    ax_d = fig.add_subplot(da_gs[0])
+    ax_a = fig.add_subplot(da_gs[1])
+    depths = [r.peak_depth_um for r in uid.sessions]
+    amps   = [r.amplitude for r in uid.sessions]
+    ax_d.scatter(xs, depths, c=colors, s=18)
+    ax_d.plot(xs, depths, color="0.5", linewidth=0.7)
+    ax_d.set_xlabel("session #"); ax_d.set_ylabel("peak depth (µm)")
+    ax_d.set_title("Depth on probe", fontsize=10)
+    ax_a.scatter(xs, amps, c=colors, s=18)
+    ax_a.plot(xs, amps, color="0.5", linewidth=0.7)
+    ax_a.set_xlabel("session #"); ax_a.set_ylabel("amplitude (µV)")
+    ax_a.set_title("Amplitude", fontsize=10)
 
     return fig
 
@@ -177,44 +204,50 @@ def _psth_matrix(uid: UIDIntermediate, key: str) -> Optional[tuple]:
     return np.vstack(rows), centers, stages, n_trials
 
 
-def _draw_heatmap_with_inset(parent_gs, uid: UIDIntermediate, key: str,
-                              title: str, miss_keys: Optional[List[str]] = None) -> None:
-    """Render a chronological PSTH heatmap with a stage-mean inset.
-
-    miss_keys (optional): list of keys whose stage-mean traces to overlay in the
-    inset for hit/miss comparison (Change_ON only).
-    """
-    fig = parent_gs.get_gridspec().figure
-    ax_main = fig.add_subplot(parent_gs)
+def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str) -> None:
+    """Render the chronological PSTH heatmap into `ax`.  No inset overlay."""
     data = _psth_matrix(uid, key)
     if data is None:
-        ax_main.text(0.5, 0.5, f"no trials for {key}", ha="center", va="center",
-                     transform=ax_main.transAxes, fontsize=9, color="0.5")
-        ax_main.set_axis_off()
+        ax.text(0.5, 0.5, f"no trials for {key}", ha="center", va="center",
+                transform=ax.transAxes, fontsize=9, color="0.5")
+        ax.set_axis_off()
+        ax.set_title(title, fontsize=10)
+        return
+
+    mat, centers, _stages, _ = data
+    vmax = np.percentile(mat, 99)
+    ax.imshow(mat, aspect="auto", origin="lower", cmap="magma",
+              extent=[centers[0], centers[-1], 0, mat.shape[0]],
+              vmin=0, vmax=max(vmax, 1e-6))
+    ax.axvline(0, color="white", linewidth=0.8, alpha=0.7)
+    ax.set_title(title, fontsize=10)
+    ax.set_xlabel("time (s)"); ax.set_ylabel("session #")
+
+
+def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
+                        miss_keys: Optional[List[str]] = None) -> None:
+    """Render L vs E stage-mean PSTH traces into `ax` as a normal (white) plot.
+
+    miss_keys (optional): list of keys whose stage-mean traces to overlay as
+    dashed lines for hit/miss comparison (e.g. ["change_on_big_miss"]).
+    """
+    data = _psth_matrix(uid, key)
+    if data is None:
+        ax.text(0.5, 0.5, f"no trials for {key}", ha="center", va="center",
+                transform=ax.transAxes, fontsize=9, color="0.5")
+        ax.set_axis_off()
         return
 
     mat, centers, stages, _ = data
-    vmax = np.percentile(mat, 99)
-    ax_main.imshow(mat, aspect="auto", origin="lower", cmap="magma",
-                   extent=[centers[0], centers[-1], 0, mat.shape[0]],
-                   vmin=0, vmax=max(vmax, 1e-6))
-    ax_main.axvline(0, color="white", linewidth=0.8, alpha=0.7)
-    ax_main.set_title(title, fontsize=10)
-    ax_main.set_xlabel("time (s)"); ax_main.set_ylabel("session #")
-
-    # Inset: L vs E stage-mean
-    bbox = ax_main.get_position()
-    iw, ih = 0.18 * bbox.width / 0.4, 0.20 * bbox.height / 0.4   # roughly 1.2:1
-    inset = fig.add_axes([bbox.x0 + bbox.width - iw - 0.005,
-                          bbox.y0 + bbox.height - ih - 0.005,
-                          iw, ih])
-    inset.set_facecolor("#0d0d0d")
+    has_label = False
     for st in STAGE_ORDER:
         mask = np.array([s == st for s in stages])
         if mask.sum() == 0:
             continue
-        inset.plot(centers, mat[mask].mean(axis=0), color=STAGE_COLORS[st],
-                   linewidth=1.0, label=st)
+        ax.plot(centers, mat[mask].mean(axis=0), color=STAGE_COLORS[st],
+                linewidth=1.2, label=st)
+        has_label = True
+
     if miss_keys:
         for mk in miss_keys:
             mdata = _psth_matrix(uid, mk)
@@ -225,70 +258,80 @@ def _draw_heatmap_with_inset(parent_gs, uid: UIDIntermediate, key: str,
                 mask = np.array([s == st for s in mstages])
                 if mask.sum() == 0:
                     continue
-                inset.plot(mcenters, mmat[mask].mean(axis=0),
-                           color=STAGE_COLORS[st], linewidth=1.0,
-                           linestyle="--", alpha=0.7)
-    inset.axvline(0, color="white", linewidth=0.6, alpha=0.5)
-    inset.tick_params(labelsize=6)
-    inset.set_xticks([centers[0], 0.0, centers[-1]])
-    inset.set_yticks([])
+                ax.plot(mcenters, mmat[mask].mean(axis=0),
+                        color=STAGE_COLORS[st], linewidth=1.0,
+                        linestyle="--", alpha=0.7)
+
+    ax.axvline(0, color="0.5", linewidth=0.7)
+    ax.set_xlabel("time (s)")
+    ax.set_ylabel("Hz")
+    ax.tick_params(labelsize=8)
+    if has_label:
+        ax.legend(loc="upper right", fontsize=7, frameon=False)
 
 
 def render_page2(uid: UIDIntermediate, isi_score: float, depth_std: float,
                  wave_corr: float, fr_cv_val: float) -> plt.Figure:
+    """Render page 2 (physical) — returns the Figure.
+
+    Layout (5 rows × 2 cols master): each row pairs a heatmap (left) with its
+    L vs E PSTH-summary panel (right) at matched row heights.
+      Row 0: header (spans both cols)
+      Row 1: Baseline_ON heatmap   | Baseline_ON L-vs-E PSTH
+      Row 2: Change_ON Big-Hit     | Big-Hit PSTH (+ Big-Miss dashed)
+      Row 3: Change_ON Small-Hit   | Small-Hit PSTH (+ Small-Miss dashed)
+      Row 4: Hit-lick heatmap      | Hit-lick PSTH
+    """
     fig = plt.figure(figsize=(8.5, 11.0))
     gs = gridspec.GridSpec(
         nrows=5, ncols=2,
-        height_ratios=[0.9, 1.6, 1.8, 2.2, 1.8],
+        height_ratios=[1.1, 1.8, 1.8, 1.8, 1.8],
         width_ratios=[1, 1],
-        hspace=0.55, wspace=0.25,
-        top=0.96, bottom=0.04, left=0.09, right=0.96,
+        hspace=0.70, wspace=0.30,
+        top=0.96, bottom=0.05, left=0.09, right=0.96,
         figure=fig,
     )
 
-    # Header (spans both columns)
+    # ── Row 0: Header (spans both columns)
     ax_hdr = fig.add_subplot(gs[0, :])
     draw_header(ax_hdr, uid, isi_score, depth_std, wave_corr, fr_cv_val)
 
-    # Row 1: ISI overlay + baseline FR
-    ax_isi = fig.add_subplot(gs[1, 0])
-    for rec in uid.sessions:
-        ax_isi.semilogx(rec.isi_centers, rec.isi_hist,
-                        color=_waveform_color(rec.stage),
-                        linewidth=0.7, alpha=0.6)
-    ax_isi.set_xlabel("ISI (s, log)"); ax_isi.set_ylabel("prob")
-    ax_isi.set_title("ISI distribution", fontsize=10)
-
-    ax_fr = fig.add_subplot(gs[1, 1])
-    xs = np.arange(len(uid.sessions))
-    colors = [_waveform_color(r.stage) for r in uid.sessions]
-    ax_fr.scatter(xs, [r.baseline_fr_hz for r in uid.sessions], c=colors, s=18)
-    ax_fr.plot(xs, [r.baseline_fr_hz for r in uid.sessions], color="0.5", linewidth=0.7)
-    ax_fr.set_xlabel("session #"); ax_fr.set_ylabel("FR (Hz)")
-    ax_fr.set_title("Baseline FR", fontsize=10)
-
-    # Row 2: Baseline_ON heatmap (full width)
-    _draw_heatmap_with_inset(
-        gs[2, :], uid, "baseline_on",
+    # ── Row 1: Baseline_ON
+    _draw_heatmap(
+        fig.add_subplot(gs[1, 0]), uid, "baseline_on",
         title="PSTH · Baseline_ON · all outcomes pooled [TODO: split by outcome in v2]",
     )
+    _draw_psth_summary(
+        fig.add_subplot(gs[1, 1]), uid, "baseline_on",
+    )
 
-    # Row 3: Change_ON Big-Hit | Small-Hit
-    _draw_heatmap_with_inset(
-        gs[3, 0], uid, "change_on_big_hit",
+    # ── Row 2: Change_ON Big-Hit (+ Big-Miss dashed overlay in summary)
+    _draw_heatmap(
+        fig.add_subplot(gs[2, 0]), uid, "change_on_big_hit",
         title="Change_ON · Big-Hit (2.0× + 4.0×)",
+    )
+    _draw_psth_summary(
+        fig.add_subplot(gs[2, 1]), uid, "change_on_big_hit",
         miss_keys=["change_on_big_miss"],
     )
-    _draw_heatmap_with_inset(
-        gs[3, 1], uid, "change_on_sm_hit",
+
+    # ── Row 3: Change_ON Small-Hit (+ Small-Miss dashed overlay in summary)
+    _draw_heatmap(
+        fig.add_subplot(gs[3, 0]), uid, "change_on_sm_hit",
         title="Change_ON · Small-Hit (1.25× + 1.35×)",
+    )
+    _draw_psth_summary(
+        fig.add_subplot(gs[3, 1]), uid, "change_on_sm_hit",
         miss_keys=["change_on_sm_miss"],
     )
 
-    # Row 4: Hit lick (full width)
-    _draw_heatmap_with_inset(
-        gs[4, :], uid, "hit_lick",
+    # ── Row 4: Hit-lick
+    _draw_heatmap(
+        fig.add_subplot(gs[4, 0]), uid, "hit_lick",
         title="PSTH · Hit lick",
+    )
+    _draw_psth_summary(
+        fig.add_subplot(gs[4, 1]), uid, "hit_lick",
     )
 
     return fig
