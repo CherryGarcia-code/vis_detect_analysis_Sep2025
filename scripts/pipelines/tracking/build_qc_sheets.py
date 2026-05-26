@@ -124,6 +124,20 @@ def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
     return intermediates
 
 
+def _depth_for_badge(metrics: Dict[str, float]) -> float:
+    """Prefer drift-corrected depth_std for the badge; fall back to raw if NaN.
+
+    Drift correction (via UM high-confidence anchor matches) removes apparent
+    depth instability that is really just probe drift. UIDs whose sessions
+    fall outside the drift-correction chain (NaN corrected) get judged by the
+    raw value as before.
+    """
+    corrected = metrics.get("depth_std_corrected_um", float("nan"))
+    if np.isfinite(corrected):
+        return float(corrected)
+    return float(metrics.get("depth_std_um", float("nan")))
+
+
 def compute_uid_metrics(uid: UIDIntermediate,
                          drift_offsets: Optional[Dict[str, float]] = None,
                          ) -> Dict[str, float]:
@@ -263,7 +277,7 @@ def main() -> int:
             tm = compute_uid_metrics(trimmed_iv, drift_offsets=drift_offsets)
             tv = composite_verdict([
                 badge_isi(isi_scores[uid]),
-                badge_depth(tm["depth_std_um"]),
+                badge_depth(_depth_for_badge(tm)),
                 badge_waveform(tm["wave_corr"]),
                 badge_fr(tm["fr_cv"]),
                 badge_isi_peak(tm["isi_peak_agree"]),
@@ -307,7 +321,7 @@ def main() -> int:
         # bimodality and functional-tuning detectors are auditable.
         # Intentionally may differ from verdict_pdf — pdf_csv_disagree flags those rows.
         b_isi   = badge_isi(isi)
-        b_depth = badge_depth(metrics["depth_std_um"])
+        b_depth = badge_depth(_depth_for_badge(metrics))
         b_wave  = badge_waveform(metrics["wave_corr"])
         b_fr    = badge_fr(metrics["fr_cv"])
         b_peak  = badge_isi_peak(metrics["isi_peak_agree"])
