@@ -995,16 +995,17 @@ def session_outlier_flags(uid: "UIDIntermediate") -> Dict[str, List[bool]]:
 
     Returns
     -------
-    dict with keys 'isi_peak', 'fr', 'wave', 'depth', 'is_outlier' — each a
-    list of bools aligned with uid.sessions.
+    dict with keys 'isi_peak', 'fr', 'wave', 'depth', 'unknown_stage',
+    'is_outlier' — each a list of bools aligned with uid.sessions.
     """
     n = len(uid.sessions)
     out = {
-        "isi_peak": [False] * n,
-        "fr":       [False] * n,
-        "wave":     [False] * n,
-        "depth":    [False] * n,
-        "is_outlier": [False] * n,
+        "isi_peak":      [False] * n,
+        "fr":            [False] * n,
+        "wave":          [False] * n,
+        "depth":         [False] * n,
+        "unknown_stage": [False] * n,
+        "is_outlier":    [False] * n,
     }
     if n == 0:
         return out
@@ -1067,12 +1068,23 @@ def session_outlier_flags(uid: "UIDIntermediate") -> Dict[str, List[bool]]:
             if np.isfinite(d) and abs(d - med_d) > SESSION_DEPTH_DEVIATION_UM:
                 out["depth"][i] = True
 
+    # Unknown-stage flag: session whose stage could not be resolved in the manifest.
+    # Such sessions are unconditionally treated as outliers to prevent them from
+    # anchoring the "good run" window used by find_stable_subset.
+    for i, rec in enumerate(uid.sessions):
+        if rec.stage == "Unknown":
+            out["unknown_stage"][i] = True
+
     # Composite outlier rule
     for i in range(n):
         strikes = sum([out["isi_peak"][i], out["fr"][i], out["wave"][i], out["depth"][i]])
         # ISI peak divergence alone is sufficient (strongest single signal);
-        # otherwise need >=2 criteria.
-        out["is_outlier"][i] = out["isi_peak"][i] or strikes >= 2
+        # otherwise need >=2 criteria; unknown-stage always forces outlier.
+        out["is_outlier"][i] = (
+            out["isi_peak"][i]
+            or strikes >= 2
+            or out["unknown_stage"][i]
+        )
 
     return out
 

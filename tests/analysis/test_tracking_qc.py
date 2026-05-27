@@ -533,3 +533,63 @@ def test_badge_isi_hist_corr_thresholds():
     assert qc.badge_isi_hist_corr(qc.ISI_HIST_CORR_WARN) == "warn"     # 0.65 boundary
     assert qc.badge_isi_hist_corr(0.40) == "fail"
     assert qc.badge_isi_hist_corr(float("nan")) == "fail"
+
+
+def test_session_outlier_flags_unknown_stage_is_outlier():
+    """A session with stage='Unknown' is unconditionally flagged outlier."""
+    rec_good = qc.SessionRecord(
+        session_name="s00", ks_unit_id=0, stage="Learning", peak_chan=10,
+        peak_depth_um=100.0, amplitude=50.0, baseline_fr_hz=5.0,
+        waveform_peak=np.array([0.0, -1.0, 0.0, 1.0, 0.0], dtype=np.float32),
+        footprint=np.zeros((5, 17), dtype=np.float32),
+        footprint_channels=np.arange(17),
+        isi_hist=np.array([0.1, 0.5, 0.3, 0.1] + [0.0] * 46, dtype=np.float32),
+        isi_centers=np.zeros(50, dtype=np.float32),
+    )
+    rec_unknown = qc.SessionRecord(
+        session_name="s01", ks_unit_id=0, stage="Unknown", peak_chan=10,
+        peak_depth_um=100.0, amplitude=50.0, baseline_fr_hz=5.0,
+        waveform_peak=np.array([0.0, -1.0, 0.0, 1.0, 0.0], dtype=np.float32),
+        footprint=np.zeros((5, 17), dtype=np.float32),
+        footprint_channels=np.arange(17),
+        isi_hist=np.array([0.1, 0.5, 0.3, 0.1] + [0.0] * 46, dtype=np.float32),
+        isi_centers=np.zeros(50, dtype=np.float32),
+    )
+    uid = qc.UIDIntermediate(
+        global_uid=1, span=2, has_naive_to_expert=False, suspect_known=False,
+        sessions=[rec_good, rec_good, rec_unknown, rec_good],
+    )
+    flags = qc.session_outlier_flags(uid)
+    assert "unknown_stage" in flags
+    assert flags["unknown_stage"] == [False, False, True, False]
+    assert flags["is_outlier"] == [False, False, True, False]
+
+
+def test_find_stable_subset_drops_unknown_sessions():
+    """Unknown-stage sessions break the kept run."""
+    rec_good = qc.SessionRecord(
+        session_name="s00", ks_unit_id=0, stage="Learning", peak_chan=10,
+        peak_depth_um=100.0, amplitude=50.0, baseline_fr_hz=5.0,
+        waveform_peak=np.array([0.0, -1.0, 0.0, 1.0, 0.0], dtype=np.float32),
+        footprint=np.zeros((5, 17), dtype=np.float32),
+        footprint_channels=np.arange(17),
+        isi_hist=np.array([0.1, 0.5, 0.3, 0.1] + [0.0] * 46, dtype=np.float32),
+        isi_centers=np.zeros(50, dtype=np.float32),
+    )
+    rec_unknown = qc.SessionRecord(
+        session_name="s01", ks_unit_id=0, stage="Unknown", peak_chan=10,
+        peak_depth_um=100.0, amplitude=50.0, baseline_fr_hz=5.0,
+        waveform_peak=np.array([0.0, -1.0, 0.0, 1.0, 0.0], dtype=np.float32),
+        footprint=np.zeros((5, 17), dtype=np.float32),
+        footprint_channels=np.arange(17),
+        isi_hist=np.array([0.1, 0.5, 0.3, 0.1] + [0.0] * 46, dtype=np.float32),
+        isi_centers=np.zeros(50, dtype=np.float32),
+    )
+    # Sequence: good, good, unknown, good, good, good → kept = last 3.
+    uid = qc.UIDIntermediate(
+        global_uid=1, span=6, has_naive_to_expert=False, suspect_known=False,
+        sessions=[rec_good, rec_good, rec_unknown, rec_good, rec_good, rec_good],
+    )
+    stable = qc.find_stable_subset(uid)
+    assert stable["kept_indices"] == [3, 4, 5]
+    assert 2 in stable["dropped_indices"]
