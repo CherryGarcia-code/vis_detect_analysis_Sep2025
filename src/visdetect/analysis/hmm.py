@@ -98,6 +98,22 @@ def prepare_session_data(
 ) -> Dict[str, Any]:
     """Extract binary choice vector *y* and covariate matrix *X* from a Session.
 
+    Choice encoding (commitment, see specs/2026-05-27-hmm-glm-audit-design.md §1.1):
+    ----------------------------------------------------------------------------
+    ``y = is_hit | is_fa`` — the mouse "licked" if it produced ANY lick on the
+    trial, whether a response-window lick after a real change (``is_hit``) or
+    an early/impulsive lick before the change was presented (``is_fa``).
+
+    This encoding is a scientific commitment, not a hyperparameter. The project's
+    a priori three-state hypothesis (Impulsive / Stimulus-sensitive / Disengaged)
+    requires the Impulsive state to be identifiable as a distinct cognitive
+    regime — one in which the mouse licks regardless of stimulus. Treating fa
+    as a no-lick observation would fold impulsive licking into the Disengaged
+    state and collapse the K=3 structure to K=2.
+
+    The alternative — ``y = is_hit`` only — is documented and rejected in F4 of
+    the audit spec.
+
     Parameters
     ----------
     session : Session
@@ -108,9 +124,11 @@ def prepare_session_data(
     Returns
     -------
     dict with keys:
-        y               : ndarray (T,)  binary choice (1=licked, 0=no-lick)
-        X               : ndarray (T, D) design matrix [bias, stim, prev_choice, prev_reward]
-        df              : DataFrame      trial-level metadata for the *included* trials
+        y               : ndarray (T,)  binary choice (1 = lick, 0 = no-lick)
+        X               : ndarray (T, D) design matrix
+                          [bias, log2(change_size), prev_choice, prev_reward,
+                          prev_early_lick]
+        df              : DataFrame      trial-level metadata (filtered)
         session_name    : str
         feature_names   : list[str]
     """
