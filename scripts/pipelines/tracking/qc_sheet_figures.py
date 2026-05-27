@@ -116,6 +116,14 @@ def draw_header(ax, uid: UIDIntermediate,
                 fontsize=9, transform=ax.transAxes,
                 ha="left", va="bottom", color="0.4")
 
+    # Stage-stripe legend (always shown, regardless of trim state)
+    ax.text(
+        0.0, -0.04,
+        "stripe: Learning · Expert · Unknown · /// = trimmed",
+        transform=ax.transAxes, fontsize=8, color="0.4",
+        ha="left", va="top",
+    )
+
     return verdict
 
 
@@ -226,6 +234,10 @@ def render_page1(uid: UIDIntermediate, um_pair_scores: Optional[np.ndarray],
                             linewidth=0.7, alpha=0.6)
     ax_isi.set_xlabel("ISI (s, log)"); ax_isi.set_ylabel("prob")
     ax_isi.set_title("ISI distribution", fontsize=10)
+    if dropped_set:
+        ax_isi.text(0.98, 0.97, "grey traces = dropped",
+                    transform=ax_isi.transAxes, fontsize=7, color="0.4",
+                    ha="right", va="top")
 
     ax_fr = fig.add_subplot(isi_fr_gs[1])
     xs = np.arange(len(uid.sessions))
@@ -246,6 +258,10 @@ def render_page1(uid: UIDIntermediate, um_pair_scores: Optional[np.ndarray],
     ax_d.plot(xs, depths, color="0.5", linewidth=0.7, zorder=1)
     ax_d.set_xlabel("session #"); ax_d.set_ylabel("peak depth (µm)")
     ax_d.set_title("Depth on probe", fontsize=10)
+    if dropped_set:
+        ax_d.text(0.98, 0.97, "○ = dropped",
+                  transform=ax_d.transAxes, fontsize=7, color="0.4",
+                  ha="right", va="top")
     _scatter_kept_dropped(ax_a, xs, amps, colors, dropped_set)
     ax_a.plot(xs, amps, color="0.5", linewidth=0.7, zorder=1)
     ax_a.set_xlabel("session #"); ax_a.set_ylabel("amplitude (µV)")
@@ -323,6 +339,10 @@ def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str,
                                     clip_on=False, zorder=5))
         # Extend the visible x-range slightly so the red stripe is not clipped
         ax.set_xlim(x0 - pad, x1)
+        ax.text(0.02, 0.97, "red bar = dropped row",
+                transform=ax.transAxes, fontsize=7, color="white",
+                ha="left", va="top",
+                bbox=dict(facecolor="0.1", edgecolor="none", alpha=0.5, pad=2))
 
 
 def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
@@ -345,8 +365,9 @@ def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
         mask = np.array([s == st for s in stages])
         if mask.sum() == 0:
             continue
+        label_solid = f"{st} hit" if miss_keys else st
         ax.plot(centers, mat[mask].mean(axis=0), color=STAGE_COLORS_LOCAL[st],
-                linewidth=1.2, label=st)
+                linewidth=1.2, label=label_solid)
         has_label = True
 
     if miss_keys:
@@ -361,14 +382,16 @@ def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
                     continue
                 ax.plot(mcenters, mmat[mask].mean(axis=0),
                         color=STAGE_COLORS_LOCAL[st], linewidth=1.0,
-                        linestyle="--", alpha=0.7)
+                        linestyle="--", alpha=0.7,
+                        label=f"{st} miss")
+                has_label = True
 
     ax.axvline(0, color="0.5", linewidth=0.7)
     ax.set_xlabel("time (s)")
     ax.set_ylabel("Hz")
     ax.tick_params(labelsize=8)
     if has_label:
-        ax.legend(loc="upper right", fontsize=7, frameon=False)
+        ax.legend(loc="upper right", fontsize=6 if miss_keys else 7, frameon=False)
 
 
 def render_page2(uid: UIDIntermediate, isi_score: float, depth_std: float,
