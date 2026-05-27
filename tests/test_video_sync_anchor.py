@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import numpy as np
-import pytest
 
 from visdetect.core import video_sync as vs
 
@@ -17,7 +15,7 @@ from visdetect.core import video_sync as vs
 
 def _make_anchor_dict() -> dict:
     return {
-        "session": "TESTSESSION",
+        "session": "00000123",
         "anchor_trial_index": 0,
         "nidaq_baseline_on_s": 12.3456,
         "video_frame_idx": 1047,
@@ -29,32 +27,28 @@ def _make_anchor_dict() -> dict:
     }
 
 
-def test_save_anchor_creates_json_at_expected_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(vs, "VIDEO_SYNC_DIR", str(tmp_path))
+def test_save_anchor_creates_json_at_expected_path(tmp_path):
     anchor = _make_anchor_dict()
 
-    vs.save_anchor("TESTSESSION", anchor)
+    vs.save_anchor("123", anchor, sync_dir=str(tmp_path))
 
-    expected = tmp_path / "TESTSESSION_anchor.json"
+    expected = tmp_path / "00000123_anchor.json"
     assert expected.exists()
     payload = json.loads(expected.read_text())
     assert payload == anchor
 
 
-def test_load_anchor_returns_saved_dict(tmp_path, monkeypatch):
-    monkeypatch.setattr(vs, "VIDEO_SYNC_DIR", str(tmp_path))
+def test_load_anchor_returns_saved_dict(tmp_path):
     anchor = _make_anchor_dict()
-    vs.save_anchor("TESTSESSION", anchor)
+    vs.save_anchor("123", anchor, sync_dir=str(tmp_path))
 
-    loaded = vs.load_anchor("TESTSESSION")
+    loaded = vs.load_anchor("123", sync_dir=str(tmp_path))
 
     assert loaded == anchor
 
 
-def test_load_anchor_returns_none_when_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(vs, "VIDEO_SYNC_DIR", str(tmp_path))
-
-    loaded = vs.load_anchor("NONEXISTENT_SESSION")
+def test_load_anchor_returns_none_when_missing(tmp_path):
+    loaded = vs.load_anchor("99999999", sync_dir=str(tmp_path))
 
     assert loaded is None
 

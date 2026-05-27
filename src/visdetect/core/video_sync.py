@@ -2584,29 +2584,33 @@ def sync_session(
 # =====================================================================
 
 
-def _anchor_path(session_name: str) -> str:
+def _anchor_path(session_name: str, sync_dir: Optional[str] = None) -> str:
     """Path to the anchor JSON for *session_name*."""
-    import os
-    return os.path.join(VIDEO_SYNC_DIR, f"{session_name}_anchor.json")
+    out_dir = sync_dir or VIDEO_SYNC_DIR
+    session_name = str(int(session_name)).zfill(8)
+    return os.path.join(out_dir, f"{session_name}_anchor.json")
 
 
-def save_anchor(session_name: str, anchor: dict) -> None:
-    """Write *anchor* to ``{VIDEO_SYNC_DIR}/{session_name}_anchor.json``.
+def save_anchor(
+    session_name: str,
+    anchor: dict,
+    sync_dir: Optional[str] = None,
+) -> None:
+    """Write *anchor* to ``{sync_dir}/{session_name}_anchor.json``.
 
     Overwrites any existing file. Creates the directory if needed.
     """
-    import json
-    import os
-    os.makedirs(VIDEO_SYNC_DIR, exist_ok=True)
-    with open(_anchor_path(session_name), "w") as f:
+    os.makedirs(sync_dir or VIDEO_SYNC_DIR, exist_ok=True)
+    with open(_anchor_path(session_name, sync_dir=sync_dir), "w") as f:
         json.dump(anchor, f, indent=2)
 
 
-def load_anchor(session_name: str) -> dict | None:
+def load_anchor(
+    session_name: str,
+    sync_dir: Optional[str] = None,
+) -> Optional[dict]:
     """Read the anchor JSON for *session_name*, or return ``None`` if absent."""
-    import json
-    import os
-    path = _anchor_path(session_name)
+    path = _anchor_path(session_name, sync_dir=sync_dir)
     if not os.path.exists(path):
         return None
     with open(path, "r") as f:
