@@ -77,6 +77,18 @@ def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
         """
         return str(name).zfill(8)
 
+    from datetime import datetime
+    def _parse_session_date(name) -> datetime:
+        """Parse session_name as a DDMMYYYY date.
+
+        Works for ALL sessions (manifest-present and Unknown alike), so
+        chronological sort doesn't depend on the manifest containing every
+        session. Critical for the looser tracking-QC manifest (spec §3.4),
+        which deliberately excludes <150-trial sessions that nonetheless
+        appear in the UnitMatch cache.
+        """
+        return datetime.strptime(_norm_session(name), '%d%m%Y')
+
     stage_by_session = {_norm_session(r["session_name"]): str(r["stage"])
                         for _, r in manifest.iterrows()}
 
@@ -100,10 +112,9 @@ def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
             sessions=[],
         )
 
-    sessions_chrono = [_norm_session(n) for n in manifest["session_name"].tolist()]
     sess_set = sorted(
         {s for ksmap in uid_to_ks.values() for s in ksmap.keys()},
-        key=lambda s: sessions_chrono.index(_norm_session(s)) if _norm_session(s) in sessions_chrono else 1e9,
+        key=_parse_session_date,
     )
 
     for sess in sess_set:
@@ -129,10 +140,9 @@ def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
         print(f"  {sess}: {len(records)}/{len(uids_here)} cached "
               f"in {time.time() - t0:.1f}s", flush=True)
 
-    order_idx = {s: i for i, s in enumerate(sessions_chrono)}
     for uid in intermediates:
         intermediates[uid].sessions.sort(
-            key=lambda r: order_idx.get(_norm_session(r.session_name), 1e9)
+            key=lambda r: _parse_session_date(r.session_name)
         )
     return intermediates
 
