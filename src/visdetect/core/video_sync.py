@@ -2577,3 +2577,67 @@ def sync_session(
     )
 
     return load_video_sync(session_name, sync_dir=_sync_dir)
+
+
+# =====================================================================
+# Anchor JSON helpers (Phase 1 of corneal-barcode redesign)
+# =====================================================================
+
+
+def _anchor_path(session_name: str) -> str:
+    """Path to the anchor JSON for *session_name*."""
+    import os
+    return os.path.join(VIDEO_SYNC_DIR, f"{session_name}_anchor.json")
+
+
+def save_anchor(session_name: str, anchor: dict) -> None:
+    """Write *anchor* to ``{VIDEO_SYNC_DIR}/{session_name}_anchor.json``.
+
+    Overwrites any existing file. Creates the directory if needed.
+    """
+    import json
+    import os
+    os.makedirs(VIDEO_SYNC_DIR, exist_ok=True)
+    with open(_anchor_path(session_name), "w") as f:
+        json.dump(anchor, f, indent=2)
+
+
+def load_anchor(session_name: str) -> dict | None:
+    """Read the anchor JSON for *session_name*, or return ``None`` if absent."""
+    import json
+    import os
+    path = _anchor_path(session_name)
+    if not os.path.exists(path):
+        return None
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def compute_predicted_frame_idx(
+    baseline_on_s: float,
+    coarse_offset_s: float,
+    ts_ms: np.ndarray,
+) -> int:
+    """Map a NI-DAQ Baseline_ON time to the nearest video frame index.
+
+    Parameters
+    ----------
+    baseline_on_s
+        NI-DAQ time of the event, in seconds.
+    coarse_offset_s
+        Seconds elapsed in NI-DAQ clock before video recording started.
+    ts_ms
+        Camera-frame timestamps in milliseconds, relative to video start.
+        Typically returned by :func:`load_camera_metadata`.
+
+    Returns
+    -------
+    int
+        Index of the closest frame in ``ts_ms``. Clamped to ``[0, len(ts_ms) - 1]``.
+    """
+    video_ms = (baseline_on_s - coarse_offset_s) * 1000.0
+    if video_ms <= ts_ms[0]:
+        return 0
+    if video_ms >= ts_ms[-1]:
+        return int(len(ts_ms) - 1)
+    return int(np.argmin(np.abs(ts_ms - video_ms)))
