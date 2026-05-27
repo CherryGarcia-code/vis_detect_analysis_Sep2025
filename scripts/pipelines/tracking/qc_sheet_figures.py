@@ -330,6 +330,7 @@ def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str,
             heatmap_row += 1
         x0, x1 = centers[0], centers[-1]
         pad = 0.03 * (x1 - x0)
+        drew_any_marker = False
         for uid_idx in dropped_indices:
             row = uid_to_row.get(uid_idx)
             if row is None:
@@ -337,12 +338,14 @@ def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str,
             ax.add_patch(Rectangle((x0 - pad, row), pad, 1.0,
                                     facecolor="red", edgecolor="none",
                                     clip_on=False, zorder=5))
-        # Extend the visible x-range slightly so the red stripe is not clipped
-        ax.set_xlim(x0 - pad, x1)
-        ax.text(0.02, 0.97, "red bar = dropped row",
-                transform=ax.transAxes, fontsize=7, color="white",
-                ha="left", va="top",
-                bbox=dict(facecolor="0.1", edgecolor="none", alpha=0.5, pad=2))
+            drew_any_marker = True
+        if drew_any_marker:
+            # Extend the visible x-range slightly so the red stripe is not clipped
+            ax.set_xlim(x0 - pad, x1)
+            ax.text(0.02, 0.97, "red bar = dropped row",
+                    transform=ax.transAxes, fontsize=7, color="white",
+                    ha="left", va="top",
+                    bbox=dict(facecolor="0.1", edgecolor="none", alpha=0.5, pad=2))
 
 
 def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
