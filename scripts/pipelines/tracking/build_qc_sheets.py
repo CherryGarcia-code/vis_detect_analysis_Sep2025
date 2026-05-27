@@ -199,7 +199,17 @@ def main() -> int:
     # with poor performance but enough trials are still tracked across stages.
     # min_dprime=0.8 (the SDT default) wrongly excludes the very sessions needed
     # for cross-stage tracking studies. See spec §3.4.
-    manifest = load_filtered_manifest(min_trials=150, min_dprime=None)
+    #
+    # include_stages mirrors the prior qc_only=True behavior (no Disengaged);
+    # merge_naive_learning=True mirrors SESSION_FILTER so Naive sessions are
+    # relabeled "Learning" in the stage column (downstream STAGE_ORDER is
+    # ["Learning", "Expert"] only — Naive-as-Naive would be silently dropped).
+    manifest = load_filtered_manifest(
+        include_stages=["Naive", "Learning", "Expert"],
+        merge_naive_learning=True,
+        min_trials=150,
+        min_dprime=None,
+    )
     unit_index_df = pd.read_csv(UNIT_INDEX)
     cohort = select_long_tracks(UNIT_INDEX, ISI_STATS, min_span=10)
     cohort = annotate_naive_to_expert(cohort, manifest)
