@@ -916,6 +916,52 @@ def auto_label_states(model: GLMHMM) -> List[str]:
 
 
 # =====================================================================
+# Gating safety (F14)
+# =====================================================================
+
+def assign_states_with_confidence(
+    posteriors: np.ndarray,
+    threshold: float = 0.8,
+) -> np.ndarray:
+    """Assign each trial to its argmax state, except return -1 when no state's
+    posterior exceeds *threshold*.
+
+    The purpose is gating safety for downstream neural analyses: trials with
+    ambiguous posteriors (e.g., γ = [0.45, 0.55, 0.0]) should not contribute
+    to any per-state PSTH or decoder, because they reflect a mixed regime.
+
+    Parameters
+    ----------
+    posteriors : ndarray (T, K)
+        Posterior state probabilities (each row sums to ~1).
+    threshold : float, default 0.8
+        Minimum γ_max to accept the argmax assignment.
+
+    Returns
+    -------
+    states : ndarray (T,) int
+        argmax-assigned state per trial, with -1 where γ_max <= threshold.
+
+    Notes
+    -----
+    Use this for neural-conditioning calls (per-state PSTHs, decoders, …).
+    For behavioral characterization (state fractions, dwell times), prefer
+    the raw Viterbi sequence from ``GLMHMM.most_likely_states``.
+    """
+    posteriors = np.asarray(posteriors)
+    if posteriors.ndim != 2:
+        raise ValueError(
+            f"posteriors must be a 2D array (T, K); got ndim={posteriors.ndim}."
+        )
+    if posteriors.size == 0:
+        return np.empty(0, dtype=int)
+    max_prob = posteriors.max(axis=1)
+    assigned = posteriors.argmax(axis=1).astype(int)
+    assigned[max_prob <= threshold] = -1
+    return assigned
+
+
+# =====================================================================
 # Session decoding (key downstream interface)
 # =====================================================================
 
@@ -923,13 +969,23 @@ def decode_session(
     model: GLMHMM,
     session: Session,
     state_labels: Optional[List[str]] = None,
+    confidence_threshold: Optional[float] = None,
 ) -> pd.DataFrame:
     """Decode a session: return a DataFrame with per-trial state assignments.
 
     Columns added to the trial DataFrame:
       hmm_state          : int    (Viterbi)
       hmm_state_label    : str    (if *state_labels* provided)
-      p_state_0 … K-1   : float  (posterior probabilities)
+      p_state_0 … K-1    : float  (posterior probabilities)
+      hmm_state_gated    : int    (only if confidence_threshold given;
+                                   -1 where γ_max <= threshold)
+
+    Parameters
+    ----------
+    confidence_threshold : float, optional
+        If given, also add ``hmm_state_gated`` column using
+        ``assign_states_with_confidence`` for gating-safe neural analyses.
+        Typical value: 0.8.
 
     The returned DataFrame only contains valid (non-excluded) trials.
     """
@@ -946,5 +1002,10 @@ def decode_session(
         df["hmm_state_label"] = [state_labels[s] for s in states]
     for k in range(model.n_states):
         df[f"p_state_{k}"] = posteriors[:, k]
+
+    if confidence_threshold is not None:
+        df["hmm_state_gated"] = assign_states_with_confidence(
+            posteriors, threshold=confidence_threshold
+        )
 
     return df
