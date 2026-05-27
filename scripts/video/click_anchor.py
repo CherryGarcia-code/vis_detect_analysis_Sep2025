@@ -260,6 +260,90 @@ def run_stage2(
     )
 
 
+# ---------------------------------------------------------------------------
+# Barcode montage renderer
+# ---------------------------------------------------------------------------
+
+
+def _pick_sampled_trials(n_trials: int, n_rows: int = MONTAGE_ROWS) -> list[int]:
+    """Return ``n_rows`` evenly spaced trial indices including 0 and n_trials-1."""
+    if n_trials <= n_rows:
+        return list(range(n_trials))
+    return [int(round(i * (n_trials - 1) / (n_rows - 1))) for i in range(n_rows)]
+
+
+def render_barcode_montage(
+    session_name: str,
+    anchor: dict,
+    baseline_on: np.ndarray,
+    video_path: str,
+    ts_ms: np.ndarray,
+    fps: float,
+    out_path: str,
+) -> None:
+    """Render a 5-row x 7-column montage of predicted-onset frames per sampled trial.
+
+    Each row corresponds to a sampled trial; columns show frames at predicted
+    onset +/- 3 frames. Centre column gets a red border (the predicted-onset
+    frame); the user inspects whether the grating appears in the centre cells.
+    """
+    n_trials = len(baseline_on)
+    trial_indices = _pick_sampled_trials(n_trials, MONTAGE_ROWS)
+    implied_offset_s = float(anchor["implied_offset_s"])
+
+    col_offsets = list(range(-(MONTAGE_COLS // 2), MONTAGE_COLS // 2 + 1))  # [-3..3]
+
+    fig, axes = plt.subplots(
+        MONTAGE_ROWS, MONTAGE_COLS,
+        figsize=(MONTAGE_COLS * 1.8, MONTAGE_ROWS * 2.0),
+        gridspec_kw=dict(wspace=0.05, hspace=0.25),
+    )
+    title = (
+        f"Anchor-barcode montage - {session_name}\n"
+        f"anchor trial 0 @ frame {anchor['video_frame_idx']} "
+        f"(NI-DAQ {anchor['nidaq_baseline_on_s']:.3f}s, "
+        f"implied offset {implied_offset_s:.3f}s) - {n_trials} trials"
+    )
+    fig.suptitle(title, fontsize=10)
+
+    n_frames = len(ts_ms)
+
+    for r, ti in enumerate(trial_indices):
+        # Predicted video frame for this trial: where ts_ms is closest to
+        # (baseline_on[ti] + implied_offset_s) * 1000.
+        target_ms = (float(baseline_on[ti]) + implied_offset_s) * 1000.0
+        target_ms_clamped = float(np.clip(target_ms, ts_ms[0], ts_ms[-1]))
+        centre_frame = int(np.argmin(np.abs(ts_ms - target_ms_clamped)))
+        indices = [
+            int(np.clip(centre_frame + off, 0, n_frames - 1)) for off in col_offsets
+        ]
+        frames = load_cropped_frames(video_path, indices)
+
+        for c, (ax, frame, fidx, off) in enumerate(zip(axes[r], frames, indices, col_offsets)):
+            ax.imshow(frame, cmap="gray", vmin=0, vmax=255)
+            ax.set_xticks([]); ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+            if off == 0:
+                for spine in ax.spines.values():
+                    spine.set_visible(True)
+                    spine.set_edgecolor("red")
+                    spine.set_linewidth(2.0)
+            if r == 0:
+                offset_ms = off / fps * 1000.0
+                ax.set_title(f"{offset_ms:+.0f}ms", fontsize=8)
+
+        # Row label (left side).
+        axes[r, 0].set_ylabel(
+            f"trial {ti}\nNI {float(baseline_on[ti]):.2f}s",
+            fontsize=8, rotation=0, ha="right", va="center", labelpad=30,
+        )
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    fig.savefig(out_path, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> int:
     """Entry point. Implemented in Task 5."""
     raise NotImplementedError("Wired up in Task 5.")
