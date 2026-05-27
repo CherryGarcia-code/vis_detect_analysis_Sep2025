@@ -133,8 +133,135 @@ def load_cropped_frames(
 
 
 # ---------------------------------------------------------------------------
-# Placeholders for later tasks (filled in by Tasks 3-5).
+# Interactive two-stage click UI
 # ---------------------------------------------------------------------------
+
+import matplotlib
+matplotlib.use("TkAgg")  # interactive backend
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+
+
+def _show_grid_and_get_click(
+    frames: list[np.ndarray],
+    frame_indices: Sequence[int],
+    title: str,
+    centre_frame: int,
+    fps: float,
+) -> Optional[int]:
+    """Show a 5x10 grid of *frames* and wait for one click.
+
+    Returns the absolute video frame index of the clicked cell, or ``None``
+    if the user pressed ESC.
+
+    Cell labels show "fr <abs_idx>\n<offset>ms" where offset is relative to
+    *centre_frame*. Centre cell gets a yellow border.
+    """
+    assert len(frames) == N_CELLS == len(frame_indices)
+
+    fig, axes = plt.subplots(
+        GRID_ROWS, GRID_COLS, figsize=(15, 8.5),
+        gridspec_kw=dict(wspace=0.05, hspace=0.25),
+    )
+    fig.suptitle(title, fontsize=10)
+
+    centre_idx = int(np.argmin(np.abs(np.asarray(frame_indices) - centre_frame)))
+
+    for i, (ax, frame, fidx) in enumerate(zip(axes.flat, frames, frame_indices)):
+        ax.imshow(frame, cmap="gray", vmin=0, vmax=255)
+        offset_ms = (int(fidx) - int(centre_frame)) / fps * 1000.0
+        ax.set_title(f"fr {fidx}\n{offset_ms:+.0f}ms", fontsize=7)
+        ax.set_xticks([]); ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        if i == centre_idx:
+            for spine in ax.spines.values():
+                spine.set_visible(True)
+                spine.set_edgecolor("gold")
+                spine.set_linewidth(2.0)
+
+    # State captured by handlers via mutable list (closures in Python).
+    result: list[Optional[int]] = [None]
+    done: list[bool] = [False]
+
+    def on_click(event):
+        if event.inaxes is None:
+            return
+        # Identify which axes was clicked.
+        for i, ax in enumerate(axes.flat):
+            if event.inaxes is ax:
+                # Confirm visually: draw a red box around the clicked axes.
+                for spine in ax.spines.values():
+                    spine.set_visible(True)
+                    spine.set_edgecolor("red")
+                    spine.set_linewidth(3.0)
+                fig.canvas.draw_idle()
+                result[0] = int(frame_indices[i])
+                # Schedule close after a short pause so the user sees the confirmation.
+                fig.canvas.start_event_loop(0.5)
+                done[0] = True
+                plt.close(fig)
+                return
+
+    def on_key(event):
+        if event.key == "escape":
+            result[0] = None
+            done[0] = True
+            plt.close(fig)
+
+    cid_click = fig.canvas.mpl_connect("button_press_event", on_click)
+    cid_key = fig.canvas.mpl_connect("key_press_event", on_key)
+
+    plt.show()  # blocks until plt.close(fig)
+
+    fig.canvas.mpl_disconnect(cid_click)
+    fig.canvas.mpl_disconnect(cid_key)
+
+    return result[0]
+
+
+def run_stage1(
+    video_path: str,
+    predicted: int,
+    fps: float,
+    n_frames: int,
+) -> Optional[int]:
+    """Stage 1 - coarse 50-second window, 1 frame per second."""
+    indices = stage1_frame_indices(predicted, fps, n_frames)
+    frames = load_cropped_frames(video_path, indices)
+    return _show_grid_and_get_click(
+        frames=frames,
+        frame_indices=indices,
+        title=(
+            "Stage 1 - Coarse scan. Click the cell where the grating first "
+            "appears in the eye. ESC to cancel.\n"
+            f"(predicted onset = frame {predicted}; 1 s between cells; gold = predicted)"
+        ),
+        centre_frame=predicted,
+        fps=fps,
+    )
+
+
+def run_stage2(
+    video_path: str,
+    stage1_click: int,
+    fps: float,
+    n_frames: int,
+) -> Optional[int]:
+    """Stage 2 - fine +/-500ms window, 1 frame per cell."""
+    indices = stage2_frame_indices(stage1_click, fps, n_frames)
+    frames = load_cropped_frames(video_path, indices)
+    return _show_grid_and_get_click(
+        frames=frames,
+        frame_indices=indices,
+        title=(
+            "Stage 2 - Fine pick. Click the exact frame where the grating "
+            "appears. ESC to cancel.\n"
+            f"(stage-1 click = frame {stage1_click}; 1 frame between cells; gold = stage-1 click)"
+        ),
+        centre_frame=stage1_click,
+        fps=fps,
+    )
 
 
 def main() -> int:
