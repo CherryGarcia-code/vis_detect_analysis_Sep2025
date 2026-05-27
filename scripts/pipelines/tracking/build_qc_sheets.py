@@ -68,11 +68,13 @@ def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
     """Outer loop by session.  Returns dict[uid -> UIDIntermediate]."""
 
     def _norm_session(name) -> str:
-        """Normalize session name to 8-char zero-padded form.
+        """Normalize session name to 8-char zero-padded DDMMYYYY string.
 
-        The manifest stores session_name as int (so '1072025' from astype(str), not
-        '01072025'). The cache's SessionRecord.session_name is the raw 7/8-char
-        filesystem string. Lookups need both sides in the same form.
+        unit_index.csv stores 'session' as int64, so July sessions like
+        1072025 become the 7-char string '1072025' after astype(str). The
+        staging manifest stores session_name as an 8-char string already
+        ('01072025'). Both sides must be zfill(8) before comparison or
+        chronological-sort lookups silently miss.
         """
         return str(name).zfill(8)
 
