@@ -103,3 +103,67 @@ def test_predicted_frame_idx_clamps_to_last_frame_when_beyond():
         baseline_on_s=100.0, coarse_offset_s=0.0, ts_ms=ts_ms
     )
     assert frame_idx == len(ts_ms) - 1
+
+
+# ---------------------------------------------------------------------------
+# Grid-math helpers in scripts/video/click_anchor.py
+# ---------------------------------------------------------------------------
+
+
+def _import_click_anchor():
+    """Import the script module by file path (it lives outside the import-path)."""
+    import importlib.util
+    import os
+    # tests/test_video_sync_anchor.py → project_root = parent of tests/
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    spec_path = os.path.join(project_root, "scripts", "video", "click_anchor.py")
+    spec = importlib.util.spec_from_file_location("click_anchor", spec_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_stage1_frame_indices_basic():
+    ca = _import_click_anchor()
+    # 50 fps, video has 5000 frames (100 s of video)
+    n_frames = 5000
+    # predicted at frame 1000 (20 s into video)
+    # stage 1 covers [predicted - 15 s, predicted + 35 s]
+    # = frames [250, 2750], 50 cells at 50-frame step → cells span 2500 frames
+    idx = ca.stage1_frame_indices(predicted=1000, fps=50.0, n_frames=n_frames)
+    assert len(idx) == 50
+    assert idx[0] == 250
+    assert idx[-1] == 250 + 49 * 50  # 49 steps from start
+    # spacing is exactly fps frames (1 s)
+    assert all(idx[i + 1] - idx[i] == 50 for i in range(len(idx) - 1))
+
+
+def test_stage1_frame_indices_clamps_at_start():
+    ca = _import_click_anchor()
+    # predicted very early → cannot go 15 s back; start clamped to 0
+    idx = ca.stage1_frame_indices(predicted=100, fps=50.0, n_frames=5000)
+    assert idx[0] == 0
+
+
+def test_stage1_frame_indices_clamps_at_end():
+    ca = _import_click_anchor()
+    # predicted very late → last cell clamped to last frame
+    idx = ca.stage1_frame_indices(predicted=4990, fps=50.0, n_frames=5000)
+    assert idx[-1] <= 4999
+    assert len(idx) == 50  # always 50 cells even when clamped
+
+
+def test_stage2_frame_indices_centered():
+    ca = _import_click_anchor()
+    # 50 fps, ±25 frames around clicked frame → 50 cells
+    idx = ca.stage2_frame_indices(stage1_click=1000, fps=50.0, n_frames=5000)
+    assert len(idx) == 50
+    assert idx[0] == 1000 - 25
+    assert idx[-1] == 1000 + 24
+
+
+def test_stage2_frame_indices_clamps():
+    ca = _import_click_anchor()
+    idx = ca.stage2_frame_indices(stage1_click=10, fps=50.0, n_frames=5000)
+    assert idx[0] == 0
+    assert len(idx) == 50
