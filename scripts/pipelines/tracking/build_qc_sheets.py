@@ -39,7 +39,7 @@ from visdetect.analysis.tracking_qc import (        # noqa: E402
     find_stable_subset,
 )
 from visdetect.core.session import load_session                 # noqa: E402
-from visdetect.suite.loader import load_staging_manifest        # noqa: E402
+from visdetect.suite.loader import load_staging_manifest, load_filtered_manifest  # noqa: E402
 
 from qc_sheet_figures import write_uid_pdf                       # noqa: E402
 
@@ -66,7 +66,17 @@ def _session_pkl(session_name: str) -> Optional[Path]:
 def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
                 manifest: pd.DataFrame) -> Dict[int, UIDIntermediate]:
     """Outer loop by session.  Returns dict[uid -> UIDIntermediate]."""
-    stage_by_session = {str(r["session_name"]): str(r["stage"])
+
+    def _norm_session(name) -> str:
+        """Normalize session name to 8-char zero-padded form.
+
+        The manifest stores session_name as int (so '1072025' from astype(str), not
+        '01072025'). The cache's SessionRecord.session_name is the raw 7/8-char
+        filesystem string. Lookups need both sides in the same form.
+        """
+        return str(name).zfill(8)
+
+    stage_by_session = {_norm_session(r["session_name"]): str(r["stage"])
                         for _, r in manifest.iterrows()}
 
     cohort_uids = set(cohort["global_uid"].astype(int).tolist())
@@ -89,9 +99,11 @@ def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
             sessions=[],
         )
 
-    sessions_chrono = manifest["session_name"].astype(str).tolist()
-    sess_set = sorted({s for ksmap in uid_to_ks.values() for s in ksmap.keys()},
-                      key=lambda s: sessions_chrono.index(s) if s in sessions_chrono else 1e9)
+    sessions_chrono = [_norm_session(n) for n in manifest["session_name"].tolist()]
+    sess_set = sorted(
+        {s for ksmap in uid_to_ks.values() for s in ksmap.keys()},
+        key=lambda s: sessions_chrono.index(_norm_session(s)) if _norm_session(s) in sessions_chrono else 1e9,
+    )
 
     for sess in sess_set:
         pkl = _session_pkl(sess)
@@ -104,7 +116,7 @@ def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
         ks_ids_here = [uid_to_ks[u][sess] for u in uids_here]
         records = extract_session_records(
             S, ks_ids_here, session_name=sess,
-            stage=stage_by_session.get(sess, "Learning"),
+            stage=stage_by_session.get(_norm_session(sess), "Unknown"),
             raw_wf_root=RAW_WF_ROOT, channel_positions=chan_pos,
         )
         for u in uids_here:
@@ -119,7 +131,7 @@ def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
     order_idx = {s: i for i, s in enumerate(sessions_chrono)}
     for uid in intermediates:
         intermediates[uid].sessions.sort(
-            key=lambda r: order_idx.get(r.session_name, 1e9)
+            key=lambda r: order_idx.get(_norm_session(r.session_name), 1e9)
         )
     return intermediates
 
@@ -182,7 +194,12 @@ def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print("Loading manifest + cohort ...", flush=True)
-    manifest = load_staging_manifest(qc_only=True, apply_filter=True)
+    # Tracking-QC uses a looser filter than behavioral analyses: keeps engaged
+    # sessions (>=150 trials) regardless of d', so early-Naive/Learning sessions
+    # with poor performance but enough trials are still tracked across stages.
+    # min_dprime=0.8 (the SDT default) wrongly excludes the very sessions needed
+    # for cross-stage tracking studies. See spec §3.4.
+    manifest = load_filtered_manifest(min_trials=150, min_dprime=None)
     unit_index_df = pd.read_csv(UNIT_INDEX)
     cohort = select_long_tracks(UNIT_INDEX, ISI_STATS, min_span=10)
     cohort = annotate_naive_to_expert(cohort, manifest)
