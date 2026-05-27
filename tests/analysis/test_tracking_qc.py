@@ -484,7 +484,7 @@ def test_depth_std_um_corrected_too_few_returns_nan():
     assert np.isnan(qc.depth_std_um_corrected(uid, {"a": 0.0}))
 
 
-# ─── ISI histogram cross-session correlation (7th badge) ─────────────
+# ─── ISI histogram cross-session correlation (5th badge in composite) ─
 
 def test_baseline_isi_hist_corr_identical_returns_one():
     h = np.array([0.0, 1.0, 2.0, 3.0, 2.0, 1.0, 0.0])

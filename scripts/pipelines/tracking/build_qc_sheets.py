@@ -15,6 +15,7 @@ import argparse
 import gc
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -77,7 +78,6 @@ def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
         """
         return str(name).zfill(8)
 
-    from datetime import datetime
     def _parse_session_date(name) -> datetime:
         """Parse session_name as a DDMMYYYY date.
 
@@ -185,7 +185,7 @@ def compute_uid_metrics(uid: UIDIntermediate,
         "fr_cv":            fr_cv(rates),
         "isi_peak_agree":   isi_peak_agreement(isi_hists),
         "func_resp_corr":   baseline_psth_corr(baseline_psths),
-        "isi_hist_corr":    baseline_isi_hist_corr(isi_hists),   # NEW
+        "isi_hist_corr":    baseline_isi_hist_corr(isi_hists),
     }
     if drift_offsets:
         out["depth_std_corrected_um"] = depth_std_um_corrected(uid, drift_offsets)
@@ -367,7 +367,7 @@ def main() -> int:
         b_fr    = badge_fr(metrics["fr_cv"])
         b_peak  = badge_isi_peak(metrics["isi_peak_agree"])     # kept for CSV transparency only
         b_func  = badge_func_resp(metrics["func_resp_corr"])
-        b_hist  = badge_isi_hist_corr(metrics["isi_hist_corr"])   # NEW
+        b_hist  = badge_isi_hist_corr(metrics["isi_hist_corr"])
         verdict_csv = composite_verdict([b_isi, b_depth, b_wave, b_fr, b_hist, b_func])
         rows.append({
             "global_uid": uid,
@@ -381,14 +381,14 @@ def main() -> int:
             "wave_corr": metrics["wave_corr"],
             "fr_cv": metrics["fr_cv"],
             "isi_peak_agree":      metrics["isi_peak_agree"],
-            "isi_hist_corr":       metrics["isi_hist_corr"],          # NEW
+            "isi_hist_corr":       metrics["isi_hist_corr"],
             "func_resp_corr":      metrics["func_resp_corr"],
             "badge_isi":           b_isi,
             "badge_depth":         b_depth,
             "badge_wave":          b_wave,
             "badge_fr":            b_fr,
             "badge_isi_peak":      b_peak,
-            "badge_isi_hist_corr": b_hist,                             # NEW
+            "badge_isi_hist_corr": b_hist,
             "badge_func_resp":     b_func,
             "verdict": verdict_csv,
             "verdict_pdf": verdict_pdf,
@@ -438,7 +438,7 @@ def main() -> int:
             "trimmed_wave_corr":               tm["wave_corr"],
             "trimmed_fr_cv":                   tm["fr_cv"],
             "trimmed_isi_peak_agree":          tm["isi_peak_agree"],
-            "trimmed_isi_hist_corr":           tm["isi_hist_corr"],       # NEW
+            "trimmed_isi_hist_corr":           tm["isi_hist_corr"],
             "trimmed_func_resp_corr":          tm["func_resp_corr"],
             "original_verdict": original_verdict,
             "trimmed_verdict": tv,
