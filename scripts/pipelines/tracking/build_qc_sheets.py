@@ -154,7 +154,7 @@ def _depth_for_badge(metrics: Dict[str, float]) -> float:
 def compute_uid_metrics(uid: UIDIntermediate,
                          drift_offsets: Optional[Dict[str, float]] = None,
                          ) -> Dict[str, float]:
-    """Depth std, waveform corr, FR CV, ISI peak agreement, functional-response corr.
+    """Depth std, waveform corr, FR CV, ISI peak agreement, functional-response corr, ISI hist corr.
 
     If `drift_offsets` is provided, also compute depth_std_corrected_um (informational
     only — not used by badge logic yet).
@@ -345,9 +345,11 @@ def main() -> int:
             n_kept=len(trim["kept_indices"]),
             trimmed_verdict=str(trim["trimmed_verdict"]),
         )
-        # CSV verdict incorporates the 5th badge (ISI peak-agreement) and the
-        # 6th badge (Baseline_ON PSTH shape correlation) so the cross-session
-        # bimodality and functional-tuning detectors are auditable.
+        # CSV verdict incorporates the 5th badge (ISI histogram cross-session
+        # correlation) and the 6th badge (Baseline_ON PSTH shape correlation)
+        # so the full-shape bimodality and functional-tuning detectors are
+        # auditable. badge_isi_peak is retained in the CSV for diagnostic
+        # transparency but is NOT part of the composite.
         # Intentionally may differ from verdict_pdf — pdf_csv_disagree flags those rows.
         b_isi   = badge_isi(isi)
         b_depth = badge_depth(_depth_for_badge(metrics))
