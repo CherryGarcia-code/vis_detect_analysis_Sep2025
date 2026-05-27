@@ -21,6 +21,11 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from visdetect.suite.config import STAGE_COLORS, STAGE_ORDER  # noqa: E402
 from visdetect.suite.plotting import setup_style                # noqa: E402
+
+# Local extension: tracking_qc adds "Unknown" stage (sessions not in the
+# tracking-QC filter, see spec §3.4). Light grey distinguishes from the
+# dimmed-trace grey (0.7) used for trimmed-but-not-Unknown sessions.
+STAGE_COLORS_LOCAL = {**STAGE_COLORS, "Unknown": "#bbbbbb"}
 from visdetect.analysis.tracking_qc import (                    # noqa: E402
     UIDIntermediate, SessionRecord,
     badge_isi, badge_depth, badge_waveform, badge_fr, composite_verdict,
@@ -90,7 +95,7 @@ def draw_header(ax, uid: UIDIntermediate,
         bar_y = 0.30
         bar_h = 0.18
         for i, rec in enumerate(uid.sessions):
-            color = STAGE_COLORS.get(rec.stage, "#888888")
+            color = STAGE_COLORS_LOCAL.get(rec.stage, "#888888")
             ax.add_patch(Rectangle((i / n, bar_y), 1.0 / n, bar_h,
                                     transform=ax.transAxes,
                                     facecolor=color, edgecolor="none"))
@@ -115,7 +120,7 @@ def draw_header(ax, uid: UIDIntermediate,
 
 
 def _waveform_color(stage: str) -> str:
-    return STAGE_COLORS.get(stage, "#888888")
+    return STAGE_COLORS_LOCAL.get(stage, "#888888")
 
 
 def _scatter_kept_dropped(ax, xs, ys, colors, dropped_set):
@@ -289,8 +294,8 @@ def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str,
 
     mat, centers, _stages, _ = data
     vmax = np.percentile(mat, 99)
-    ax.imshow(mat, aspect="auto", origin="lower", cmap="magma",
-              extent=[centers[0], centers[-1], 0, mat.shape[0]],
+    ax.imshow(mat, aspect="auto", origin="upper", cmap="magma",
+              extent=[centers[0], centers[-1], mat.shape[0], 0],
               vmin=0, vmax=max(vmax, 1e-6))
     ax.axvline(0, color="white", linewidth=0.8, alpha=0.7)
     ax.set_title(title, fontsize=10)
@@ -340,7 +345,7 @@ def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
         mask = np.array([s == st for s in stages])
         if mask.sum() == 0:
             continue
-        ax.plot(centers, mat[mask].mean(axis=0), color=STAGE_COLORS[st],
+        ax.plot(centers, mat[mask].mean(axis=0), color=STAGE_COLORS_LOCAL[st],
                 linewidth=1.2, label=st)
         has_label = True
 
@@ -355,7 +360,7 @@ def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
                 if mask.sum() == 0:
                     continue
                 ax.plot(mcenters, mmat[mask].mean(axis=0),
-                        color=STAGE_COLORS[st], linewidth=1.0,
+                        color=STAGE_COLORS_LOCAL[st], linewidth=1.0,
                         linestyle="--", alpha=0.7)
 
     ax.axvline(0, color="0.5", linewidth=0.7)
