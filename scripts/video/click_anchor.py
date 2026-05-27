@@ -137,9 +137,8 @@ def load_cropped_frames(
 # ---------------------------------------------------------------------------
 
 import matplotlib
-matplotlib.use("TkAgg")  # interactive backend
+matplotlib.use("TkAgg", force=True)  # interactive backend; force=True for resilience vs other modules' Agg setup
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 
 
 def _show_grid_and_get_click(
@@ -182,7 +181,6 @@ def _show_grid_and_get_click(
 
     # State captured by handlers via mutable list (closures in Python).
     result: list[Optional[int]] = [None]
-    done: list[bool] = [False]
 
     def on_click(event):
         if event.inaxes is None:
@@ -199,14 +197,12 @@ def _show_grid_and_get_click(
                 result[0] = int(frame_indices[i])
                 # Schedule close after a short pause so the user sees the confirmation.
                 fig.canvas.start_event_loop(0.5)
-                done[0] = True
                 plt.close(fig)
                 return
 
     def on_key(event):
         if event.key == "escape":
             result[0] = None
-            done[0] = True
             plt.close(fig)
 
     cid_click = fig.canvas.mpl_connect("button_press_event", on_click)
