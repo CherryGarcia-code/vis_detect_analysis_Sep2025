@@ -57,6 +57,14 @@ FUNC_RESP_PASS: float = 0.40
 FUNC_RESP_WARN: float = 0.15
 FUNC_RESP_MIN_PSTH_STD: float = 0.5   # Hz; below this, PSTHs are too flat to discriminate
 
+# ISI histogram cross-session correlation (richer than badge_isi_peak which only
+# looks at argmax bin). Captures full ISI distribution shape — handles bursting
+# cells (with consistent bimodal ISIs) correctly. Calibrated to BG_046 cohort
+# distribution (May 2026): gold-standard UIDs ~0.97-0.99, anti-drift suspect
+# ~0.74, known matching-failures 0.58-0.61.
+ISI_HIST_CORR_PASS: float = 0.85
+ISI_HIST_CORR_WARN: float = 0.65
+
 # ─── Change-size pools for Change_ON heatmaps ─────────────────────────
 # Change-size pools for Change_ON heatmaps.
 # Deliberately differs from visdetect.analysis.constants.{BIG,SMALL}_CHANGE_SIZES:
@@ -214,6 +222,47 @@ def baseline_psth_corr(per_session_psths: Sequence[Optional[np.ndarray]]) -> flo
     if float(np.median(per_session_std)) < FUNC_RESP_MIN_PSTH_STD:
         return float("nan")
     # Pearson r via mean-subtract + L2-normalize
+    centered = stack - stack.mean(axis=1, keepdims=True)
+    norms = np.linalg.norm(centered, axis=1, keepdims=True)
+    norms[norms < 1e-12] = 1.0
+    unit = centered / norms
+    n = unit.shape[0]
+    pairs = [float(np.dot(unit[i], unit[j])) for i in range(n) for j in range(i + 1, n)]
+    return float(np.median(pairs))
+
+
+def baseline_isi_hist_corr(per_session_isi_hists: Sequence[np.ndarray]) -> float:
+    """Median pairwise Pearson r of per-session log-ISI histograms.
+
+    Captures full ISI distribution shape — handles bursting cells (with
+    consistent bimodal ISIs) correctly, unlike isi_peak_agreement which looks
+    only at the argmax bin. Architecturally mirrors waveform_corr.
+
+    Parameters
+    ----------
+    per_session_isi_hists : sequence of (n_bins,) ndarrays, or None
+        Per-session log-ISI histograms. None / NaN-only / flat (std < 1e-12)
+        hists are dropped.
+
+    Returns
+    -------
+    float
+        Median over the n*(n-1)/2 pairwise Pearson r values. NaN if fewer than
+        2 valid sessions remain after dropping.
+    """
+    arrs: List[np.ndarray] = []
+    for h in per_session_isi_hists:
+        if h is None:
+            continue
+        a = np.asarray(h, dtype=float)
+        if a.size == 0 or np.all(np.isnan(a)) or float(np.std(a)) < 1e-12:
+            continue
+        arrs.append(a)
+    if len(arrs) < 2:
+        return float("nan")
+    min_len = min(a.size for a in arrs)
+    stack = np.stack([a[:min_len] for a in arrs])
+    # Pearson r via mean-subtract + L2-normalize → pairwise dot products
     centered = stack - stack.mean(axis=1, keepdims=True)
     norms = np.linalg.norm(centered, axis=1, keepdims=True)
     norms[norms < 1e-12] = 1.0
@@ -480,6 +529,17 @@ def badge_func_resp(median_r: float) -> str:
     if not np.isfinite(median_r):
         return "pass"
     return _badge_threshold(median_r, FUNC_RESP_PASS, FUNC_RESP_WARN, direction="high")
+
+
+def badge_isi_hist_corr(r: float) -> str:
+    """ISI histogram cross-session correlation badge.
+
+    NaN → "fail" (standard pattern for ISI metrics; distinct from badge_func_resp
+    which is lenient on NaN). NaN here means we couldn't compute the metric,
+    which is itself a signal that something is wrong with the unit.
+    """
+    return _badge_threshold(r, ISI_HIST_CORR_PASS, ISI_HIST_CORR_WARN,
+                            direction="high")
 
 
 def composite_verdict(badges: Sequence[str]) -> str:

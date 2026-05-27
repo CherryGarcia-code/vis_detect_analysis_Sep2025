@@ -482,3 +482,54 @@ def test_depth_std_um_corrected_too_few_returns_nan():
         sessions=recs,
     )
     assert np.isnan(qc.depth_std_um_corrected(uid, {"a": 0.0}))
+
+
+# ─── ISI histogram cross-session correlation (7th badge) ─────────────
+
+def test_baseline_isi_hist_corr_identical_returns_one():
+    h = np.array([0.0, 1.0, 2.0, 3.0, 2.0, 1.0, 0.0])
+    hists = [h.copy() for _ in range(5)]
+    assert qc.baseline_isi_hist_corr(hists) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_baseline_isi_hist_corr_handles_magnitude_scaling():
+    # Same shape, different magnitudes — Pearson r should still be 1.
+    base = np.array([1.0, 3.0, 5.0, 3.0, 1.0])
+    hists = [base, base * 2.0, base * 0.5]
+    assert qc.baseline_isi_hist_corr(hists) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_baseline_isi_hist_corr_flipped_polarity_median():
+    base = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
+    # pairs: (a, -a) = -1, (a, a) = +1, (-a, a) = -1 → median = -1
+    hists = [base, -base, base]
+    assert qc.baseline_isi_hist_corr(hists) == pytest.approx(-1.0, abs=1e-6)
+
+
+def test_baseline_isi_hist_corr_drops_none_sessions():
+    base = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
+    hists = [base, None, base, None, base]
+    # 3 valid sessions, all identical → r = 1
+    assert qc.baseline_isi_hist_corr(hists) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_baseline_isi_hist_corr_drops_flat_sessions():
+    flat = np.zeros(5)
+    base = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
+    # 2 valid (after dropping flat), both identical → r = 1
+    assert qc.baseline_isi_hist_corr([base, flat, base]) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_baseline_isi_hist_corr_too_few_returns_nan():
+    base = np.array([1.0, 2.0, 3.0])
+    assert np.isnan(qc.baseline_isi_hist_corr([base]))
+    assert np.isnan(qc.baseline_isi_hist_corr([base, None]))
+
+
+def test_badge_isi_hist_corr_thresholds():
+    assert qc.badge_isi_hist_corr(0.95) == "pass"
+    assert qc.badge_isi_hist_corr(qc.ISI_HIST_CORR_PASS) == "pass"     # 0.85 boundary
+    assert qc.badge_isi_hist_corr(0.75) == "warn"
+    assert qc.badge_isi_hist_corr(qc.ISI_HIST_CORR_WARN) == "warn"     # 0.65 boundary
+    assert qc.badge_isi_hist_corr(0.40) == "fail"
+    assert qc.badge_isi_hist_corr(float("nan")) == "fail"
