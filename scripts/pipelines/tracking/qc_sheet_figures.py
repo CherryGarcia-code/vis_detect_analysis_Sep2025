@@ -21,17 +21,17 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from visdetect.suite.config import STAGE_COLORS, STAGE_ORDER  # noqa: E402
 from visdetect.suite.plotting import setup_style                # noqa: E402
-
-# Local extension: tracking_qc adds "Unknown" stage (sessions not in the
-# tracking-QC filter, see spec §3.4). Light grey distinguishes from the
-# dimmed-trace grey (0.7) used for trimmed-but-not-Unknown sessions.
-STAGE_COLORS_LOCAL = {**STAGE_COLORS, "Unknown": "#bbbbbb"}
 from visdetect.analysis.tracking_qc import (                    # noqa: E402
     UIDIntermediate, SessionRecord,
     badge_isi, badge_depth, badge_waveform, badge_fr, composite_verdict,
 )
 
 setup_style()
+
+# Local extension: tracking_qc adds "Unknown" stage (sessions not in the
+# tracking-QC filter, see spec §3.4). Light grey distinguishes from the
+# dimmed-trace grey (0.7) used for trimmed-but-not-Unknown sessions.
+STAGE_COLORS_LOCAL = {**STAGE_COLORS, "Unknown": "#bbbbbb"}
 
 # Per-criterion colors
 BADGE_COLORS = {"pass": "#2d5a2d", "warn": "#5a5a2d", "fail": "#5a2d2d"}
