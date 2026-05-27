@@ -29,12 +29,11 @@ from visdetect.analysis.tracking_qc import (        # noqa: E402
     select_long_tracks, annotate_naive_to_expert,
     extract_session_records, load_channel_positions,
     load_isi_scores, load_um_pair_scores,
-    depth_std_um, waveform_corr, fr_cv, isi_peak_agreement,
-    baseline_psth_corr,
+    depth_std_um, waveform_corr, fr_cv,
+    isi_peak_agreement, baseline_psth_corr, baseline_isi_hist_corr,
+    badge_isi, badge_depth, badge_waveform, badge_fr,
+    badge_isi_peak, badge_func_resp, badge_isi_hist_corr, composite_verdict,
     estimate_session_drift, depth_std_um_corrected,
-    badge_isi, badge_depth, badge_waveform, badge_fr, badge_isi_peak,
-    badge_func_resp,
-    composite_verdict,
     save_cache, load_cache,
     find_stable_subset,
 )
@@ -176,6 +175,7 @@ def compute_uid_metrics(uid: UIDIntermediate,
         "fr_cv":            fr_cv(rates),
         "isi_peak_agree":   isi_peak_agreement(isi_hists),
         "func_resp_corr":   baseline_psth_corr(baseline_psths),
+        "isi_hist_corr":    baseline_isi_hist_corr(isi_hists),   # NEW
     }
     if drift_offsets:
         out["depth_std_corrected_um"] = depth_std_um_corrected(uid, drift_offsets)
@@ -309,7 +309,7 @@ def main() -> int:
                 badge_depth(_depth_for_badge(tm)),
                 badge_waveform(tm["wave_corr"]),
                 badge_fr(tm["fr_cv"]),
-                badge_isi_peak(tm["isi_peak_agree"]),
+                badge_isi_hist_corr(tm["isi_hist_corr"]),   # was badge_isi_peak(tm["isi_peak_agree"])
                 badge_func_resp(tm["func_resp_corr"]),
             ])
         else:
@@ -353,9 +353,10 @@ def main() -> int:
         b_depth = badge_depth(_depth_for_badge(metrics))
         b_wave  = badge_waveform(metrics["wave_corr"])
         b_fr    = badge_fr(metrics["fr_cv"])
-        b_peak  = badge_isi_peak(metrics["isi_peak_agree"])
+        b_peak  = badge_isi_peak(metrics["isi_peak_agree"])     # kept for CSV transparency only
         b_func  = badge_func_resp(metrics["func_resp_corr"])
-        verdict_csv = composite_verdict([b_isi, b_depth, b_wave, b_fr, b_peak, b_func])
+        b_hist  = badge_isi_hist_corr(metrics["isi_hist_corr"])   # NEW
+        verdict_csv = composite_verdict([b_isi, b_depth, b_wave, b_fr, b_hist, b_func])
         rows.append({
             "global_uid": uid,
             "span": iv.span,
@@ -367,14 +368,16 @@ def main() -> int:
             "depth_std_corrected_um": metrics["depth_std_corrected_um"],
             "wave_corr": metrics["wave_corr"],
             "fr_cv": metrics["fr_cv"],
-            "isi_peak_agree": metrics["isi_peak_agree"],
-            "func_resp_corr": metrics["func_resp_corr"],
-            "badge_isi":       b_isi,
-            "badge_depth":     b_depth,
-            "badge_wave":      b_wave,
-            "badge_fr":        b_fr,
-            "badge_isi_peak":  b_peak,
-            "badge_func_resp": b_func,
+            "isi_peak_agree":      metrics["isi_peak_agree"],
+            "isi_hist_corr":       metrics["isi_hist_corr"],          # NEW
+            "func_resp_corr":      metrics["func_resp_corr"],
+            "badge_isi":           b_isi,
+            "badge_depth":         b_depth,
+            "badge_wave":          b_wave,
+            "badge_fr":            b_fr,
+            "badge_isi_peak":      b_peak,
+            "badge_isi_hist_corr": b_hist,                             # NEW
+            "badge_func_resp":     b_func,
             "verdict": verdict_csv,
             "verdict_pdf": verdict_pdf,
             "pdf_csv_disagree": verdict_csv != verdict_pdf,
@@ -423,6 +426,7 @@ def main() -> int:
             "trimmed_wave_corr":               tm["wave_corr"],
             "trimmed_fr_cv":                   tm["fr_cv"],
             "trimmed_isi_peak_agree":          tm["isi_peak_agree"],
+            "trimmed_isi_hist_corr":           tm["isi_hist_corr"],       # NEW
             "trimmed_func_resp_corr":          tm["func_resp_corr"],
             "original_verdict": original_verdict,
             "trimmed_verdict": tv,
