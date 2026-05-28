@@ -750,3 +750,37 @@ def test_longest_good_run_all_hard_outliers_returns_empty():
     out = qc.longest_good_run(is_outlier, is_hard_outlier, hists)
     assert out["kept_indices"] == []
     assert out["skipped_indices"] == []
+
+
+def test_longest_good_run_fallback_excludes_hard_outliers():
+    """Fallback path must NOT include hard outliers in kept_indices, even if
+    is_outlier=False for them (wave-only/depth-only has strikes=1, fails the
+    composite rule so is_outlier stays False).
+
+    Setup: [G_a, G_b, H_wave] — 3 sessions where index 2 is a wave-only hard
+    outlier with is_hard_outlier=True but is_outlier=False.  G_a and G_b have
+    divergent ISI histograms so the 2-session span [0,1] fails the consistency
+    gate, meaning no span produces a valid best_kept and the code falls through
+    to the Step-6 fallback.
+
+    Without the fix, the fallback calls _longest_good_run_contiguous on
+    is_outlier=[F, F, F] and returns (0, 3) — INCLUDING the hard outlier at
+    index 2.  With the fix, the fallback unions is_outlier with is_hard_outlier
+    giving effective_outlier=[F, F, T], so the contiguous-good run ends at
+    index 2 and kept_indices = [0, 1], correctly excluding index 2."""
+    h_a = np.zeros(50, dtype=np.float32); h_a[10] = 1.0   # peak at bin 10
+    h_b = np.zeros(50, dtype=np.float32); h_b[40] = 1.0   # peak at bin 40 — divergent
+
+    is_outlier      = [False, False, False]   # composite False everywhere
+    is_hard_outlier = [False, False, True]    # index 2 is a wave-only hard outlier
+
+    hists = [h_a.copy(), h_b.copy(), h_a.copy()]
+
+    out = qc.longest_good_run(is_outlier, is_hard_outlier, hists)
+
+    assert 2 not in out["kept_indices"], (
+        f"Hard outlier at index 2 leaked into kept_indices: {out}"
+    )
+    assert 2 not in out["skipped_indices"], (
+        f"Hard outlier at index 2 leaked into skipped_indices: {out}"
+    )

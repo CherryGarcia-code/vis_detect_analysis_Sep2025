@@ -1210,7 +1210,13 @@ def longest_good_run(
         return {"kept_indices": best_kept, "skipped_indices": best_skipped}
 
     # Step 6: fallback to contiguous-all-good
-    start, end = _longest_good_run_contiguous(is_outlier)
+    # Union is_outlier with is_hard_outlier so the fallback honors the
+    # "hard outliers always break runs" invariant (spec §3.2 step 1).
+    # Hard outliers can have is_outlier=False (wave-only/depth-only has
+    # strikes=1, fails the composite rule), so passing is_outlier alone
+    # would let them leak into kept_indices.
+    effective_outlier = [a or b for a, b in zip(is_outlier, is_hard_outlier)]
+    start, end = _longest_good_run_contiguous(effective_outlier)
     return {"kept_indices": list(range(start, end)), "skipped_indices": []}
 
 
