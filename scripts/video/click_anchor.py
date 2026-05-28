@@ -287,6 +287,14 @@ def render_barcode_montage(
     onset +/- 3 frames. Centre column gets a red border (the predicted-onset
     frame); the user inspects whether the grating appears in the centre cells.
     """
+    required = {"implied_offset_s", "video_frame_idx", "nidaq_baseline_on_s"}
+    missing = required - anchor.keys()
+    if missing:
+        raise KeyError(
+            f"anchor dict missing required keys: {sorted(missing)}"
+        )
+    if len(baseline_on) == 0:
+        raise ValueError("baseline_on is empty; nothing to render")
     n_trials = len(baseline_on)
     trial_indices = _pick_sampled_trials(n_trials, MONTAGE_ROWS)
     implied_offset_s = float(anchor["implied_offset_s"])
@@ -319,7 +327,7 @@ def render_barcode_montage(
         ]
         frames = load_cropped_frames(video_path, indices)
 
-        for c, (ax, frame, fidx, off) in enumerate(zip(axes[r], frames, indices, col_offsets)):
+        for ax, frame, off in zip(axes[r], frames, col_offsets):
             ax.imshow(frame, cmap="gray", vmin=0, vmax=255)
             ax.set_xticks([]); ax.set_yticks([])
             for spine in ax.spines.values():
@@ -339,7 +347,9 @@ def render_barcode_montage(
             fontsize=8, rotation=0, ha="right", va="center", labelpad=30,
         )
 
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     fig.savefig(out_path, dpi=130, bbox_inches="tight")
     plt.close(fig)
 

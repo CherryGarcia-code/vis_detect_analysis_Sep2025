@@ -167,3 +167,22 @@ def test_stage2_frame_indices_clamps():
     idx = ca.stage2_frame_indices(stage1_click=10, fps=50.0, n_frames=5000)
     assert idx[0] == 0
     assert len(idx) == 50
+
+
+def test_pick_sampled_trials_includes_first_and_last():
+    ca = _import_click_anchor()
+    picks = ca._pick_sampled_trials(100, 5)
+    assert len(picks) == 5
+    assert picks[0] == 0
+    assert picks[-1] == 99
+    # Evenly spaced (within rounding tolerance)
+    diffs = [picks[i + 1] - picks[i] for i in range(len(picks) - 1)]
+    assert max(diffs) - min(diffs) <= 1
+
+
+def test_pick_sampled_trials_short_session():
+    ca = _import_click_anchor()
+    # n_trials < n_rows → returns range(n_trials)
+    assert ca._pick_sampled_trials(3, 5) == [0, 1, 2]
+    # n_trials == n_rows → also returns range(n_trials)
+    assert ca._pick_sampled_trials(5, 5) == [0, 1, 2, 3, 4]
