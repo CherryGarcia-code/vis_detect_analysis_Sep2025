@@ -107,6 +107,34 @@ def stage2_frame_indices(stage1_click: int, fps: float, n_frames: int) -> list[i
     return [min(n_frames - 1, start + i) for i in range(N_CELLS)]
 
 
+def _build_anchor_dict(
+    session_name: str,
+    baseline_on: np.ndarray,
+    ts_ms: np.ndarray,
+    fps: float,
+    frame_idx: int,
+) -> dict:
+    """Construct the Phase 1 anchor JSON dict from a chosen video frame index.
+
+    All three Phase 1 anchor-creation paths (2-stage click, scrub Save, scrub
+    preview-render) use this single helper so the schema stays consistent.
+    Always uses ``anchor_trial_index = 0`` and ``baseline_on[0]`` — anchoring
+    to a later trial is a Phase 2 concern.
+    """
+    fi = int(frame_idx)
+    return {
+        "session": session_name,
+        "anchor_trial_index": 0,
+        "nidaq_baseline_on_s": float(baseline_on[0]),
+        "video_frame_idx": fi,
+        "video_time_s": float(ts_ms[fi] / 1000.0),
+        "implied_offset_s": float(ts_ms[fi] / 1000.0 - float(baseline_on[0])),
+        "frame_rate_fps": float(fps),
+        "n_trials": int(len(baseline_on)),
+        "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
+    }
+
+
 def jump_to_predicted_frame(
     trial_idx: int,
     baseline_on: np.ndarray,
@@ -458,17 +486,7 @@ def _run_scrub(
 
         if key in (" ", "enter"):
             fi = state["frame_idx"]
-            anchor = {
-                "session": session_name,
-                "anchor_trial_index": 0,
-                "nidaq_baseline_on_s": float(baseline_on[0]),
-                "video_frame_idx": int(fi),
-                "video_time_s": float(ts_ms[fi] / 1000.0),
-                "implied_offset_s": float(ts_ms[fi] / 1000.0 - float(baseline_on[0])),
-                "frame_rate_fps": float(fps),
-                "n_trials": int(len(baseline_on)),
-                "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
-            }
+            anchor = _build_anchor_dict(session_name, baseline_on, ts_ms, fps, state["frame_idx"])
             save_anchor(session_name, anchor)
             state["saved_anchor"] = anchor
             logger.info(
@@ -480,18 +498,7 @@ def _run_scrub(
 
         if key == "r":
             # Render montage with current frame as candidate anchor (no save)
-            fi = state["frame_idx"]
-            candidate = {
-                "session": session_name,
-                "anchor_trial_index": 0,
-                "nidaq_baseline_on_s": float(baseline_on[0]),
-                "video_frame_idx": int(fi),
-                "video_time_s": float(ts_ms[fi] / 1000.0),
-                "implied_offset_s": float(ts_ms[fi] / 1000.0 - float(baseline_on[0])),
-                "frame_rate_fps": float(fps),
-                "n_trials": int(len(baseline_on)),
-                "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
-            }
+            candidate = _build_anchor_dict(session_name, baseline_on, ts_ms, fps, state["frame_idx"])
             montage_path = os.path.join(
                 FIGS_DIR, f"{session_name}_barcode_montage_PREVIEW.png"
             )
@@ -507,9 +514,11 @@ def _run_scrub(
             logger.info("Preview montage written: %s", montage_path)
 
     fig.canvas.mpl_connect("key_press_event", on_key)
-    _refresh()
-    plt.show()
-    cap.release()
+    try:
+        _refresh()
+        plt.show()
+    finally:
+        cap.release()
 
     return state["saved_anchor"]
 
@@ -737,17 +746,7 @@ def main() -> int:
                     logger.info("Stage 2 cancelled by user.")
                     return 1
 
-                anchor = {
-                    "session": session_name,
-                    "anchor_trial_index": 0,
-                    "nidaq_baseline_on_s": float(baseline_on[0]),
-                    "video_frame_idx": int(click2),
-                    "video_time_s": float(ts_ms[int(click2)] / 1000.0),
-                    "implied_offset_s": float(ts_ms[int(click2)] / 1000.0 - float(baseline_on[0])),
-                    "frame_rate_fps": float(fps),
-                    "n_trials": int(len(baseline_on)),
-                    "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
-                }
+                anchor = _build_anchor_dict(session_name, baseline_on, ts_ms, fps, click2)
                 save_anchor(session_name, anchor)
                 logger.info(
                     "Anchor saved: trial 0 @ frame %d (video time %.3fs); implied offset = %.3fs",
