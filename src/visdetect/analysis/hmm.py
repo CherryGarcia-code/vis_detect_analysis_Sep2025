@@ -775,7 +775,7 @@ def fit_best_model(
     seed: int = 0,
     use_cross_validation: bool = True,
     cv_n_restarts: int = 5,
-) -> Tuple["GLMHMM", pd.DataFrame, Dict[int, "GLMHMM"]]:
+) -> Tuple["GLMHMM", pd.DataFrame, Dict[Any, "GLMHMM"]]:
     """Fit GLM-HMMs for each K, selecting the best by CV LL (default) or BIC.
 
     Default: maximises mean leave-one-session-out CV LL in bits-per-trial
@@ -823,7 +823,7 @@ def fit_best_model(
     ]
 
     records: List[Dict[str, Any]] = []
-    all_models: Dict[int, GLMHMM] = {}
+    all_models: Dict[Any, GLMHMM] = {}
 
     # ---------------- Stage 1: training fits ----------------
     fit_results: Dict[int, Tuple[Optional[GLMHMM], float, int]] = {}
@@ -893,20 +893,69 @@ def fit_best_model(
             row["cv_ll_std"] = std
         records.append(row)
 
+    # Lapse "L" baseline (F3)
+    try:
+        lapse_model = fit_lapse_model(
+            sessions_data, n_features=n_features, config=cfg_copy, seed=seed,
+        )
+        lapse_ll = lapse_model.log_likelihood(sessions_data)
+        row_L: Dict[str, Any] = {
+            "K": "L",
+            "train_ll": lapse_ll,
+            "bic": lapse_model.bic(sessions_data),
+            "aic": lapse_model.aic(sessions_data),
+            "n_params": lapse_model.n_params(),
+        }
+        if use_cross_validation:
+            # CV the lapse model with its own per-fold inner loop because
+            # `loso_cross_validation` is hard-coded for K=int.
+            bpt = []
+            for fold_idx in range(len(sessions_data)):
+                train = [s for i, s in enumerate(sessions_data) if i != fold_idx]
+                held = sessions_data[fold_idx]
+                if len(held["y"]) == 0:
+                    continue
+                try:
+                    m_fold = fit_lapse_model(
+                        train, n_features=n_features, config=cfg_copy, seed=seed + fold_idx,
+                    )
+                    test_ll = m_fold.log_likelihood([held])
+                    null_ll = _baseline_bernoulli_ll(held["y"])
+                    n = len(held["y"])
+                    bpt.append((test_ll - null_ll) / (n * np.log(2.0)))
+                except Exception:
+                    continue
+            if bpt:
+                row_L["cv_ll_bits_per_trial"] = float(np.mean(bpt))
+                row_L["cv_ll_std"] = float(np.std(bpt))
+            else:
+                row_L["cv_ll_bits_per_trial"] = np.nan
+                row_L["cv_ll_std"] = np.nan
+        records.append(row_L)
+        all_models["L"] = lapse_model
+    except Exception as exc:
+        warnings.warn(
+            f"Lapse model fit failed: {exc}  (continuing without 'L' row)",
+            RuntimeWarning,
+        )
+
     selection_df = pd.DataFrame(records)
     if selection_df.empty:
         raise RuntimeError("All model fits failed.")
 
+    K_only = selection_df[selection_df["K"] != "L"]
+    if K_only.empty:
+        raise RuntimeError("No integer-K fits succeeded; cannot select a best model.")
     if use_cross_validation:
-        if selection_df["cv_ll_bits_per_trial"].isna().all():
+        if K_only["cv_ll_bits_per_trial"].isna().all():
             raise RuntimeError(
                 "All LOSO cross-validation folds failed for every K. "
                 "Cannot select best model by CV LL. "
                 "Pass use_cross_validation=False to fall back to BIC selection."
             )
-        best_K = int(selection_df.loc[selection_df["cv_ll_bits_per_trial"].idxmax(), "K"])
+        best_K = int(K_only.loc[K_only["cv_ll_bits_per_trial"].idxmax(), "K"])
     else:
-        best_K = int(selection_df.loc[selection_df["bic"].idxmin(), "K"])
+        best_K = int(K_only.loc[K_only["bic"].idxmin(), "K"])
 
     best_model = all_models[best_K]
     if verbose:
@@ -915,6 +964,79 @@ def fit_best_model(
         print(best_model.summary())
 
     return best_model, selection_df, all_models
+
+
+# =====================================================================
+# Lapse model baseline (F3)
+# =====================================================================
+
+class _LapseGLMHMM(GLMHMM):
+    """Restricted 2-state GLM-HMM for the Ashwood "L" baseline.
+
+    Constraints (enforced after each M-step):
+      - State 1 (lapse) has zero weights except for bias.
+      - Transition matrix has identical rows (lapse probability is
+        time-independent and stimulus-independent).
+    """
+
+    def _m_step(self, sessions_data, all_gamma, total_xi, total_init):
+        super()._m_step(sessions_data, all_gamma, total_xi, total_init)
+        # Enforce constraint: lapse state has only a bias term.
+        self._weights[1, 1:] = 0.0
+        # Enforce constraint: identical transition rows (stationary lapse).
+        A = np.exp(self._log_A)
+        col_means = A.mean(axis=0, keepdims=True)        # avg of two rows
+        col_means = col_means / col_means.sum()           # renormalise
+        A_constrained = np.repeat(col_means, 2, axis=0)
+        self._log_A = np.log(A_constrained + _EPS)
+
+    def sort_states_by_bias(self):
+        """Disabled for the lapse model.
+
+        The lapse constraint is enforced by state INDEX (index 1 must have
+        zero non-bias weights). Re-sorting would silently break the
+        invariant. Override to a no-op with a warning.
+        """
+        warnings.warn(
+            "sort_states_by_bias is a no-op on _LapseGLMHMM (the lapse "
+            "constraint is enforced by state index).",
+            RuntimeWarning,
+        )
+
+
+def fit_lapse_model(
+    sessions_data: List[Dict[str, Any]],
+    n_features: int,
+    config: Optional[GLMHMMConfig] = None,
+    seed: int = 0,
+) -> _LapseGLMHMM:
+    """Fit the restricted 2-state lapse model used as Ashwood's "L" baseline.
+
+    Returns the fitted _LapseGLMHMM with the highest log-likelihood across
+    ``config.n_restarts`` random restarts.
+
+    For lick/no-lick (binary y), the lapse state's single bias parameter
+    captures the spontaneous-lick probability (analog of Ashwood's
+    γ_lick / (γ_lick + γ_no_lick) ratio under binary choice).
+    """
+    cfg = config or GLMHMMConfig()
+    cfg_copy = GLMHMMConfig(**{k: getattr(cfg, k) for k in cfg.__dataclass_fields__})
+    cfg_copy.verbose = False
+
+    best_ll = -np.inf
+    best_model: Optional[_LapseGLMHMM] = None
+    for r in range(cfg.n_restarts):
+        m = _LapseGLMHMM(n_states=2, n_features=n_features, config=cfg_copy)
+        try:
+            ll = m.fit(sessions_data, seed=seed + r * 137, smart_init=(r == 0))
+        except Exception:
+            continue
+        if ll > best_ll:
+            best_ll = ll
+            best_model = m
+    if best_model is None:
+        raise RuntimeError("Lapse model: all restarts failed.")
+    return best_model
 
 
 # =====================================================================
