@@ -739,3 +739,14 @@ def test_find_stable_subset_returns_skipped_indices():
     assert (set(out["kept_indices"]) & set(out["skipped_indices"])) == set()
     assert (set(out["kept_indices"]) & set(out["dropped_indices"])) == set()
     assert (set(out["skipped_indices"]) & set(out["dropped_indices"])) == set()
+
+
+def test_longest_good_run_all_hard_outliers_returns_empty():
+    """All sessions are hard outliers → spans list is empty → fallback called
+    on is_outlier=[T,T,T] → contiguous-good-run returns (0,0) → empty result."""
+    is_outlier      = [True, True, True]
+    is_hard_outlier = [True, True, True]
+    hists = _identical_isi_hists(3)
+    out = qc.longest_good_run(is_outlier, is_hard_outlier, hists)
+    assert out["kept_indices"] == []
+    assert out["skipped_indices"] == []

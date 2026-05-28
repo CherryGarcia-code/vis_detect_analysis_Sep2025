@@ -1185,8 +1185,7 @@ def longest_good_run(
     # Step 2-4: evaluate each span
     best_kept: List[int] = []
     best_skipped: List[int] = []
-    best_span_len = 0
-    best_span_start = 10**9
+    best_key: Optional[Tuple[int, int, int]] = None  # (len(kept), span_len, -start)
     for (s, e) in spans:
         kept = [i for i in range(s, e) if not is_outlier[i]]
         skipped = [i for i in range(s, e) if is_outlier[i]]
@@ -1197,18 +1196,15 @@ def longest_good_run(
             corr = baseline_isi_hist_corr(kept_hists)
             if not (np.isfinite(corr) and corr >= threshold):
                 continue
-        # Step 5 tie-breaking: larger kept, then longer span, then earlier start
+        # Step 5 tie-breaking via tuple comparison: larger kept_set wins;
+        # ties broken by longer span; ties broken by earliest start
+        # (negate s so smaller-start gives larger key component).
         span_len = e - s
-        better = (
-            len(kept) > len(best_kept)
-            or (len(kept) == len(best_kept) and span_len > best_span_len)
-            or (len(kept) == len(best_kept) and span_len == best_span_len and s < best_span_start)
-        )
-        if better:
+        candidate_key = (len(kept), span_len, -s)
+        if best_key is None or candidate_key > best_key:
             best_kept = kept
             best_skipped = skipped
-            best_span_len = span_len
-            best_span_start = s
+            best_key = candidate_key
 
     if best_kept:
         return {"kept_indices": best_kept, "skipped_indices": best_skipped}
@@ -1244,10 +1240,8 @@ def find_stable_subset(uid: "UIDIntermediate") -> Dict[str, object]:
     )
     kept = run["kept_indices"]
     skipped = run["skipped_indices"]
-    kept_set = set(kept)
-    skipped_set = set(skipped)
-    dropped = [i for i in range(len(uid.sessions))
-               if i not in kept_set and i not in skipped_set]
+    accounted = set(kept) | set(skipped)
+    dropped = [i for i in range(len(uid.sessions)) if i not in accounted]
     return {
         "outlier_flags": flags,
         "kept_indices": kept,
