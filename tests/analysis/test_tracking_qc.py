@@ -622,9 +622,10 @@ def test_session_outlier_flags_classifies_hard_vs_soft():
         mk_rec("s02", "Learning", h_bimodal,  5.0, wave_clean,   1000.0),  # isi_peak alone: SOFT, is_outlier
         mk_rec("s03", "Learning", h_clean,    5.0, wave_clean,   1000.0),  # clean
         mk_rec("s04", "Unknown",  h_clean,    5.0, wave_clean,   1000.0),  # unknown_stage: SOFT, is_outlier
+        mk_rec("s05", "Learning", h_clean,    5.0, wave_clean,   2000.0),  # depth-only: HARD, NOT is_outlier
     ]
     uid = qc.UIDIntermediate(
-        global_uid=1, span=5, has_naive_to_expert=False,
+        global_uid=1, span=6, has_naive_to_expert=False,
         suspect_known=False, sessions=sessions,
     )
     f = qc.session_outlier_flags(uid)
@@ -633,6 +634,7 @@ def test_session_outlier_flags_classifies_hard_vs_soft():
     # s01: wave-only triggers is_hard_outlier but NOT is_outlier (strikes=1)
     # s02: isi_peak alone triggers is_outlier directly; soft (no wave/depth)
     # s04: unknown_stage triggers is_outlier directly; soft (no wave/depth)
-    assert f["is_hard_outlier"] == [False, True,  False, False, False]
-    assert f["is_soft_outlier"] == [False, False, True,  False, True]
-    assert f["is_outlier"]      == [False, False, True,  False, True]
+    # s05: depth-only triggers is_hard_outlier but NOT is_outlier (strikes=1)
+    assert f["is_hard_outlier"] == [False, True,  False, False, False, True]
+    assert f["is_soft_outlier"] == [False, False, True,  False, True,  False]
+    assert f["is_outlier"]      == [False, False, True,  False, True,  False]

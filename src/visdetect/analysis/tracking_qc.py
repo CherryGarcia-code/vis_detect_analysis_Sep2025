@@ -996,7 +996,19 @@ def session_outlier_flags(uid: "UIDIntermediate") -> Dict[str, List[bool]]:
     Returns
     -------
     dict with keys 'isi_peak', 'fr', 'wave', 'depth', 'unknown_stage',
-    'is_outlier' — each a list of bools aligned with uid.sessions.
+    'is_hard_outlier', 'is_soft_outlier', 'is_outlier' — each a list of
+    bools aligned with uid.sessions.
+
+    The classifications:
+    - 'isi_peak', 'fr', 'wave', 'depth', 'unknown_stage' are atomic flags
+      for each criterion.
+    - 'is_outlier' is the existing composite rule: True iff isi_peak OR
+      (sum of atomic flags) >= 2 OR unknown_stage. Independent of the
+      hard/soft split below.
+    - 'is_hard_outlier' = wave OR depth (anatomical/physical mismatch
+      signals; never skipped by find_stable_subset).
+    - 'is_soft_outlier' = is_outlier AND NOT is_hard_outlier (data-quality
+      or transient signals; eligible for skip).
     """
     n = len(uid.sessions)
     out = {
