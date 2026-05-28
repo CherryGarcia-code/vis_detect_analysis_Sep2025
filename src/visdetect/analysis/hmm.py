@@ -733,6 +733,39 @@ def _fit_single_K(task: KFitTask) -> Tuple[int, Optional["GLMHMM"], float, int]:
     return K, best_model_K, best_ll_K, n_failures
 
 
+def _baseline_bernoulli_ll(y_all: np.ndarray) -> float:
+    """Log-likelihood of a constant-rate Bernoulli null model.
+
+    Used as the baseline against which bits-per-trial is computed
+    (Ashwood Eq. 22). The null model predicts each y_t to be a Bernoulli
+    draw with probability equal to the empirical mean of y.
+    """
+    if y_all.size == 0:
+        return 0.0
+    p = float(np.clip(y_all.mean(), _EPS, 1 - _EPS))
+    return float((y_all * np.log(p) + (1 - y_all) * np.log(1 - p)).sum())
+
+
+def ll_to_bits_per_trial(
+    ll: float,
+    sessions_data: List[Dict[str, Any]],
+) -> float:
+    """Convert raw log-likelihood to bits-per-trial vs Bernoulli null.
+
+    bits_per_trial = (LL_model - LL_null) / (n_trials * log(2))
+
+    where LL_null is the log-likelihood of a single-probability Bernoulli
+    model. This matches Ashwood Methods Eq. 22 and makes log-likelihoods
+    comparable across animals with different trial counts.
+    """
+    y_all = np.concatenate([s["y"] for s in sessions_data if len(s["y"]) > 0])
+    n = len(y_all)
+    if n == 0:
+        return 0.0
+    ll_null = _baseline_bernoulli_ll(y_all)
+    return (ll - ll_null) / (n * np.log(2.0))
+
+
 def fit_best_model(
     sessions_data: List[Dict[str, Any]],
     K_range: Sequence[int] = (2, 3, 4, 5),
@@ -740,42 +773,43 @@ def fit_best_model(
     verbose: bool = True,
     n_workers: int = 1,
     seed: int = 0,
+    use_cross_validation: bool = True,
+    cv_n_restarts: int = 5,
 ) -> Tuple["GLMHMM", pd.DataFrame, Dict[int, "GLMHMM"]]:
-    """Fit GLM-HMMs for each K, selecting the best by BIC.
+    """Fit GLM-HMMs for each K, selecting the best by CV LL (default) or BIC.
 
-    For each K, ``config.n_restarts`` random restarts are run and the
-    restart with the highest log-likelihood is kept. K values can be
-    fit in parallel using multiple workers.
+    Default: maximises mean leave-one-session-out CV LL in bits-per-trial
+    (Ashwood Methods Eq. 22). To revert to BIC selection (legacy), pass
+    ``use_cross_validation=False``.
 
     Parameters
     ----------
     sessions_data : list of session dicts.
     K_range : sequence of int
-        Candidate numbers of states to try.
-    config : GLMHMMConfig, optional
+    config : GLMHMMConfig, optional.
     verbose : bool
-    n_workers : int, default=1
-        Number of parallel workers. If > 1, K values are fit in parallel.
-    seed : int, default=0
-        Base random seed for reproducibility.
+    n_workers : int.  Parallel workers across K values for the training fit.
+    seed : int.
+    use_cross_validation : bool, default True.
+        True  → select K on maximum cv_ll_bits_per_trial via LOSO.
+        False → select K on minimum BIC (legacy path).
+    cv_n_restarts : int, default 5.
+        Random restarts within each LOSO fold (smaller than training to
+        keep CV affordable; LOSO already enforces stability).
 
     Returns
     -------
-    best_model : GLMHMM
-        Fitted model with the lowest BIC.
-    selection_df : DataFrame
-        Columns: K, best_ll, bic, aic, n_params.
-    all_models : dict[int, GLMHMM]
-        Mapping from K to the best fitted model at that K.
+    best_model, selection_df, all_models.
+    selection_df columns when use_cross_validation=True:
+        K, train_ll, bic, aic, n_params,
+        cv_ll_bits_per_trial, cv_ll_std
     """
     cfg = config or GLMHMMConfig()
     cfg_copy = GLMHMMConfig(**{k: getattr(cfg, k) for k in cfg.__dataclass_fields__})
-    # suppress per-restart verbosity for workers
     cfg_copy.verbose = False
 
     n_features = sessions_data[0]["X"].shape[1] if len(sessions_data) > 0 else len(FEATURE_NAMES)
 
-    # Build tasks for each K
     tasks = [
         KFitTask(
             K=K,
@@ -788,79 +822,96 @@ def fit_best_model(
         for K in K_range
     ]
 
-    records = []
+    records: List[Dict[str, Any]] = []
     all_models: Dict[int, GLMHMM] = {}
 
+    # ---------------- Stage 1: training fits ----------------
+    fit_results: Dict[int, Tuple[Optional[GLMHMM], float, int]] = {}
     if n_workers > 1:
-        # Parallel execution
         if verbose:
-            print(f"\nFitting {len(K_range)} K values in parallel with {n_workers} workers...")
-            print(f"Each K: {cfg.n_restarts} random restarts\n")
-        
+            print(f"\nFitting {len(K_range)} K values in parallel with {n_workers} workers")
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = [executor.submit(_fit_single_K, task) for task in tasks]
-            for future in tqdm(futures, desc="Fitting K values", disable=not verbose):
-                try:
-                    K, best_model_K, best_ll_K, n_failures = future.result()
-                    
-                    if best_model_K is not None:
-                        bic_val = best_model_K.bic(sessions_data)
-                        aic_val = best_model_K.aic(sessions_data)
-                        all_models[K] = best_model_K
-                        records.append({
-                            "K": K,
-                            "best_ll": best_ll_K,
-                            "bic": bic_val,
-                            "aic": aic_val,
-                            "n_params": best_model_K.n_params(),
-                        })
-                        if verbose:
-                            msg = f"K={K}  LL={best_ll_K:.2f}  BIC={bic_val:.2f}  AIC={aic_val:.2f}"
-                            if n_failures > 0:
-                                msg += f"  ({n_failures}/{cfg.n_restarts} restarts failed)"
-                            print(f"  {msg}")
-                    else:
-                        if verbose:
-                            print(f"  K={K}: All restarts failed.")
-                except Exception as exc:
-                    if verbose:
-                        print(f"  K={K}: FAILED - {exc}")
+            for future in tqdm(futures, desc="K-fits", disable=not verbose):
+                K, m, ll, nf = future.result()
+                fit_results[K] = (m, ll, nf)
     else:
-        # Sequential execution (original behavior)
         for task in tasks:
-            K = task.K
+            K, m, ll, nf = _fit_single_K(task)
+            fit_results[K] = (m, ll, nf)
             if verbose:
-                print(f"\n{'='*50}")
-                print(f"Fitting K={K} states  ({cfg.n_restarts} restarts)")
-                print(f"{'='*50}")
-            
-            K, best_model_K, best_ll_K, n_failures = _fit_single_K(task)
+                print(f"  K={K}  train LL={ll:.2f}")
 
-            if best_model_K is not None:
-                bic_val = best_model_K.bic(sessions_data)
-                aic_val = best_model_K.aic(sessions_data)
-                all_models[K] = best_model_K
-                records.append({
-                    "K": K,
-                    "best_ll": best_ll_K,
-                    "bic": bic_val,
-                    "aic": aic_val,
-                    "n_params": best_model_K.n_params(),
-                })
-                if verbose:
-                    msg = f">>> K={K}  best LL={best_ll_K:.2f}  BIC={bic_val:.2f}  AIC={aic_val:.2f}"
-                    if n_failures > 0:
-                        msg += f"  ({n_failures}/{cfg.n_restarts} restarts failed)"
-                    print(f"  {msg}")
+    # ---------------- Stage 2 (optional): cross-validation ----------------
+    cv_results: Dict[int, Tuple[float, float]] = {}
+    if use_cross_validation:
+        from visdetect.analysis.hmm_downstream import loso_cross_validation
+        for K in K_range:
+            if verbose:
+                print(f"\n  LOSO CV at K={K}  ({len(sessions_data)} folds, "
+                      f"{cv_n_restarts} restarts/fold)")
+            cv_cfg = GLMHMMConfig(**{
+                k: getattr(cfg_copy, k) for k in cfg_copy.__dataclass_fields__
+            })
+            cv_cfg.n_restarts = cv_n_restarts
+            cv_df = loso_cross_validation(
+                sessions_data, K=K, config=cv_cfg,
+                n_restarts=cv_n_restarts, seed=seed, verbose=False,
+            )
+            # Compute bits-per-trial relative to per-session null
+            if len(cv_df):
+                bpt = []
+                for _, row in cv_df.iterrows():
+                    held_out_y = sessions_data[int(row["fold"])]["y"]
+                    null_ll = _baseline_bernoulli_ll(held_out_y)
+                    n = int(row["n_trials_test"])
+                    bpt.append((row["test_ll"] - null_ll) / (n * np.log(2.0)))
+                cv_results[K] = (float(np.mean(bpt)), float(np.std(bpt)))
+            else:
+                cv_results[K] = (np.nan, np.nan)
+
+    # ---------------- Aggregate selection_df ----------------
+    for K in K_range:
+        best_model_K, best_ll_K, n_failures = fit_results[K]
+        if best_model_K is None:
+            if verbose:
+                print(f"  K={K}: All restarts failed.")
+            continue
+        bic_val = best_model_K.bic(sessions_data)
+        aic_val = best_model_K.aic(sessions_data)
+        all_models[K] = best_model_K
+        row: Dict[str, Any] = {
+            "K": K,
+            "train_ll": best_ll_K,
+            "bic": bic_val,
+            "aic": aic_val,
+            "n_params": best_model_K.n_params(),
+        }
+        if use_cross_validation:
+            mean, std = cv_results.get(K, (np.nan, np.nan))
+            row["cv_ll_bits_per_trial"] = mean
+            row["cv_ll_std"] = std
+        records.append(row)
 
     selection_df = pd.DataFrame(records)
     if selection_df.empty:
         raise RuntimeError("All model fits failed.")
 
-    best_K = int(selection_df.loc[selection_df["bic"].idxmin(), "K"])
+    if use_cross_validation:
+        if selection_df["cv_ll_bits_per_trial"].isna().all():
+            raise RuntimeError(
+                "All LOSO cross-validation folds failed for every K. "
+                "Cannot select best model by CV LL. "
+                "Pass use_cross_validation=False to fall back to BIC selection."
+            )
+        best_K = int(selection_df.loc[selection_df["cv_ll_bits_per_trial"].idxmax(), "K"])
+    else:
+        best_K = int(selection_df.loc[selection_df["bic"].idxmin(), "K"])
+
     best_model = all_models[best_K]
     if verbose:
-        print(f"\n*** Best model: K={best_K} (by BIC) ***\n")
+        criterion = "CV LL (bits/trial)" if use_cross_validation else "BIC"
+        print(f"\n*** Best model: K={best_K} (by {criterion}) ***\n")
         print(best_model.summary())
 
     return best_model, selection_df, all_models
