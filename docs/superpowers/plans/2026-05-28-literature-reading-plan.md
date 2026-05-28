@@ -1,6 +1,10 @@
 # Literature Reading Plan — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use **superpowers:executing-plans** to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **Why executing-plans and not subagent-driven-development:** This plan is a *literature reading* plan, not code implementation. Each task processes 6-13 papers sequentially within one chat, with checkpoints between papers. `executing-plans` (sequential, checkpointed, in the current session) fits that shape. `subagent-driven-development` would dispatch a fresh subagent per task to read 8-12 papers and report back as a single block — that loses the per-paper visibility you want, and the subagent gets no benefit from the per-paper context that builds up while reading.
+>
+> **TDD mismatch is expected:** The skill is designed for code (write test → run test → implement → run test). There are no tests here — verification is "does the memory file exist with the expected schema and content". Treat the V1 step at the end of each task as the analog to "run tests": it confirms the artifacts landed. Do not invent code or unit tests for this plan.
 
 **Goal:** Build a durable, queryable literature scaffold in `memory/literature/` covering decision-making theory, mouse/rodent perceptual decisions, striatal/BG circuits, computational modeling, and neural data-science methods — so that any future Claude session has working knowledge of the field for the BG_046 project.
 
