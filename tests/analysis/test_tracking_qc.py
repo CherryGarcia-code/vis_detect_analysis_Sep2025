@@ -315,37 +315,45 @@ def test_session_outlier_flags_one_bimodal_session():
     assert f["is_outlier"] == [False, False, False, False, True]
 
 
-def test_longest_good_run_basic():
+def test_longest_good_run_contiguous_basic():
     # 0..2 good, 3 bad, 4..7 good (length 4) → best (4,8)
     flags = [False, False, False, True, False, False, False, False]
-    assert qc.longest_good_run(flags) == (4, 8)
+    assert qc._longest_good_run_contiguous(flags) == (4, 8)
 
 
-def test_longest_good_run_all_bad_returns_zero():
-    assert qc.longest_good_run([True, True, True]) == (0, 0)
+def test_longest_good_run_contiguous_all_bad_returns_zero():
+    assert qc._longest_good_run_contiguous([True, True, True]) == (0, 0)
 
 
-def test_longest_good_run_all_good_returns_full():
-    assert qc.longest_good_run([False, False, False, False]) == (0, 4)
+def test_longest_good_run_contiguous_all_good_returns_full():
+    assert qc._longest_good_run_contiguous([False, False, False, False]) == (0, 4)
 
 
 def test_find_stable_subset_trims_outlier_at_end():
+    # Index 4 has a different ISI peak (bin 35 vs bin 15) — soft outlier.
+    # Skip-able algorithm: no hard outliers → one span [0..4]; kept=[0,1,2,3],
+    # skipped=[4]; ISI corr of kept (all bin-15) = 1.0 → qualifies.
     specs = [(15, 5.0, 1.0, 1000.0)] * 4 + [(35, 5.0, 1.0, 1000.0)]
     uid = _make_synthetic_uid(specs)
     out = qc.find_stable_subset(uid)
     assert out["kept_indices"] == [0, 1, 2, 3]
-    assert out["dropped_indices"] == [4]
+    assert out["skipped_indices"] == [4]
+    assert out["dropped_indices"] == []
     assert out["trimmed_span"] == 4
 
 
 def test_find_stable_subset_picks_longer_run():
-    # bad/good/good/bad/good/good/good → kept = [4,5,6] (length 3)
+    # Soft outliers at indices 0 and 3 (different ISI). No hard outliers →
+    # one span [0..6]. kept=[1,2,4,5,6], skipped=[0,3]; ISI corr of kept
+    # (all bin-15) = 1.0 → qualifies. All 5 good sessions are kept.
     specs = ([(35, 5.0, 1.0, 1000.0)] + [(15, 5.0, 1.0, 1000.0)] * 2 +
              [(35, 5.0, 1.0, 1000.0)] + [(15, 5.0, 1.0, 1000.0)] * 3)
     uid = _make_synthetic_uid(specs)
     out = qc.find_stable_subset(uid)
-    assert out["kept_indices"] == [4, 5, 6]
-    assert out["trimmed_span"] == 3
+    assert out["kept_indices"] == [1, 2, 4, 5, 6]
+    assert out["skipped_indices"] == [0, 3]
+    assert out["dropped_indices"] == []
+    assert out["trimmed_span"] == 5
 
 
 # ─── Functional-response stability (6th badge) ────────────────────────
@@ -566,7 +574,8 @@ def test_session_outlier_flags_unknown_stage_is_outlier():
 
 
 def test_find_stable_subset_drops_unknown_sessions():
-    """Unknown-stage sessions break the kept run."""
+    """Unknown-stage sessions are soft outliers; skip-able algorithm skips them
+    rather than breaking the run, provided ISI consistency holds."""
     rec_good = qc.SessionRecord(
         session_name="s00", ks_unit_id=0, stage="Learning", peak_chan=10,
         peak_depth_um=100.0, amplitude=50.0, baseline_fr_hz=5.0,
@@ -585,14 +594,17 @@ def test_find_stable_subset_drops_unknown_sessions():
         isi_hist=np.array([0.1, 0.5, 0.3, 0.1] + [0.0] * 46, dtype=np.float32),
         isi_centers=np.zeros(50, dtype=np.float32),
     )
-    # Sequence: good, good, unknown, good, good, good → kept = last 3.
+    # Sequence: good, good, unknown, good, good, good.
+    # All have identical ISI hists; no hard outliers → one span [0..5].
+    # kept=[0,1,3,4,5], skipped=[2] (unknown is a soft outlier).
     uid = qc.UIDIntermediate(
         global_uid=1, span=6, has_naive_to_expert=False, suspect_known=False,
         sessions=[rec_good, rec_good, rec_unknown, rec_good, rec_good, rec_good],
     )
     stable = qc.find_stable_subset(uid)
-    assert stable["kept_indices"] == [3, 4, 5]
-    assert 2 in stable["dropped_indices"]
+    assert stable["kept_indices"] == [0, 1, 3, 4, 5]
+    assert stable["skipped_indices"] == [2]
+    assert stable["dropped_indices"] == []
 
 
 def test_session_outlier_flags_classifies_hard_vs_soft():
@@ -638,3 +650,92 @@ def test_session_outlier_flags_classifies_hard_vs_soft():
     assert f["is_hard_outlier"] == [False, True,  False, False, False, True]
     assert f["is_soft_outlier"] == [False, False, True,  False, True,  False]
     assert f["is_outlier"]      == [False, False, True,  False, True,  False]
+
+
+# ─── Skip-able longest_good_run ───────────────────────────────────────
+
+def _identical_isi_hists(n: int) -> list:
+    """Helper: n copies of a fixed peak-15 log-ISI histogram. Guarantees
+    set-wide isi_hist_corr == 1.0 (passes gate trivially)."""
+    h = np.zeros(50, dtype=np.float32); h[15] = 0.5; h[14] = 0.25; h[16] = 0.25
+    return [h.copy() for _ in range(n)]
+
+
+def test_longest_good_run_skips_soft_with_high_consistency():
+    """Sequence [G, G, S, G, G] with identical ISI hists → all 4 good kept,
+    soft outlier at index 2 is skipped, NO sessions dropped (no hard
+    outliers). Set-wide isi_hist_corr = 1.0 passes 0.85 gate trivially."""
+    is_outlier      = [False, False, True,  False, False]
+    is_hard_outlier = [False, False, False, False, False]
+    hists = _identical_isi_hists(5)
+    out = qc.longest_good_run(is_outlier, is_hard_outlier, hists)
+    assert out["kept_indices"] == [0, 1, 3, 4]
+    assert out["skipped_indices"] == [2]
+
+
+def test_longest_good_run_falls_back_when_consistency_fails():
+    """Sequence [G, G, S, G, G] where the two good halves have DIFFERENT
+    ISI shapes → set-wide isi_hist_corr fails 0.85 gate → falls back to
+    longest contiguous all-good run = [0,1] (length 2; ties broken by
+    first-encountered)."""
+    is_outlier      = [False, False, True,  False, False]
+    is_hard_outlier = [False, False, False, False, False]
+    h_a = np.zeros(50, dtype=np.float32); h_a[10] = 1.0
+    h_b = np.zeros(50, dtype=np.float32); h_b[40] = 1.0
+    # Soft outlier at index 2 (any shape — will be skipped); halves divergent
+    hists = [h_a.copy(), h_a.copy(), h_a.copy(), h_b.copy(), h_b.copy()]
+    out = qc.longest_good_run(is_outlier, is_hard_outlier, hists)
+    # Set [0,1,3,4]: pairs (0,1)=1, (0,3)=-1, (0,4)=-1, (1,3)=-1, (1,4)=-1, (3,4)=1
+    # median = -1 < 0.85 → fallback
+    # Fallback picks first longest contiguous good run = [0,1]
+    assert out["kept_indices"] == [0, 1]
+    assert out["skipped_indices"] == []
+
+
+def test_longest_good_run_never_skips_hard_outliers():
+    """Sequence [G, G, H, G, G] where H is a HARD outlier → must NEVER appear
+    in kept or skipped. Result is one of [0,1] or [3,4] (both length 2)."""
+    is_outlier      = [False, False, True, False, False]
+    is_hard_outlier = [False, False, True, False, False]
+    hists = _identical_isi_hists(5)
+    out = qc.longest_good_run(is_outlier, is_hard_outlier, hists)
+    assert 2 not in out["kept_indices"]
+    assert 2 not in out["skipped_indices"]
+    # Tie-break: largest kept_set; ties → longest span (kept+skipped); ties
+    # → earliest start. [0,1] starts earlier, so it wins on the last tie-break.
+    assert out["kept_indices"] == [0, 1]
+    assert out["skipped_indices"] == []
+
+
+def test_find_stable_subset_returns_skipped_indices():
+    """find_stable_subset exposes skipped_indices and redefines dropped_indices
+    to exclude skipped. Set: [Learning, Learning, Unknown, Learning, Learning]
+    with identical ISI → kept=[0,1,3,4], skipped=[2], dropped=[]."""
+    h = np.zeros(50, dtype=np.float32); h[15] = 0.5; h[14] = 0.25; h[16] = 0.25
+    wave = np.array([0.0, 1.0, 0.0, -1.0, 0.0] * 16 + [0.0, 1.0], dtype=np.float32)
+    def mk_rec(name, stage):
+        return qc.SessionRecord(
+            session_name=name, ks_unit_id=0, stage=stage,
+            peak_chan=0, peak_depth_um=1000.0, amplitude=1.0,
+            baseline_fr_hz=5.0, waveform_peak=wave,
+            footprint=np.zeros((82, 17), dtype=np.float32),
+            footprint_channels=np.arange(17),
+            isi_hist=h.copy(), isi_centers=np.zeros(50, dtype=np.float32),
+        )
+    sessions = [mk_rec(f"s{i:02d}", "Unknown" if i == 2 else "Learning")
+                for i in range(5)]
+    uid = qc.UIDIntermediate(
+        global_uid=1, span=5, has_naive_to_expert=False,
+        suspect_known=False, sessions=sessions,
+    )
+    out = qc.find_stable_subset(uid)
+    assert "skipped_indices" in out
+    assert out["kept_indices"]    == [0, 1, 3, 4]
+    assert out["skipped_indices"] == [2]
+    assert out["dropped_indices"] == []
+    # Sanity: union covers all sessions and the three sets are disjoint
+    union = set(out["kept_indices"]) | set(out["skipped_indices"]) | set(out["dropped_indices"])
+    assert union == set(range(5))
+    assert (set(out["kept_indices"]) & set(out["skipped_indices"])) == set()
+    assert (set(out["kept_indices"]) & set(out["dropped_indices"])) == set()
+    assert (set(out["skipped_indices"]) & set(out["dropped_indices"])) == set()

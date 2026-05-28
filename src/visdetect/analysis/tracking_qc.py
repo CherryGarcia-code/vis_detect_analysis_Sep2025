@@ -1110,9 +1110,13 @@ def session_outlier_flags(uid: "UIDIntermediate") -> Dict[str, List[bool]]:
     return out
 
 
-def longest_good_run(is_outlier: Sequence[bool]) -> Tuple[int, int]:
+def _longest_good_run_contiguous(is_outlier: Sequence[bool]) -> Tuple[int, int]:
     """Return (start_idx, end_idx_exclusive) of the longest contiguous run of
-    non-outlier sessions. (0, 0) if no good sessions."""
+    non-outlier sessions. (0, 0) if no good sessions.
+
+    Internal helper: used as the fallback inside `longest_good_run` when the
+    skip-able algorithm cannot find a span whose kept set passes the
+    consistency gate."""
     best_start, best_end = 0, 0
     cur_start = None
     arr = list(is_outlier) + [True]  # sentinel
@@ -1129,24 +1133,125 @@ def longest_good_run(is_outlier: Sequence[bool]) -> Tuple[int, int]:
     return best_start, best_end
 
 
+def longest_good_run(
+    is_outlier: Sequence[bool],
+    is_hard_outlier: Sequence[bool],
+    isi_hists: Sequence[Optional[np.ndarray]],
+    *,
+    threshold: float = ISI_HIST_CORR_PASS,
+) -> Dict[str, List[int]]:
+    """Skip-able trim: largest set of non-outlier sessions inside any
+    hard-outlier-free span whose set-wide ISI hist correlation passes
+    `threshold`.
+
+    Algorithm:
+      1. Find all maximal contiguous spans containing NO hard outliers.
+      2. For each span, candidate kept_set = sessions in the span that are
+         NOT outliers of any kind (soft or hard).
+      3. Compute set-wide baseline_isi_hist_corr on kept_set's hists.
+      4. If correlation >= threshold (or fewer than 2 kept — gate
+         trivially satisfied for size 1; size 0 disqualifies), the span
+         qualifies. The skipped_set = soft outliers inside the span.
+      5. Pick the span with the LARGEST kept_set (ties → longest span,
+         then earliest start).
+      6. If NO span qualifies, fall back to longest contiguous all-good
+         run (no skipping).
+
+    Returns
+    -------
+    Dict[str, List[int]] with keys 'kept_indices' (sorted) and
+    'skipped_indices' (sorted). Indices outside the chosen span (or
+    hard outliers anywhere) are NOT returned by this function — the
+    caller computes 'dropped' as the complement.
+    """
+    n = len(is_outlier)
+    if n == 0:
+        return {"kept_indices": [], "skipped_indices": []}
+
+    # Step 1: maximal hard-outlier-free spans
+    spans: List[Tuple[int, int]] = []  # [(start, end_exclusive), ...]
+    cur_start: Optional[int] = None
+    for i in range(n):
+        if is_hard_outlier[i]:
+            if cur_start is not None:
+                spans.append((cur_start, i))
+                cur_start = None
+        else:
+            if cur_start is None:
+                cur_start = i
+    if cur_start is not None:
+        spans.append((cur_start, n))
+
+    # Step 2-4: evaluate each span
+    best_kept: List[int] = []
+    best_skipped: List[int] = []
+    best_span_len = 0
+    best_span_start = 10**9
+    for (s, e) in spans:
+        kept = [i for i in range(s, e) if not is_outlier[i]]
+        skipped = [i for i in range(s, e) if is_outlier[i]]
+        if not kept:
+            continue
+        if len(kept) >= 2:
+            kept_hists = [isi_hists[i] for i in kept]
+            corr = baseline_isi_hist_corr(kept_hists)
+            if not (np.isfinite(corr) and corr >= threshold):
+                continue
+        # Step 5 tie-breaking: larger kept, then longer span, then earlier start
+        span_len = e - s
+        better = (
+            len(kept) > len(best_kept)
+            or (len(kept) == len(best_kept) and span_len > best_span_len)
+            or (len(kept) == len(best_kept) and span_len == best_span_len and s < best_span_start)
+        )
+        if better:
+            best_kept = kept
+            best_skipped = skipped
+            best_span_len = span_len
+            best_span_start = s
+
+    if best_kept:
+        return {"kept_indices": best_kept, "skipped_indices": best_skipped}
+
+    # Step 6: fallback to contiguous-all-good
+    start, end = _longest_good_run_contiguous(is_outlier)
+    return {"kept_indices": list(range(start, end)), "skipped_indices": []}
+
+
 def find_stable_subset(uid: "UIDIntermediate") -> Dict[str, object]:
-    """Identify the longest contiguous good-session subset for this UID.
+    """Identify a stable kept subset of sessions for this UID, allowing
+    skip-over of soft outliers when cross-gap ISI fingerprint consistency
+    holds.
 
     Returns
     -------
     dict with keys:
-        outlier_flags : Dict[str, List[bool]]  (from session_outlier_flags)
-        kept_indices  : List[int]              (indices into uid.sessions)
-        dropped_indices : List[int]
-        trimmed_span  : int
+        outlier_flags    : Dict[str, List[bool]]  (from session_outlier_flags)
+        kept_indices     : List[int]              (GOOD sessions in kept span)
+        skipped_indices  : List[int]              (soft outliers inside span)
+        dropped_indices  : List[int]              (outside span, or hard
+                                                    outliers anywhere)
+        trimmed_span     : int                    (len of kept_indices)
+
+    Invariants:
+        kept ∪ skipped ∪ dropped == range(len(uid.sessions))
+        the three sets are pairwise disjoint
     """
     flags = session_outlier_flags(uid)
-    start, end = longest_good_run(flags["is_outlier"])
-    kept = list(range(start, end))
-    dropped = [i for i in range(len(uid.sessions)) if i not in set(kept)]
+    isi_hists = [r.isi_hist for r in uid.sessions]
+    run = longest_good_run(
+        flags["is_outlier"], flags["is_hard_outlier"], isi_hists,
+    )
+    kept = run["kept_indices"]
+    skipped = run["skipped_indices"]
+    kept_set = set(kept)
+    skipped_set = set(skipped)
+    dropped = [i for i in range(len(uid.sessions))
+               if i not in kept_set and i not in skipped_set]
     return {
         "outlier_flags": flags,
         "kept_indices": kept,
+        "skipped_indices": skipped,
         "dropped_indices": dropped,
         "trimmed_span": len(kept),
     }
