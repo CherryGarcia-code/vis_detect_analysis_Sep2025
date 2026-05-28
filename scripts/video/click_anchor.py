@@ -367,6 +367,13 @@ def main() -> int:
     args = parser.parse_args()
 
     session_name = args.session
+    # Normalize to 8-digit DDMMYYYY so cache lookups and file paths match
+    # the convention used by save_anchor / load_anchor / save_video_sync.
+    try:
+        session_name = str(int(session_name)).zfill(8)
+    except (TypeError, ValueError):
+        logger.error("Session name '%s' is not numeric.", args.session)
+        return 2
 
     # Load session + camera + coarse offset
     sess = load_session(session_name)
@@ -427,36 +434,37 @@ def main() -> int:
                 f"Anchor JSON for {session_name} already exists; overwrite? [y/N] "
             ).strip().lower()
             if resp not in ("y", "yes"):
-                logger.info("Aborting; existing anchor preserved.")
-                return 0
+                logger.info("Using existing anchor; skipping click UI.")
+                anchor = existing
 
-        click1 = run_stage1(video_path, predicted, fps, n_frames)
-        if click1 is None:
-            logger.info("Stage 1 cancelled by user.")
-            return 1
-        click2 = run_stage2(video_path, click1, fps, n_frames)
-        if click2 is None:
-            logger.info("Stage 2 cancelled by user.")
-            return 1
+        if anchor is None:
+            click1 = run_stage1(video_path, predicted, fps, n_frames)
+            if click1 is None:
+                logger.info("Stage 1 cancelled by user.")
+                return 1
+            click2 = run_stage2(video_path, click1, fps, n_frames)
+            if click2 is None:
+                logger.info("Stage 2 cancelled by user.")
+                return 1
 
-        anchor = {
-            "session": session_name,
-            "anchor_trial_index": 0,
-            "nidaq_baseline_on_s": float(baseline_on[0]),
-            "video_frame_idx": int(click2),
-            "video_time_s": float(ts_ms[int(click2)] / 1000.0),
-            "implied_offset_s": float(ts_ms[int(click2)] / 1000.0 - float(baseline_on[0])),
-            "frame_rate_fps": float(fps),
-            "n_trials": int(len(baseline_on)),
-            "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
-        }
-        save_anchor(session_name, anchor)
-        logger.info(
-            "Anchor saved: trial 0 @ frame %d (video time %.3fs); implied offset = %.3fs",
-            anchor["video_frame_idx"],
-            anchor["video_time_s"],
-            anchor["implied_offset_s"],
-        )
+            anchor = {
+                "session": session_name,
+                "anchor_trial_index": 0,
+                "nidaq_baseline_on_s": float(baseline_on[0]),
+                "video_frame_idx": int(click2),
+                "video_time_s": float(ts_ms[int(click2)] / 1000.0),
+                "implied_offset_s": float(ts_ms[int(click2)] / 1000.0 - float(baseline_on[0])),
+                "frame_rate_fps": float(fps),
+                "n_trials": int(len(baseline_on)),
+                "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
+            }
+            save_anchor(session_name, anchor)
+            logger.info(
+                "Anchor saved: trial 0 @ frame %d (video time %.3fs); implied offset = %.3fs",
+                anchor["video_frame_idx"],
+                anchor["video_time_s"],
+                anchor["implied_offset_s"],
+            )
 
     # Render montage
     montage_path = os.path.join(FIGS_DIR, f"{session_name}_barcode_montage.png")
