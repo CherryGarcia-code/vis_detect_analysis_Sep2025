@@ -55,8 +55,12 @@ STAGE1_PRE_S = 15.0   # seconds before predicted onset
 STAGE1_POST_S = 35.0  # seconds after predicted onset
 STAGE1_SAMPLING_S = 1.0
 
-# Stage 2: +/-25 frames around stage-1 click.
-STAGE2_HALF_WIDTH_FRAMES = 25
+# Stage 2: window biased entirely backward from stage-1 click.
+# Stage 1's 1-second sampling means the actual onset is somewhere in the
+# 1-second interval ending at the clicked cell. STAGE2_PRE_FRAMES + STAGE2_POST_FRAMES + 1
+# must equal N_CELLS (=50) so the grid is full.
+STAGE2_PRE_FRAMES = 49
+STAGE2_POST_FRAMES = 0
 
 # Default coarse offset if missing from cache.
 DEFAULT_COARSE_OFFSET_S = 15.0
@@ -91,9 +95,14 @@ def stage1_frame_indices(predicted: int, fps: float, n_frames: int) -> list[int]
 
 
 def stage2_frame_indices(stage1_click: int, fps: float, n_frames: int) -> list[int]:
-    """Return 50 frame indices for the fine stage (1 frame per cell)."""
+    """Return 50 frame indices for the fine stage (1 frame per cell).
+
+    Window is biased entirely backward: [click - STAGE2_PRE_FRAMES, click + STAGE2_POST_FRAMES].
+    The stage-1 click is the rightmost cell (gold-bordered in the UI), and the
+    actual grating onset is in the 1-second interval ending there.
+    """
     # Note: fps not used here (one frame per cell), but kept for signature symmetry.
-    start = stage1_click - STAGE2_HALF_WIDTH_FRAMES
+    start = stage1_click - STAGE2_PRE_FRAMES
     start = max(0, min(n_frames - N_CELLS, start))
     return [min(n_frames - 1, start + i) for i in range(N_CELLS)]
 
@@ -254,7 +263,7 @@ def run_stage2(
         title=(
             "Stage 2 - Fine pick. Click the exact frame where the grating "
             "appears. ESC to cancel.\n"
-            f"(stage-1 click = frame {stage1_click}; 1 frame between cells; gold = stage-1 click)"
+            f"(stage-1 click at right edge = gold; window is 1s biased backward; 1 frame between cells)"
         ),
         centre_frame=stage1_click,
         fps=fps,

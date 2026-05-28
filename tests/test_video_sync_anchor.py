@@ -153,13 +153,13 @@ def test_stage1_frame_indices_clamps_at_end():
     assert len(idx) == 50  # always 50 cells even when clamped
 
 
-def test_stage2_frame_indices_centered():
+def test_stage2_frame_indices_biased_backward():
     ca = _import_click_anchor()
-    # 50 fps, ±25 frames around clicked frame → 50 cells
+    # Window is [click - 49, click], 50 cells, biased entirely backward.
     idx = ca.stage2_frame_indices(stage1_click=1000, fps=50.0, n_frames=5000)
     assert len(idx) == 50
-    assert idx[0] == 1000 - 25
-    assert idx[-1] == 1000 + 24
+    assert idx[0] == 1000 - 49
+    assert idx[-1] == 1000
 
 
 def test_stage2_frame_indices_clamps():
