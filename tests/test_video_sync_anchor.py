@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 import numpy as np
+import pytest
 
 from visdetect.core import video_sync as vs
 
@@ -186,3 +187,37 @@ def test_pick_sampled_trials_short_session():
     assert ca._pick_sampled_trials(3, 5) == [0, 1, 2]
     # n_trials == n_rows → also returns range(n_trials)
     assert ca._pick_sampled_trials(5, 5) == [0, 1, 2, 3, 4]
+
+
+def test_jump_to_predicted_frame_basic():
+    ca = _import_click_anchor()
+    # 50 fps, 5000 frames covering 100 s
+    ts_ms = np.arange(0.0, 100000.0, 20.0)
+    baseline_on = np.array([5.0, 10.0, 15.0])  # NI-DAQ times
+    # implied_offset = -4.0  → video_time = NI_time - 4.0
+    # trial 0 predicted at video 1.0 s = frame 50
+    frame = ca.jump_to_predicted_frame(0, baseline_on, -4.0, ts_ms)
+    assert frame == 50
+    # trial 1 predicted at video 6.0 s = frame 300
+    frame = ca.jump_to_predicted_frame(1, baseline_on, -4.0, ts_ms)
+    assert frame == 300
+
+
+def test_jump_to_predicted_frame_clamps():
+    ca = _import_click_anchor()
+    ts_ms = np.arange(0.0, 1000.0, 20.0)  # 50 frames
+    baseline_on = np.array([0.5, 100.0])
+    # trial 0: video time = 0.5 - 10 = -9.5 s → clamp to 0
+    assert ca.jump_to_predicted_frame(0, baseline_on, -10.0, ts_ms) == 0
+    # trial 1: video time = 100 - 0 = 100 s → clamp to last
+    assert ca.jump_to_predicted_frame(1, baseline_on, 0.0, ts_ms) == len(ts_ms) - 1
+
+
+def test_jump_to_predicted_frame_out_of_range_raises():
+    ca = _import_click_anchor()
+    ts_ms = np.arange(0.0, 1000.0, 20.0)
+    baseline_on = np.array([1.0, 2.0])
+    with pytest.raises(IndexError):
+        ca.jump_to_predicted_frame(2, baseline_on, 0.0, ts_ms)
+    with pytest.raises(IndexError):
+        ca.jump_to_predicted_frame(-1, baseline_on, 0.0, ts_ms)

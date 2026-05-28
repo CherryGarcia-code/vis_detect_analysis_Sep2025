@@ -107,6 +107,30 @@ def stage2_frame_indices(stage1_click: int, fps: float, n_frames: int) -> list[i
     return [min(n_frames - 1, start + i) for i in range(N_CELLS)]
 
 
+def jump_to_predicted_frame(
+    trial_idx: int,
+    baseline_on: np.ndarray,
+    implied_offset_s: float,
+    ts_ms: np.ndarray,
+) -> int:
+    """Return the video frame index closest to trial *trial_idx*'s predicted onset.
+
+    Predicted video time of trial i = baseline_on[i] + implied_offset_s.
+    Returns the nearest frame index in ts_ms, clamped to [0, len(ts_ms)-1].
+    Raises IndexError if trial_idx is out of range.
+    """
+    if trial_idx < 0 or trial_idx >= len(baseline_on):
+        raise IndexError(
+            f"trial_idx {trial_idx} out of range [0, {len(baseline_on) - 1}]"
+        )
+    target_ms = (float(baseline_on[trial_idx]) + implied_offset_s) * 1000.0
+    if target_ms <= ts_ms[0]:
+        return 0
+    if target_ms >= ts_ms[-1]:
+        return int(len(ts_ms) - 1)
+    return int(np.argmin(np.abs(ts_ms - target_ms)))
+
+
 # ---------------------------------------------------------------------------
 # Frame I/O + eye-region crop
 # ---------------------------------------------------------------------------
@@ -270,6 +294,226 @@ def run_stage2(
     )
 
 
+def _run_scrub(
+    session_name: str,
+    video_path: str,
+    baseline_on: np.ndarray,
+    ts_ms: np.ndarray,
+    fps: float,
+    n_frames: int,
+    start_frame: int,
+    existing_anchor: Optional[dict],
+) -> Optional[dict]:
+    """Keyboard-driven frame-by-frame scrubber for the eye-cam video.
+
+    Opens a TkAgg window showing one cropped eye frame at a time. The user
+    navigates with arrow keys (and modifiers), jumps between predicted trial
+    onsets with J/K/Home/End, and saves the current frame as the anchor with
+    Space/Enter. Quits with Q/ESC without saving.
+
+    Returns the saved anchor dict on success, or None if the user quit without saving.
+
+    The "implied offset" used for J/K/Home/End jumps is computed from the
+    *existing* anchor when present, otherwise from the current scrub frame
+    itself (so jumps remain meaningful as the user navigates).
+    """
+    # Capture state via mutable containers so closures can mutate it.
+    state = {
+        "frame_idx": int(np.clip(start_frame, 0, n_frames - 1)),
+        "saved_anchor": None,  # Optional[dict]
+    }
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise IOError(f"Could not open video: {video_path}")
+    y0, y1, x0, x1 = EYE_REGION_CROP_BG046
+
+    def _read_frame(fi: int) -> np.ndarray:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(fi))
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            return np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return gray[y0:y1, x0:x1]
+
+    def _implied_offset_for_jumps() -> float:
+        """Use existing anchor's offset if present, else compute from current frame."""
+        if existing_anchor is not None:
+            return float(existing_anchor["implied_offset_s"])
+        # Fall back: pretend current frame anchors trial 0.
+        return float(ts_ms[state["frame_idx"]] / 1000.0 - float(baseline_on[0]))
+
+    def _nearest_trial_idx(frame_idx: int) -> int:
+        """Find the trial whose predicted video frame is closest to *frame_idx*."""
+        offs = _implied_offset_for_jumps()
+        # Predicted video time of each trial in ms
+        predicted_ms = (baseline_on + offs) * 1000.0
+        actual_ms = ts_ms[frame_idx]
+        return int(np.argmin(np.abs(predicted_ms - actual_ms)))
+
+    fig = plt.figure(figsize=(8, 10))
+    gs = fig.add_gridspec(2, 1, height_ratios=[5, 1], hspace=0.1)
+    ax_frame = fig.add_subplot(gs[0])
+    ax_hud = fig.add_subplot(gs[1])
+    ax_hud.axis("off")
+
+    im = ax_frame.imshow(_read_frame(state["frame_idx"]), cmap="gray",
+                         vmin=0, vmax=255, interpolation="nearest")
+    ax_frame.set_xticks([]); ax_frame.set_yticks([])
+
+    hud_text = ax_hud.text(
+        0.02, 0.5, "", fontsize=9, family="monospace",
+        verticalalignment="center", transform=ax_hud.transAxes,
+    )
+
+    def _refresh():
+        fi = state["frame_idx"]
+        im.set_data(_read_frame(fi))
+        # Build HUD
+        video_time_s = float(ts_ms[fi] / 1000.0)
+        trial_idx = _nearest_trial_idx(fi)
+        offs_jumps = _implied_offset_for_jumps()
+        predicted_frame = jump_to_predicted_frame(
+            trial_idx, baseline_on, offs_jumps, ts_ms
+        )
+        delta = fi - predicted_frame
+        if_saved_offset_s = float(
+            ts_ms[fi] / 1000.0 - float(baseline_on[0])
+        )
+        if existing_anchor is not None:
+            existing_frame = int(existing_anchor["video_frame_idx"])
+            existing_offset_s = float(existing_anchor["implied_offset_s"])
+            existing_line = (
+                f"Existing anchor: frame {existing_frame} "
+                f"(implied_offset = {existing_offset_s:+.4f} s)"
+            )
+        else:
+            existing_line = "Existing anchor: none"
+        lines = [
+            f"Session {session_name}  |  frame {fi}  |  video time {video_time_s:.4f} s",
+            existing_line,
+            f"Nearest trial: {trial_idx}  (NI {float(baseline_on[trial_idx]):.4f} s, "
+            f"predicted frame {predicted_frame}, Delta = {delta:+d} frame{'s' if abs(delta) != 1 else ''})",
+            f"If saved here (anchor for trial 0): implied_offset = {if_saved_offset_s:+.4f} s",
+            "",
+            "Arrow keys = +/-1 frame    Shift+Arrow = +/-10    Ctrl+Arrow = +/-100",
+            "J / K = next/prev predicted trial    Home/End = first/last trial    R = re-render montage",
+            "Space / Enter = save anchor    Q / ESC = quit",
+        ]
+        hud_text.set_text("\n".join(lines))
+        fig.canvas.draw_idle()
+
+    def on_key(event):
+        key = event.key
+        if key in ("q", "escape"):
+            plt.close(fig); return
+
+        step = 0
+        if key == "left":
+            step = -1
+        elif key == "right":
+            step = +1
+        elif key in ("shift+left", "pageup"):
+            step = -10
+        elif key in ("shift+right", "pagedown"):
+            step = +10
+        elif key in ("ctrl+left",):
+            step = -100
+        elif key in ("ctrl+right",):
+            step = +100
+
+        if step != 0:
+            state["frame_idx"] = int(np.clip(state["frame_idx"] + step, 0, n_frames - 1))
+            _refresh()
+            return
+
+        if key == "j":
+            trial_idx = _nearest_trial_idx(state["frame_idx"])
+            new_trial = min(len(baseline_on) - 1, trial_idx + 1)
+            state["frame_idx"] = jump_to_predicted_frame(
+                new_trial, baseline_on, _implied_offset_for_jumps(), ts_ms
+            )
+            _refresh()
+            return
+        if key == "k":
+            trial_idx = _nearest_trial_idx(state["frame_idx"])
+            new_trial = max(0, trial_idx - 1)
+            state["frame_idx"] = jump_to_predicted_frame(
+                new_trial, baseline_on, _implied_offset_for_jumps(), ts_ms
+            )
+            _refresh()
+            return
+        if key == "home":
+            state["frame_idx"] = jump_to_predicted_frame(
+                0, baseline_on, _implied_offset_for_jumps(), ts_ms
+            )
+            _refresh()
+            return
+        if key == "end":
+            state["frame_idx"] = jump_to_predicted_frame(
+                len(baseline_on) - 1, baseline_on, _implied_offset_for_jumps(), ts_ms
+            )
+            _refresh()
+            return
+
+        if key in (" ", "enter"):
+            fi = state["frame_idx"]
+            anchor = {
+                "session": session_name,
+                "anchor_trial_index": 0,
+                "nidaq_baseline_on_s": float(baseline_on[0]),
+                "video_frame_idx": int(fi),
+                "video_time_s": float(ts_ms[fi] / 1000.0),
+                "implied_offset_s": float(ts_ms[fi] / 1000.0 - float(baseline_on[0])),
+                "frame_rate_fps": float(fps),
+                "n_trials": int(len(baseline_on)),
+                "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
+            }
+            save_anchor(session_name, anchor)
+            state["saved_anchor"] = anchor
+            logger.info(
+                "Anchor saved via scrub: frame %d (video time %.4fs); implied offset = %.4fs",
+                fi, anchor["video_time_s"], anchor["implied_offset_s"],
+            )
+            plt.close(fig)
+            return
+
+        if key == "r":
+            # Render montage with current frame as candidate anchor (no save)
+            fi = state["frame_idx"]
+            candidate = {
+                "session": session_name,
+                "anchor_trial_index": 0,
+                "nidaq_baseline_on_s": float(baseline_on[0]),
+                "video_frame_idx": int(fi),
+                "video_time_s": float(ts_ms[fi] / 1000.0),
+                "implied_offset_s": float(ts_ms[fi] / 1000.0 - float(baseline_on[0])),
+                "frame_rate_fps": float(fps),
+                "n_trials": int(len(baseline_on)),
+                "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
+            }
+            montage_path = os.path.join(
+                FIGS_DIR, f"{session_name}_barcode_montage_PREVIEW.png"
+            )
+            render_barcode_montage(
+                session_name=session_name,
+                anchor=candidate,
+                baseline_on=baseline_on,
+                video_path=video_path,
+                ts_ms=ts_ms,
+                fps=fps,
+                out_path=montage_path,
+            )
+            logger.info("Preview montage written: %s", montage_path)
+
+    fig.canvas.mpl_connect("key_press_event", on_key)
+    _refresh()
+    plt.show()
+    cap.release()
+
+    return state["saved_anchor"]
+
+
 # ---------------------------------------------------------------------------
 # Barcode montage renderer
 # ---------------------------------------------------------------------------
@@ -373,6 +617,14 @@ def main() -> int:
         "--reuse-existing-anchor", action="store_true",
         help="Skip the click UI and just render the montage from a saved anchor.",
     )
+    parser.add_argument(
+        "--scrub", action="store_true",
+        help="Open frame-by-frame scrubber UI instead of the 2-stage click flow.",
+    )
+    parser.add_argument(
+        "--start-from", choices=("anchor", "coarse", "zero"), default=None,
+        help="Starting frame for --scrub. Default: 'anchor' if anchor JSON exists, else 'coarse'.",
+    )
     args = parser.parse_args()
 
     session_name = args.session
@@ -428,52 +680,81 @@ def main() -> int:
 
     # Anchor: load existing or run two-stage click
     anchor: Optional[dict] = None
-    if args.reuse_existing_anchor:
-        anchor = load_anchor(session_name)
-        if anchor is None:
-            logger.error(
-                "--reuse-existing-anchor passed but no anchor JSON found for %s.",
-                session_name,
-            )
-            return 2
-    else:
+    if args.scrub:
+        # Resolve start-frame.
+        start_mode = args.start_from
         existing = load_anchor(session_name)
-        if existing is not None:
-            resp = input(
-                f"Anchor JSON for {session_name} already exists; overwrite? [y/N] "
-            ).strip().lower()
-            if resp not in ("y", "yes"):
-                logger.info("Using existing anchor; skipping click UI.")
-                anchor = existing
+        if start_mode is None:
+            start_mode = "anchor" if existing is not None else "coarse"
+        if start_mode == "anchor" and existing is not None:
+            start_frame = int(existing["video_frame_idx"])
+        elif start_mode == "coarse":
+            start_frame = predicted
+        else:  # "zero" or "anchor" without existing anchor
+            start_frame = 0
 
-        if anchor is None:
-            click1 = run_stage1(video_path, predicted, fps, n_frames)
-            if click1 is None:
-                logger.info("Stage 1 cancelled by user.")
-                return 1
-            click2 = run_stage2(video_path, click1, fps, n_frames)
-            if click2 is None:
-                logger.info("Stage 2 cancelled by user.")
-                return 1
+        anchor_after = _run_scrub(
+            session_name=session_name,
+            video_path=video_path,
+            baseline_on=baseline_on,
+            ts_ms=ts_ms,
+            fps=fps,
+            n_frames=n_frames,
+            start_frame=start_frame,
+            existing_anchor=existing,
+        )
+        if anchor_after is None:
+            # User quit without saving.
+            logger.info("Scrubber exited without saving.")
+            return 1
+        anchor = anchor_after  # use for downstream montage rendering
+    else:
+        if args.reuse_existing_anchor:
+            anchor = load_anchor(session_name)
+            if anchor is None:
+                logger.error(
+                    "--reuse-existing-anchor passed but no anchor JSON found for %s.",
+                    session_name,
+                )
+                return 2
+        else:
+            existing = load_anchor(session_name)
+            if existing is not None:
+                resp = input(
+                    f"Anchor JSON for {session_name} already exists; overwrite? [y/N] "
+                ).strip().lower()
+                if resp not in ("y", "yes"):
+                    logger.info("Using existing anchor; skipping click UI.")
+                    anchor = existing
 
-            anchor = {
-                "session": session_name,
-                "anchor_trial_index": 0,
-                "nidaq_baseline_on_s": float(baseline_on[0]),
-                "video_frame_idx": int(click2),
-                "video_time_s": float(ts_ms[int(click2)] / 1000.0),
-                "implied_offset_s": float(ts_ms[int(click2)] / 1000.0 - float(baseline_on[0])),
-                "frame_rate_fps": float(fps),
-                "n_trials": int(len(baseline_on)),
-                "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
-            }
-            save_anchor(session_name, anchor)
-            logger.info(
-                "Anchor saved: trial 0 @ frame %d (video time %.3fs); implied offset = %.3fs",
-                anchor["video_frame_idx"],
-                anchor["video_time_s"],
-                anchor["implied_offset_s"],
-            )
+            if anchor is None:
+                click1 = run_stage1(video_path, predicted, fps, n_frames)
+                if click1 is None:
+                    logger.info("Stage 1 cancelled by user.")
+                    return 1
+                click2 = run_stage2(video_path, click1, fps, n_frames)
+                if click2 is None:
+                    logger.info("Stage 2 cancelled by user.")
+                    return 1
+
+                anchor = {
+                    "session": session_name,
+                    "anchor_trial_index": 0,
+                    "nidaq_baseline_on_s": float(baseline_on[0]),
+                    "video_frame_idx": int(click2),
+                    "video_time_s": float(ts_ms[int(click2)] / 1000.0),
+                    "implied_offset_s": float(ts_ms[int(click2)] / 1000.0 - float(baseline_on[0])),
+                    "frame_rate_fps": float(fps),
+                    "n_trials": int(len(baseline_on)),
+                    "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
+                }
+                save_anchor(session_name, anchor)
+                logger.info(
+                    "Anchor saved: trial 0 @ frame %d (video time %.3fs); implied offset = %.3fs",
+                    anchor["video_frame_idx"],
+                    anchor["video_time_s"],
+                    anchor["implied_offset_s"],
+                )
 
     # Render montage
     montage_path = os.path.join(FIGS_DIR, f"{session_name}_barcode_montage.png")
