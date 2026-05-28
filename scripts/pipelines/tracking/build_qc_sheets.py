@@ -305,6 +305,7 @@ def main() -> int:
             continue
         stable = find_stable_subset(iv)
         kept = stable["kept_indices"]
+        skipped = stable["skipped_indices"]
         dropped = stable["dropped_indices"]
         if kept:
             kept_sessions = [iv.sessions[i] for i in kept]
@@ -328,6 +329,7 @@ def main() -> int:
         uid_trim_info[uid] = {
             "stable": stable,
             "kept_indices": kept,
+            "skipped_indices": skipped,
             "dropped_indices": dropped,
             "trimmed_metrics": tm,
             "trimmed_verdict": tv,
@@ -345,13 +347,16 @@ def main() -> int:
         # the 4-badge composite verdict it renders in the header.  Trim info
         # (dropped sessions, kept-count, trimmed verdict) is forwarded so the
         # renderer can visually mark dropped sessions throughout the PDF.
+        # Skipped sessions render identically to dropped per spec §3.5;
+        # union both into the single "visually dim" set the renderer expects.
+        visually_dropped = sorted(set(trim["dropped_indices"]) | set(trim["skipped_indices"]))
         verdict_pdf = write_uid_pdf(
             out_path, iv, pair_scores.get(uid),
             isi_score=isi,
             depth_std=metrics["depth_std_um"],
             wave_corr=metrics["wave_corr"],
             fr_cv_val=metrics["fr_cv"],
-            dropped_indices=list(trim["dropped_indices"]),
+            dropped_indices=visually_dropped,
             n_kept=len(trim["kept_indices"]),
             trimmed_verdict=str(trim["trimmed_verdict"]),
         )
@@ -416,11 +421,13 @@ def main() -> int:
                 "global_uid": uid, "original_span": iv.span,
                 "trimmed_span": 0,
                 "dropped_sessions": ";".join(r.session_name for r in iv.sessions),
+                "skipped_sessions": "",
                 "kept_sessions": "", "trimmed_verdict": "suspect",
                 "rescued": False,
             })
             continue
         kept_sessions = [iv.sessions[i] for i in kept]
+        skipped_sessions = [iv.sessions[i] for i in trim["skipped_indices"]]
         dropped_sessions = [iv.sessions[i] for i in dropped]
         # Look up the original CSV verdict for comparison
         original_verdict = next((r["verdict"] for r in rows if r["global_uid"] == uid), "")
@@ -432,6 +439,7 @@ def main() -> int:
             "trimmed_span": len(kept),
             "n_dropped": len(dropped_sessions),
             "dropped_sessions": ";".join(r.session_name for r in dropped_sessions),
+            "skipped_sessions": ";".join(r.session_name for r in skipped_sessions),
             "kept_sessions": ";".join(r.session_name for r in kept_sessions),
             "trimmed_depth_std_um":            tm["depth_std_um"],
             "trimmed_depth_std_corrected_um": tm["depth_std_corrected_um"],
