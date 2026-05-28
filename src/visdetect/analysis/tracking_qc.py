@@ -1000,12 +1000,14 @@ def session_outlier_flags(uid: "UIDIntermediate") -> Dict[str, List[bool]]:
     """
     n = len(uid.sessions)
     out = {
-        "isi_peak":      [False] * n,
-        "fr":            [False] * n,
-        "wave":          [False] * n,
-        "depth":         [False] * n,
-        "unknown_stage": [False] * n,
-        "is_outlier":    [False] * n,
+        "isi_peak":         [False] * n,
+        "fr":               [False] * n,
+        "wave":             [False] * n,
+        "depth":            [False] * n,
+        "unknown_stage":    [False] * n,
+        "is_hard_outlier":  [False] * n,   # NEW: wave OR depth flag set
+        "is_soft_outlier":  [False] * n,   # NEW: is_outlier AND NOT is_hard_outlier
+        "is_outlier":       [False] * n,
     }
     if n == 0:
         return out
@@ -1085,6 +1087,13 @@ def session_outlier_flags(uid: "UIDIntermediate") -> Dict[str, List[bool]]:
             or strikes >= 2
             or out["unknown_stage"][i]
         )
+        # Hard vs soft classification (used by skip-able trimming).
+        # Hard = wave or depth outlier — strongly suggests a different physical
+        # unit at this probe position; never skip across these. Soft = any
+        # other outlier type (unknown_stage, fr, isi_peak) — data-quality or
+        # transient issues; cell identity may be intact, eligible for skip.
+        out["is_hard_outlier"][i] = out["wave"][i] or out["depth"][i]
+        out["is_soft_outlier"][i] = out["is_outlier"][i] and not out["is_hard_outlier"][i]
 
     return out
 

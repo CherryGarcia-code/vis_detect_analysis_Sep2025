@@ -593,3 +593,46 @@ def test_find_stable_subset_drops_unknown_sessions():
     stable = qc.find_stable_subset(uid)
     assert stable["kept_indices"] == [3, 4, 5]
     assert 2 in stable["dropped_indices"]
+
+
+def test_session_outlier_flags_classifies_hard_vs_soft():
+    """is_hard_outlier = wave OR depth (independent of composite is_outlier rule).
+    is_soft_outlier = is_outlier AND NOT is_hard_outlier.
+
+    Note: is_hard_outlier and is_outlier are independent signals — a session
+    with ONLY a wave flag (strikes=1) is is_hard_outlier=True but NOT
+    is_outlier (the existing composite rule requires isi_peak OR strikes>=2
+    OR unknown_stage). The new algorithm uses both flags separately."""
+    h_clean = np.zeros(50, dtype=np.float32); h_clean[15] = 1.0
+    h_bimodal = np.zeros(50, dtype=np.float32); h_bimodal[35] = 1.0
+    wave_clean = np.array([0.0, 1.0, 0.0, -1.0, 0.0] * 16 + [0.0, 1.0], dtype=np.float32)
+    wave_flipped = -wave_clean
+    def mk_rec(name, stage, peak_hist, fr, wave, depth):
+        return qc.SessionRecord(
+            session_name=name, ks_unit_id=0, stage=stage,
+            peak_chan=0, peak_depth_um=float(depth), amplitude=1.0,
+            baseline_fr_hz=float(fr), waveform_peak=wave,
+            footprint=np.zeros((82, 17), dtype=np.float32),
+            footprint_channels=np.arange(17),
+            isi_hist=peak_hist, isi_centers=np.zeros(50, dtype=np.float32),
+        )
+    sessions = [
+        mk_rec("s00", "Learning", h_clean,    5.0, wave_clean,   1000.0),  # clean
+        mk_rec("s01", "Learning", h_clean,    5.0, wave_flipped, 1000.0),  # wave-only: HARD, NOT is_outlier
+        mk_rec("s02", "Learning", h_bimodal,  5.0, wave_clean,   1000.0),  # isi_peak alone: SOFT, is_outlier
+        mk_rec("s03", "Learning", h_clean,    5.0, wave_clean,   1000.0),  # clean
+        mk_rec("s04", "Unknown",  h_clean,    5.0, wave_clean,   1000.0),  # unknown_stage: SOFT, is_outlier
+    ]
+    uid = qc.UIDIntermediate(
+        global_uid=1, span=5, has_naive_to_expert=False,
+        suspect_known=False, sessions=sessions,
+    )
+    f = qc.session_outlier_flags(uid)
+    assert "is_hard_outlier" in f
+    assert "is_soft_outlier" in f
+    # s01: wave-only triggers is_hard_outlier but NOT is_outlier (strikes=1)
+    # s02: isi_peak alone triggers is_outlier directly; soft (no wave/depth)
+    # s04: unknown_stage triggers is_outlier directly; soft (no wave/depth)
+    assert f["is_hard_outlier"] == [False, True,  False, False, False]
+    assert f["is_soft_outlier"] == [False, False, True,  False, True]
+    assert f["is_outlier"]      == [False, False, True,  False, True]
