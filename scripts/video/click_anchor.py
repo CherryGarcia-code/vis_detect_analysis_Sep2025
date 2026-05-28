@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import json
 import logging
 import os
 import sys
@@ -355,8 +356,135 @@ def render_barcode_montage(
 
 
 def main() -> int:
-    """Entry point. Implemented in Task 5."""
-    raise NotImplementedError("Wired up in Task 5.")
+    parser = argparse.ArgumentParser(
+        description="Manually anchor trial 1 Baseline_ON for a session's eye-cam video.",
+    )
+    parser.add_argument("--session", required=True, help="Session name (e.g. 09092025).")
+    parser.add_argument(
+        "--reuse-existing-anchor", action="store_true",
+        help="Skip the click UI and just render the montage from a saved anchor.",
+    )
+    args = parser.parse_args()
+
+    session_name = args.session
+
+    # Load session + camera + coarse offset
+    sess = load_session(session_name)
+    baseline_on = np.asarray(
+        sess.ni_events.get("Baseline_ON", []), dtype=float
+    )
+    baseline_on = baseline_on[baseline_on > 0]
+    n_task_trials = len(sess.trials)
+    if n_task_trials > 0 and len(baseline_on) > n_task_trials:
+        baseline_on = baseline_on[:n_task_trials]
+    if len(baseline_on) == 0:
+        logger.error("No Baseline_ON events for session %s - aborting.", session_name)
+        return 2
+
+    try:
+        cam_files = find_camera_files(session_name)
+    except Exception as exc:
+        logger.error("Could not locate camera files for %s: %s", session_name, exc)
+        return 2
+    if "eye_cam" not in cam_files:
+        logger.error("No eye-cam video/metadata pair found for %s.", session_name)
+        return 2
+    video_path = cam_files["eye_cam"]["video"]
+    meta_path = cam_files["eye_cam"]["metadata"]
+
+    ts_ms, _, _ = load_camera_metadata(meta_path)
+    fps = 1000.0 / float(np.median(np.diff(ts_ms)))
+    n_frames = len(ts_ms)
+
+    coarse_offset_s = _read_coarse_offset(session_name)
+    if coarse_offset_s is None:
+        logger.warning(
+            "No cached coarse offset for %s; falling back to %.1fs default.",
+            session_name, DEFAULT_COARSE_OFFSET_S,
+        )
+        coarse_offset_s = DEFAULT_COARSE_OFFSET_S
+
+    predicted = compute_predicted_frame_idx(
+        baseline_on_s=float(baseline_on[0]),
+        coarse_offset_s=float(coarse_offset_s),
+        ts_ms=ts_ms,
+    )
+
+    # Anchor: load existing or run two-stage click
+    anchor: Optional[dict] = None
+    if args.reuse_existing_anchor:
+        anchor = load_anchor(session_name)
+        if anchor is None:
+            logger.error(
+                "--reuse-existing-anchor passed but no anchor JSON found for %s.",
+                session_name,
+            )
+            return 2
+    else:
+        existing = load_anchor(session_name)
+        if existing is not None:
+            resp = input(
+                f"Anchor JSON for {session_name} already exists; overwrite? [y/N] "
+            ).strip().lower()
+            if resp not in ("y", "yes"):
+                logger.info("Aborting; existing anchor preserved.")
+                return 0
+
+        click1 = run_stage1(video_path, predicted, fps, n_frames)
+        if click1 is None:
+            logger.info("Stage 1 cancelled by user.")
+            return 1
+        click2 = run_stage2(video_path, click1, fps, n_frames)
+        if click2 is None:
+            logger.info("Stage 2 cancelled by user.")
+            return 1
+
+        anchor = {
+            "session": session_name,
+            "anchor_trial_index": 0,
+            "nidaq_baseline_on_s": float(baseline_on[0]),
+            "video_frame_idx": int(click2),
+            "video_time_s": float(ts_ms[int(click2)] / 1000.0),
+            "implied_offset_s": float(ts_ms[int(click2)] / 1000.0 - float(baseline_on[0])),
+            "frame_rate_fps": float(fps),
+            "n_trials": int(len(baseline_on)),
+            "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
+        }
+        save_anchor(session_name, anchor)
+        logger.info(
+            "Anchor saved: trial 0 @ frame %d (video time %.3fs); implied offset = %.3fs",
+            anchor["video_frame_idx"],
+            anchor["video_time_s"],
+            anchor["implied_offset_s"],
+        )
+
+    # Render montage
+    montage_path = os.path.join(FIGS_DIR, f"{session_name}_barcode_montage.png")
+    render_barcode_montage(
+        session_name=session_name,
+        anchor=anchor,
+        baseline_on=baseline_on,
+        video_path=video_path,
+        ts_ms=ts_ms,
+        fps=fps,
+        out_path=montage_path,
+    )
+
+    anchor_path = os.path.join(VIDEO_SYNC_DIR, f"{session_name}_anchor.json")
+    print(f"Anchor:   {anchor_path}")
+    print(f"Montage:  {montage_path}")
+    return 0
+
+
+def _read_coarse_offset(session_name: str) -> Optional[float]:
+    """Return the cached coarse offset for *session_name*, or ``None`` if absent."""
+    path = os.path.join(VIDEO_SYNC_DIR, "coarse_offsets.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, "r") as f:
+        data = json.load(f)
+    val = data.get(session_name)
+    return float(val) if val is not None else None
 
 
 if __name__ == "__main__":
