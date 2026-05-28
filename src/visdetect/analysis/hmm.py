@@ -915,6 +915,79 @@ def auto_label_states(model: GLMHMM) -> List[str]:
     return labels
 
 
+def auto_label_states_explicit(
+    model: GLMHMM,
+    *,
+    tau_low: float = 0.2,
+    tau_high: float = 0.5,
+    stim_high: float = 2.0,
+) -> List[str]:
+    """Assign labels using explicit a priori criteria over (P(lick|catch), P(lick|large-go)).
+
+    Foundation for cross-mouse state correspondence (see audit spec §1.1, F25,
+    CC-2). Unlike ``auto_label_states`` (rank-based), this guarantees that two
+    states labeled "Impulsive" in different fits/animals satisfy the same joint
+    signature.
+
+    Criteria:
+        Impulsive          : p_catch >  tau_high AND p_high >= tau_high
+        Stimulus_sensitive : p_catch <  tau_low  AND p_high >= tau_high
+        Disengaged         : p_catch <  tau_low  AND p_high <  tau_high
+        else               : "Intermediate_{k}"
+
+    For K > 3, multiple states may match the same region; suffix with `_1, _2`
+    by ascending sensitivity (p_high - p_catch).
+
+    Parameters
+    ----------
+    model : GLMHMM
+        Fitted model.
+    tau_low : float
+        Upper bound on P(lick|catch) for "low impulsivity" classification.
+    tau_high : float
+        Lower bound on P(lick) for "high responsiveness" classification.
+    stim_high : float
+        log2(change_size) value treated as "large go" stimulus. Default 2.0
+        (= log2(4.0), the largest change_size in the BG_046 protocol).
+
+    Returns
+    -------
+    list of str, length K.
+    """
+    K, D = model.n_states, model.n_features
+    x_catch = np.zeros(D); x_catch[0] = 1.0
+    x_high  = np.zeros(D); x_high[0]  = 1.0; x_high[1] = stim_high
+
+    p_catch = np.array([float(expit(model.weights[k] @ x_catch)) for k in range(K)])
+    p_high  = np.array([float(expit(model.weights[k] @ x_high))  for k in range(K)])
+
+    raw_labels: List[str] = []
+    for k in range(K):
+        if p_catch[k] > tau_high and p_high[k] >= tau_high:
+            raw_labels.append("Impulsive")
+        elif p_catch[k] < tau_low and p_high[k] >= tau_high:
+            raw_labels.append("Stimulus_sensitive")
+        elif p_catch[k] < tau_low and p_high[k] < tau_high:
+            raw_labels.append("Disengaged")
+        else:
+            raw_labels.append(f"Intermediate_{k}")
+
+    # Disambiguate duplicates by sensitivity ascending.
+    sensitivity = p_high - p_catch
+    counts: Dict[str, int] = {}
+    for lbl in raw_labels:
+        counts[lbl] = counts.get(lbl, 0) + 1
+
+    final: List[str] = list(raw_labels)
+    for canonical in ("Impulsive", "Stimulus_sensitive", "Disengaged"):
+        if counts.get(canonical, 0) > 1:
+            idxs = [i for i, lbl in enumerate(raw_labels) if lbl == canonical]
+            order = sorted(idxs, key=lambda i: sensitivity[i])
+            for rank, idx in enumerate(order, start=1):
+                final[idx] = f"{canonical}_{rank}"
+    return final
+
+
 # =====================================================================
 # Gating safety (F14)
 # =====================================================================
