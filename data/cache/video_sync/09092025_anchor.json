@@ -1,0 +1,11 @@
+{
+  "session": "09092025",
+  "anchor_trial_index": 0,
+  "nidaq_baseline_on_s": 27.829173432012986,
+  "video_frame_idx": 1167,
+  "video_time_s": 23.218682,
+  "implied_offset_s": -4.610491432012985,
+  "frame_rate_fps": 50.0400320251914,
+  "n_trials": 551,
+  "clicked_at": "2026-05-29T11:51:46"
+}
