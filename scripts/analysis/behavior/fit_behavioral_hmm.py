@@ -1,8 +1,11 @@
 """Fit a Bernoulli GLM-HMM to behavioural data across sessions.
 
 End-to-end script: loads sessions from a manifest, fits GLM-HMMs with
-model selection (BIC over K), saves the fitted model + per-trial state
-assignments, and generates diagnostic / interpretation plots.
+model selection (cross-validated log-likelihood in bits-per-trial;
+Ashwood Eq. 22). The lapse baseline ("L" row in selection_df) is fit
+alongside but excluded from K selection. Saves the fitted model +
+per-trial state assignments, and generates diagnostic / interpretation
+plots.
 
 Reference
 ---------
@@ -60,6 +63,7 @@ from visdetect.analysis.hmm import (
     GLMHMM,
     GLMHMMConfig,
     auto_label_states,
+    auto_label_states_explicit,
     decode_session,
     fit_best_model,
     prepare_session_data,
@@ -85,20 +89,24 @@ def _parse_date(session_name: str, subject: str = "") -> datetime:
 # =====================================================================
 
 def plot_model_selection(selection_df: pd.DataFrame, out_dir: Path):
-    """BIC and AIC vs K."""
+    """BIC and AIC vs K (integer-K rows only; lapse 'L' row excluded)."""
+    # Filter out the lapse baseline row so sorted() and astype(int) work.
+    K_only = selection_df[selection_df["K"] != "L"].copy()
+    K_only["K"] = K_only["K"].astype(int)
+
     fig, ax = plt.subplots(figsize=(6, 4))
-    ax.plot(selection_df["K"], selection_df["bic"], "o-", color="tab:blue",
+    ax.plot(K_only["K"], K_only["bic"], "o-", color="tab:blue",
             label="BIC", linewidth=2, markersize=8)
-    ax.plot(selection_df["K"], selection_df["aic"], "s--", color="tab:orange",
+    ax.plot(K_only["K"], K_only["aic"], "s--", color="tab:orange",
             label="AIC", linewidth=2, markersize=8)
-    best_k = int(selection_df.loc[selection_df["bic"].idxmin(), "K"])
-    best_bic = selection_df.loc[selection_df["bic"].idxmin(), "bic"]
+    best_k = int(K_only.loc[K_only["bic"].idxmin(), "K"])
+    best_bic = K_only.loc[K_only["bic"].idxmin(), "bic"]
     ax.annotate(f"K={best_k}", (best_k, best_bic),
                 textcoords="offset points", xytext=(10, -15),
                 fontsize=12, fontweight="bold", color="tab:blue")
     ax.set_xlabel("Number of states (K)")
     ax.set_ylabel("Information criterion")
-    ax.set_xticks(selection_df["K"].values)
+    ax.set_xticks(K_only["K"].values)
     ax.legend()
     ax.set_title("Model Selection")
     despine(ax)
@@ -339,10 +347,18 @@ def replot_from_saved(args):
         print(f"ERROR: {selection_path} not found. Run fitting first.")
         sys.exit(1)
     selection_df = pd.read_csv(selection_path)
-    best_K = int(selection_df.loc[selection_df["bic"].idxmin(), "K"])
+    K_only = selection_df[selection_df["K"] != "L"]
+    if K_only.empty:
+        print("ERROR: No integer-K rows in selection_df; nothing to replot.")
+        sys.exit(1)
+    # Track A F1: prefer CV LL if present (new default), fall back to BIC.
+    if "cv_ll_bits_per_trial" in K_only.columns and not K_only["cv_ll_bits_per_trial"].isna().all():
+        best_K = int(K_only.loc[K_only["cv_ll_bits_per_trial"].idxmax(), "K"])
+    else:
+        best_K = int(K_only.loc[K_only["bic"].idxmin(), "K"])
 
     # Collect all K values that have saved artefacts
-    all_K = sorted([int(r["K"]) for _, r in selection_df.iterrows()
+    all_K = sorted([int(r["K"]) for _, r in K_only.iterrows()
                     if (data_out / f"model_K{int(r['K'])}.pkl").exists()])
     if not all_K:
         print("ERROR: No saved model pkl files found. Run fitting first.")
@@ -518,7 +534,13 @@ def main():
         sessions_data, K_range=K_range, config=config, verbose=True,
         n_workers=args.n_workers, seed=args.seed,
     )
-    state_labels = auto_label_states(best_model)
+    # Track A F25: prefer the explicit a priori joint criteria over the
+    # rank-based heuristic. Falls back to rank-based if every fitted state
+    # ends up labeled "Intermediate_*" (very unlikely with K=2..5 from
+    # well-conditioned data).
+    state_labels = auto_label_states_explicit(best_model)
+    if all(lbl.startswith("Intermediate") for lbl in state_labels):
+        state_labels = auto_label_states(best_model)
     best_K = best_model.n_states
 
     # ------------------------------------------------------------------
@@ -528,10 +550,15 @@ def main():
     # Model selection table
     selection_df.to_csv(data_out / "model_selection.csv", index=False)
 
-    # Save ALL fitted models (pkl + assignments + labels) so downstream
-    # scripts can load any K with  --K <n>.
-    for K_val, kmodel in sorted(all_models.items()):
-        k_labels = auto_label_states(kmodel)
+    # Save ALL fitted integer-K models (pkl + assignments + labels) so
+    # downstream scripts can load any K with  --K <n>. The lapse "L"
+    # baseline (Track A F3) is saved separately below — it has a string
+    # key and would break sorted() on mixed int/str.
+    int_K_models = {k: m for k, m in all_models.items() if isinstance(k, int)}
+    for K_val, kmodel in sorted(int_K_models.items()):
+        k_labels = auto_label_states_explicit(kmodel)
+        if all(lbl.startswith("Intermediate") for lbl in k_labels):
+            k_labels = auto_label_states(kmodel)
         kmodel.save(data_out / f"model_K{K_val}.pkl")
 
         # Per-K state labels
@@ -555,8 +582,15 @@ def main():
         tag = " (best)" if K_val == best_K else ""
         print(f"  Saved K={K_val}{tag}: model pkl + assignments + labels")
 
+    # Save the lapse "L" baseline separately (Track A F3).
+    if "L" in all_models:
+        all_models["L"].save(data_out / "model_lapse.pkl")
+        print("  Saved lapse model: model_lapse.pkl")
+
     # Also write convenience aliases for the best K (backwards compat)
-    state_labels = auto_label_states(best_model)
+    state_labels = auto_label_states_explicit(best_model)
+    if all(lbl.startswith("Intermediate") for lbl in state_labels):
+        state_labels = auto_label_states(best_model)
     labels_path = data_out / "state_labels.json"
     with open(labels_path, "w") as f:
         json.dump({"K": best_K, "labels": state_labels}, f, indent=2)
@@ -589,8 +623,10 @@ def main():
 
     # 4b. Per-K plots: psychometrics, transition matrix, GLM weights,
     #     session timecourses, and learning fractions in K{n}/ sub-dirs.
-    for K_val, kmodel in sorted(all_models.items()):
-        k_labels = auto_label_states(kmodel)
+    for K_val, kmodel in sorted(int_K_models.items()):
+        k_labels = auto_label_states_explicit(kmodel)
+        if all(lbl.startswith("Intermediate") for lbl in k_labels):
+            k_labels = auto_label_states(kmodel)
         k_dir = out_dir / f"K{K_val}"
         k_dir.mkdir(parents=True, exist_ok=True)
         tag = " (best)" if K_val == best_K else ""
