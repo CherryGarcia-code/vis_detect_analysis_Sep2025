@@ -784,3 +784,36 @@ def test_longest_good_run_fallback_excludes_hard_outliers():
     assert 2 not in out["skipped_indices"], (
         f"Hard outlier at index 2 leaked into skipped_indices: {out}"
     )
+
+
+# ─── Option B: isi_hist_corr auto-pass ────────────────────────────────
+
+def test_apply_isi_autopass_promotes_when_threshold_met():
+    """ISI 0.97 + no wave/depth fail + suspect verdict → trusted."""
+    assert qc.apply_isi_autopass("suspect", 0.97, "pass", "pass") == "trusted"
+    assert qc.apply_isi_autopass("review",  0.97, "warn", "warn") == "trusted"
+    assert qc.apply_isi_autopass("trusted", 0.97, "pass", "pass") == "trusted"
+
+
+def test_apply_isi_autopass_blocks_on_wave_fail():
+    """High ISI + wave FAIL → verdict unchanged (hard biophysical block)."""
+    assert qc.apply_isi_autopass("suspect", 0.99, "fail", "pass") == "suspect"
+    assert qc.apply_isi_autopass("review",  0.99, "fail", "warn") == "review"
+
+
+def test_apply_isi_autopass_blocks_on_depth_fail():
+    """High ISI + depth FAIL → verdict unchanged."""
+    assert qc.apply_isi_autopass("suspect", 0.99, "pass", "fail") == "suspect"
+    assert qc.apply_isi_autopass("review",  0.99, "warn", "fail") == "review"
+
+
+def test_apply_isi_autopass_below_threshold_no_change():
+    """ISI 0.94 (just below 0.95 threshold) → no promotion."""
+    assert qc.apply_isi_autopass("suspect", 0.94, "pass", "pass") == "suspect"
+    assert qc.apply_isi_autopass("review",  0.85, "pass", "pass") == "review"
+
+
+def test_apply_isi_autopass_nan_no_change():
+    """NaN ISI → no promotion (the threshold check fails)."""
+    assert qc.apply_isi_autopass("suspect", float("nan"), "pass", "pass") == "suspect"
+    assert qc.apply_isi_autopass("review",  float("nan"), "pass", "pass") == "review"

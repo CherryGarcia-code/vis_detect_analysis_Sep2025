@@ -34,6 +34,7 @@ from visdetect.analysis.tracking_qc import (        # noqa: E402
     isi_peak_agreement, baseline_psth_corr, baseline_isi_hist_corr,
     badge_isi, badge_depth, badge_waveform, badge_fr,
     badge_isi_peak, badge_func_resp, badge_isi_hist_corr, composite_verdict,
+    apply_isi_autopass,
     estimate_session_drift, depth_std_um_corrected,
     save_cache, load_cache,
     find_stable_subset,
@@ -315,7 +316,7 @@ def main() -> int:
                 suspect_known=iv.suspect_known, sessions=kept_sessions,
             )
             tm = compute_uid_metrics(trimmed_iv, drift_offsets=drift_offsets)
-            tv = composite_verdict([
+            tv_pre_autopass = composite_verdict([
                 badge_isi(isi_scores[uid]),
                 badge_depth(_depth_for_badge(tm)),
                 badge_waveform(tm["wave_corr"]),
@@ -323,9 +324,16 @@ def main() -> int:
                 badge_isi_hist_corr(tm["isi_hist_corr"]),   # was badge_isi_peak(tm["isi_peak_agree"])
                 badge_func_resp(tm["func_resp_corr"]),
             ])
+            tv = apply_isi_autopass(
+                tv_pre_autopass, tm["isi_hist_corr"],
+                badge_waveform(tm["wave_corr"]),
+                badge_depth(_depth_for_badge(tm)),
+            )
+            trimmed_autopass_applied = (tv != tv_pre_autopass)
         else:
             tm = None
             tv = "suspect"
+            trimmed_autopass_applied = False
         uid_trim_info[uid] = {
             "stable": stable,
             "kept_indices": kept,
@@ -333,6 +341,7 @@ def main() -> int:
             "dropped_indices": dropped,
             "trimmed_metrics": tm,
             "trimmed_verdict": tv,
+            "trimmed_autopass_applied": trimmed_autopass_applied,
         }
 
     for uid in uids_to_render:
@@ -374,6 +383,11 @@ def main() -> int:
         b_func  = badge_func_resp(metrics["func_resp_corr"])
         b_hist  = badge_isi_hist_corr(metrics["isi_hist_corr"])
         verdict_csv = composite_verdict([b_isi, b_depth, b_wave, b_fr, b_hist, b_func])
+        verdict_csv_pre_autopass = verdict_csv
+        verdict_csv = apply_isi_autopass(
+            verdict_csv, metrics["isi_hist_corr"], b_wave, b_depth,
+        )
+        autopass_applied = (verdict_csv != verdict_csv_pre_autopass)
         rows.append({
             "global_uid": uid,
             "span": iv.span,
@@ -395,6 +409,7 @@ def main() -> int:
             "badge_isi_peak":      b_peak,
             "badge_isi_hist_corr": b_hist,
             "badge_func_resp":     b_func,
+            "autopass_applied":    autopass_applied,
             "verdict": verdict_csv,
             "verdict_pdf": verdict_pdf,
             "pdf_csv_disagree": verdict_csv != verdict_pdf,
@@ -423,6 +438,7 @@ def main() -> int:
                 "dropped_sessions": ";".join(r.session_name for r in iv.sessions),
                 "skipped_sessions": "",
                 "kept_sessions": "", "trimmed_verdict": "suspect",
+                "trimmed_autopass_applied": False,
                 "rescued": False,
             })
             continue
@@ -450,6 +466,7 @@ def main() -> int:
             "trimmed_func_resp_corr":          tm["func_resp_corr"],
             "original_verdict": original_verdict,
             "trimmed_verdict": tv,
+            "trimmed_autopass_applied": trim["trimmed_autopass_applied"],
             "rescued": rescued,
         })
 

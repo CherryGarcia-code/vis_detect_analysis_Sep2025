@@ -65,6 +65,13 @@ FUNC_RESP_MIN_PSTH_STD: float = 0.5   # Hz; below this, PSTHs are too flat to di
 ISI_HIST_CORR_PASS: float = 0.85
 ISI_HIST_CORR_WARN: float = 0.65
 
+# ISI hist-corr auto-pass: a UID whose set-wide ISI shape correlation is
+# exceptionally consistent (>= 0.95, top ~25% of BG_046 cohort) is promoted
+# to trusted regardless of marginal failures on other badges. Hard biophysical
+# signals (wave or depth FAIL) still block — same philosophy as the
+# skip-able-trim hard-outlier rule.
+ISI_HIST_CORR_AUTOPASS: float = 0.95
+
 # ─── Change-size pools for Change_ON heatmaps ─────────────────────────
 # Change-size pools for Change_ON heatmaps.
 # Deliberately differs from visdetect.analysis.constants.{BIG,SMALL}_CHANGE_SIZES:
@@ -556,6 +563,43 @@ def composite_verdict(badges: Sequence[str]) -> str:
     if n_warn == 1:
         return "review"
     return "trusted"
+
+
+def apply_isi_autopass(verdict: str,
+                       isi_hist_corr: float,
+                       wave_badge: str,
+                       depth_badge: str,
+                       threshold: float = ISI_HIST_CORR_AUTOPASS) -> str:
+    """Promote verdict to 'trusted' when ISI shape correlation is exceptionally
+    strong AND no hard biophysical badge fails.
+
+    Hard biophysical signals (wave_badge or depth_badge == 'fail') block the
+    promotion — they suggest a physically different unit at the recording
+    position, which ISI alone cannot overrule.
+
+    Parameters
+    ----------
+    verdict : str
+        Current composite verdict ('trusted', 'review', 'suspect').
+    isi_hist_corr : float
+        Set-wide median pairwise Pearson r of per-session log-ISI hists.
+        NaN values fail the threshold check (no promotion).
+    wave_badge, depth_badge : str
+        Individual badge levels ('pass', 'warn', 'fail').
+    threshold : float
+        Promotion threshold (default ISI_HIST_CORR_AUTOPASS).
+
+    Returns
+    -------
+    str
+        'trusted' if promotion conditions are met, else unchanged `verdict`.
+    """
+    if (np.isfinite(isi_hist_corr)
+            and isi_hist_corr >= threshold
+            and wave_badge != "fail"
+            and depth_badge != "fail"):
+        return "trusted"
+    return verdict
 
 
 def load_isi_scores(csv_path) -> Dict[int, float]:
