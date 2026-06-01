@@ -723,12 +723,12 @@ def load_channel_positions(raw_wf_root, session_name: str) -> Optional[np.ndarra
 # Spec §5 / §4: PSTH conditions per UID per session.
 # Keys are stable IDs used as dict keys in the intermediate record.
 PSTH_CONDITIONS: Dict[str, Dict] = {
-    "baseline_on":        {"event": "Baseline_ON", "outcomes": None,           "sizes": None,       "window": (-0.5, 1.5)},
+    "baseline_on":        {"event": "Baseline_ON", "outcomes": None,           "sizes": None,       "window": (-2.0, 1.5)},
     "change_on_big_hit":  {"event": "Change_ON",   "outcomes": {"hit"},        "sizes": BIG_POOL,   "window": (-0.5, 0.5)},
     "change_on_big_miss": {"event": "Change_ON",   "outcomes": {"miss"},       "sizes": BIG_POOL,   "window": (-0.5, 0.5)},
     "change_on_sm_hit":   {"event": "Change_ON",   "outcomes": {"hit"},        "sizes": SMALL_POOL, "window": (-0.5, 0.5)},
     "change_on_sm_miss":  {"event": "Change_ON",   "outcomes": {"miss"},       "sizes": SMALL_POOL, "window": (-0.5, 0.5)},
-    "hit_lick":           {"event": "Hit",         "outcomes": {"hit"},        "sizes": None,       "window": (-1.0, 1.0)},
+    "hit_lick":           {"event": "Hit",         "outcomes": {"hit"},        "sizes": None,       "window": (-2.0, 1.0)},
 }
 
 
