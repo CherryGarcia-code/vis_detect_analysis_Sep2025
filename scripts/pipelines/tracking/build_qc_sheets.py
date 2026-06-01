@@ -202,6 +202,12 @@ def main() -> int:
                         help="Only render these UIDs (cohort filter still applies)")
     parser.add_argument("--max-uids", type=int, default=None,
                         help="Render at most N UIDs (debug)")
+    parser.add_argument(
+        "--shared-baseline", action="store_true",
+        help="Use one Baseline_ON-derived baseline scalar for ALL heatmaps "
+             "in each UID's page 2 (cross-event comparison mode). Default: "
+             "per-event baseline from EVENT_RESPONSIVENESS_WINDOWS.",
+    )
     args = parser.parse_args()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -367,6 +373,7 @@ def main() -> int:
             dropped_indices=visually_dropped,
             n_kept=len(trim["kept_indices"]),
             trimmed_verdict=str(trim["trimmed_verdict"]),
+            shared_baseline=args.shared_baseline,
         )
         # CSV verdict incorporates the 5th badge (ISI histogram cross-session
         # correlation) and the 6th badge (Baseline_ON PSTH shape correlation)
