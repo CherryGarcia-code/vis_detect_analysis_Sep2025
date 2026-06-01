@@ -325,7 +325,8 @@ def _per_event_baseline_scalar(mat: np.ndarray,
 
 def _shared_baseline_scalar(uid: UIDIntermediate) -> float:
     """One-baseline-for-all-heatmaps scalar for this UID, computed from the
-    Baseline_ON PSTHs using the canonical baseline window (-1.75, -1.25).
+    Baseline_ON PSTHs using Baseline_ON's canonical baseline window from
+    EVENT_RESPONSIVENESS_WINDOWS.
 
     Pools across all sessions of the UID. Returns NaN if no Baseline_ON
     PSTH data is available (caller should fall back to per-event baselines).
@@ -350,7 +351,8 @@ def _shared_baseline_scalar(uid: UIDIntermediate) -> float:
 
 def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str,
                   *, dropped_indices: Optional[List[int]] = None,
-                  baseline_scalar: float = 0.0) -> None:
+                  baseline_scalar: float = 0.0,
+                  data: Optional[tuple] = None) -> None:
     """Render the chronological PSTH heatmap into `ax` with baseline-subtracted
     diverging-cmap rendering. `baseline_scalar` is subtracted from every value
     before rendering; 0 leaves the matrix unchanged.
@@ -361,8 +363,11 @@ def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str,
     *had trials for this key*, which may be shorter than uid.sessions.  We
     re-derive the mapping (uid-session-index -> heatmap-row-index) here so
     the markers line up with the row they refer to.
+
+    data : pre-built result of _psth_matrix(uid, key); computed here if None.
     """
-    data = _psth_matrix(uid, key)
+    if data is None:
+        data = _psth_matrix(uid, key)
     if data is None:
         ax.text(0.5, 0.5, f"no trials for {key}", ha="center", va="center",
                 transform=ax.transAxes, fontsize=9, color="0.5")
@@ -371,8 +376,6 @@ def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str,
         return
 
     mat, centers, _stages, _ = data
-    # Baseline-subtract: shifts the matrix so the chosen baseline window
-    # corresponds to 0 (white on the diverging cmap below).
     mat_sub = mat - float(baseline_scalar)
     # Symmetric vmax from absolute-value 95th percentile, with a floor so
     # near-zero-modulation cells don't get a degenerate scale.
@@ -387,7 +390,7 @@ def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str,
     ax.text(0.98, 0.02, f"±{vmax:.1f} Hz",
             transform=ax.transAxes, fontsize=7, color="0.3",
             ha="right", va="bottom",
-            bbox=dict(facecolor="white", edgecolor="none", alpha=0.6, pad=1))
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.7, pad=1))
 
     if dropped_indices:
         # Build uid_idx -> heatmap_row_idx mapping using the same filter as
@@ -422,7 +425,9 @@ def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str,
 
 def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
                         miss_keys: Optional[List[str]] = None,
-                        *, baseline_scalar: float = 0.0) -> None:
+                        *, baseline_scalar: float = 0.0,
+                        data: Optional[tuple] = None,
+                        miss_data: Optional[Dict[str, Optional[tuple]]] = None) -> None:
     """Render L vs E stage-mean PSTH traces into `ax` as a normal (white) plot,
     baseline-subtracted to match the heatmap above. `baseline_scalar` is
     subtracted from each stage-mean trace before plotting; 0 leaves traces
@@ -430,8 +435,13 @@ def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
 
     miss_keys (optional): list of keys whose stage-mean traces to overlay as
     dashed lines for hit/miss comparison (e.g. ["change_on_big_miss"]).
+
+    data : pre-built result of _psth_matrix(uid, key); computed here if None.
+    miss_data : pre-built dict mapping each miss key to its _psth_matrix result;
+        missing keys are computed on demand.
     """
-    data = _psth_matrix(uid, key)
+    if data is None:
+        data = _psth_matrix(uid, key)
     if data is None:
         ax.text(0.5, 0.5, f"no trials for {key}", ha="center", va="center",
                 transform=ax.transAxes, fontsize=9, color="0.5")
@@ -445,7 +455,6 @@ def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
         if mask.sum() == 0:
             continue
         label_solid = f"{st} hit" if miss_keys else st
-        # Stage-mean trace, baseline-subtracted to match the heatmap above
         stage_mean = mat[mask].mean(axis=0) - float(baseline_scalar)
         ax.plot(centers, stage_mean, color=STAGE_COLORS_LOCAL[st],
                 linewidth=1.2, label=label_solid)
@@ -453,7 +462,9 @@ def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
 
     if miss_keys:
         for mk in miss_keys:
-            mdata = _psth_matrix(uid, mk)
+            mdata = (miss_data or {}).get(mk) if miss_data else None
+            if mdata is None:
+                mdata = _psth_matrix(uid, mk)
             if mdata is None:
                 continue
             mmat, mcenters, mstages, _ = mdata
@@ -469,7 +480,6 @@ def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
                 has_label = True
 
     ax.axvline(0, color="0.5", linewidth=0.7)
-    # y=0 reference line (the baseline subtraction's zero point)
     ax.axhline(0, color="0.7", linewidth=0.5, alpha=0.8, zorder=0)
     ax.set_xlabel("time (s)")
     ax.set_ylabel("Hz (rel. baseline)")
@@ -519,27 +529,31 @@ def render_page2(uid: UIDIntermediate, isi_score: float, depth_std: float,
                 dropped_indices=dropped_indices,
                 n_kept=n_kept, trimmed_verdict=trimmed_verdict)
 
-    # Compute baseline scalar for each row. The same scalar is passed to BOTH
-    # the heatmap and its companion PSTH-summary so they show the same zero.
-    # Shared mode: one Baseline_ON-derived scalar applied to every row.
-    # Per-event mode (default): each row gets its own canonical baseline.
-    # Initialize shared_scalar before the conditional so the nested function
-    # always finds it in scope (Python closure / UnboundLocalError guard).
+    # shared_scalar must be defined before the nested function references it.
     shared_scalar = None
     if shared_baseline:
         s = _shared_baseline_scalar(uid)
         if np.isfinite(s):
             shared_scalar = s
 
+    # Build each PSTH matrix once; reused by both heatmap and summary below.
+    _row_keys = [
+        "baseline_on",
+        "change_on_big_hit", "change_on_big_miss",
+        "change_on_sm_hit",  "change_on_sm_miss",
+        "hit_lick",
+    ]
+    _cache: Dict[str, Optional[tuple]] = {k: _psth_matrix(uid, k) for k in _row_keys}
+
     def _scalar_for_key(key: str) -> float:
         """Resolve baseline scalar with fallback chain: shared (if requested
         and finite) -> per-event (computed from this heatmap's matrix) -> 0."""
         if shared_baseline and shared_scalar is not None:
             return shared_scalar
-        data = _psth_matrix(uid, key)
-        if data is None:
+        d = _cache.get(key)
+        if d is None:
             return 0.0
-        mat, centers, _stages, _ = data
+        mat, centers, _stages, _ = d
         scalar = _per_event_baseline_scalar(mat, centers, key)
         return scalar if np.isfinite(scalar) else 0.0
 
@@ -550,10 +564,12 @@ def render_page2(uid: UIDIntermediate, isi_score: float, depth_std: float,
         title="PSTH · Baseline_ON · all outcomes pooled [TODO: split by outcome in v2]",
         dropped_indices=dropped_indices,
         baseline_scalar=bs_baseline,
+        data=_cache["baseline_on"],
     )
     _draw_psth_summary(
         fig.add_subplot(gs[1, 1]), uid, "baseline_on",
         baseline_scalar=bs_baseline,
+        data=_cache["baseline_on"],
     )
 
     # ── Row 2: Change_ON Big-Hit (+ Big-Miss dashed overlay in summary)
@@ -563,11 +579,14 @@ def render_page2(uid: UIDIntermediate, isi_score: float, depth_std: float,
         title="Change_ON · Big-Hit (2.0× + 4.0×)",
         dropped_indices=dropped_indices,
         baseline_scalar=bh_baseline,
+        data=_cache["change_on_big_hit"],
     )
     _draw_psth_summary(
         fig.add_subplot(gs[2, 1]), uid, "change_on_big_hit",
         miss_keys=["change_on_big_miss"],
         baseline_scalar=bh_baseline,
+        data=_cache["change_on_big_hit"],
+        miss_data={"change_on_big_miss": _cache["change_on_big_miss"]},
     )
 
     # ── Row 3: Change_ON Small-Hit (+ Small-Miss dashed overlay in summary)
@@ -577,11 +596,14 @@ def render_page2(uid: UIDIntermediate, isi_score: float, depth_std: float,
         title="Change_ON · Small-Hit (1.25× + 1.35×)",
         dropped_indices=dropped_indices,
         baseline_scalar=sh_baseline,
+        data=_cache["change_on_sm_hit"],
     )
     _draw_psth_summary(
         fig.add_subplot(gs[3, 1]), uid, "change_on_sm_hit",
         miss_keys=["change_on_sm_miss"],
         baseline_scalar=sh_baseline,
+        data=_cache["change_on_sm_hit"],
+        miss_data={"change_on_sm_miss": _cache["change_on_sm_miss"]},
     )
 
     # ── Row 4: Hit-lick
@@ -591,10 +613,12 @@ def render_page2(uid: UIDIntermediate, isi_score: float, depth_std: float,
         title="PSTH · Hit lick",
         dropped_indices=dropped_indices,
         baseline_scalar=hl_baseline,
+        data=_cache["hit_lick"],
     )
     _draw_psth_summary(
         fig.add_subplot(gs[4, 1]), uid, "hit_lick",
         baseline_scalar=hl_baseline,
+        data=_cache["hit_lick"],
     )
 
     return fig
