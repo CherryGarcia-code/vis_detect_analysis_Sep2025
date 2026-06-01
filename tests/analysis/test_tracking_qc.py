@@ -792,6 +792,10 @@ def test_apply_isi_autopass_promotes_when_threshold_met():
     """ISI 0.97 + no wave/depth fail + suspect verdict → trusted."""
     assert qc.apply_isi_autopass("suspect", 0.97, "pass", "pass") == "trusted"
     assert qc.apply_isi_autopass("review",  0.97, "warn", "warn") == "trusted"
+
+
+def test_apply_isi_autopass_already_trusted_is_noop():
+    """Already-trusted verdicts pass through unchanged when conditions hold (function does not demote)."""
     assert qc.apply_isi_autopass("trusted", 0.97, "pass", "pass") == "trusted"
 
 

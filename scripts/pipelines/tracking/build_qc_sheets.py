@@ -316,18 +316,17 @@ def main() -> int:
                 suspect_known=iv.suspect_known, sessions=kept_sessions,
             )
             tm = compute_uid_metrics(trimmed_iv, drift_offsets=drift_offsets)
+            b_isi_trim   = badge_isi(isi_scores[uid])
+            b_depth_trim = badge_depth(_depth_for_badge(tm))
+            b_wave_trim  = badge_waveform(tm["wave_corr"])
+            b_fr_trim    = badge_fr(tm["fr_cv"])
+            b_hist_trim  = badge_isi_hist_corr(tm["isi_hist_corr"])
+            b_func_trim  = badge_func_resp(tm["func_resp_corr"])
             tv_pre_autopass = composite_verdict([
-                badge_isi(isi_scores[uid]),
-                badge_depth(_depth_for_badge(tm)),
-                badge_waveform(tm["wave_corr"]),
-                badge_fr(tm["fr_cv"]),
-                badge_isi_hist_corr(tm["isi_hist_corr"]),   # was badge_isi_peak(tm["isi_peak_agree"])
-                badge_func_resp(tm["func_resp_corr"]),
+                b_isi_trim, b_depth_trim, b_wave_trim, b_fr_trim, b_hist_trim, b_func_trim,
             ])
             tv = apply_isi_autopass(
-                tv_pre_autopass, tm["isi_hist_corr"],
-                badge_waveform(tm["wave_corr"]),
-                badge_depth(_depth_for_badge(tm)),
+                tv_pre_autopass, tm["isi_hist_corr"], b_wave_trim, b_depth_trim,
             )
             trimmed_autopass_applied = (tv != tv_pre_autopass)
         else:
@@ -382,11 +381,8 @@ def main() -> int:
         b_peak  = badge_isi_peak(metrics["isi_peak_agree"])     # kept for CSV transparency only
         b_func  = badge_func_resp(metrics["func_resp_corr"])
         b_hist  = badge_isi_hist_corr(metrics["isi_hist_corr"])
-        verdict_csv = composite_verdict([b_isi, b_depth, b_wave, b_fr, b_hist, b_func])
-        verdict_csv_pre_autopass = verdict_csv
-        verdict_csv = apply_isi_autopass(
-            verdict_csv, metrics["isi_hist_corr"], b_wave, b_depth,
-        )
+        verdict_csv_pre_autopass = composite_verdict([b_isi, b_depth, b_wave, b_fr, b_hist, b_func])
+        verdict_csv = apply_isi_autopass(verdict_csv_pre_autopass, metrics["isi_hist_corr"], b_wave, b_depth)
         autopass_applied = (verdict_csv != verdict_csv_pre_autopass)
         rows.append({
             "global_uid": uid,
