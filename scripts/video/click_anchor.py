@@ -606,6 +606,8 @@ def render_barcode_montage(
     ts_ms: np.ndarray,
     fps: float,
     out_path: str,
+    slope: Optional[float] = None,
+    offset_s: Optional[float] = None,
 ) -> None:
     """Render a 5-row x 7-column montage of predicted-onset frames per sampled trial.
 
@@ -632,20 +634,32 @@ def render_barcode_montage(
         figsize=(MONTAGE_COLS * 1.8, MONTAGE_ROWS * 2.0),
         gridspec_kw=dict(wspace=0.05, hspace=0.25),
     )
-    title = (
-        f"Anchor-barcode montage - {session_name}\n"
-        f"anchor trial 0 @ frame {anchor['video_frame_idx']} "
-        f"(NI-DAQ {anchor['nidaq_baseline_on_s']:.3f}s, "
-        f"implied offset {implied_offset_s:.3f}s) - {n_trials} trials"
-    )
+    if slope is not None and offset_s is not None:
+        title = (
+            f"Anchor-barcode montage (slope-fit) - {session_name}\n"
+            f"slope = {slope:.6f} ({(slope - 1) * 1e6:+.2f} ppm), "
+            f"offset = {offset_s:+.4f} s, {n_trials} trials"
+        )
+    else:
+        title = (
+            f"Anchor-barcode montage - {session_name}\n"
+            f"anchor trial {anchor['anchor_trial_index']} @ frame {anchor['video_frame_idx']} "
+            f"(NI-DAQ {anchor['nidaq_baseline_on_s']:.3f}s, "
+            f"implied offset {implied_offset_s:.3f}s) - {n_trials} trials"
+        )
     fig.suptitle(title, fontsize=10)
 
     n_frames = len(ts_ms)
 
     for r, ti in enumerate(trial_indices):
         # Predicted video frame for this trial: where ts_ms is closest to
-        # (baseline_on[ti] + implied_offset_s) * 1000.
-        target_ms = (float(baseline_on[ti]) + implied_offset_s) * 1000.0
+        # the slope-fitted prediction (if provided) or the Phase-1 fallback.
+        if slope is not None and offset_s is not None:
+            # Slope-fitted prediction: video_time_s = slope * nidaq + offset_s
+            target_ms = (slope * float(baseline_on[ti]) + offset_s) * 1000.0
+        else:
+            # Slope=1 fallback (Phase 1 behavior): single implied_offset_s
+            target_ms = (float(baseline_on[ti]) + implied_offset_s) * 1000.0
         target_ms_clamped = float(np.clip(target_ms, ts_ms[0], ts_ms[-1]))
         centre_frame = int(np.argmin(np.abs(ts_ms - target_ms_clamped)))
         indices = [
