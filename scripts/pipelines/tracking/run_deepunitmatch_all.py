@@ -225,6 +225,9 @@ def main():
     ap.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
     ap.add_argument("--no-merge-splits", action="store_true",
                     help="Skip split_units.merge_and_remove_splits step")
+    ap.add_argument("--ckpt", type=Path, default=None,
+                    help="Fine-tuned export checkpoint; if set, used instead of the "
+                         "shipped DeepUM model.")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -270,7 +273,13 @@ def main():
 
     # ── Network inference ──────────────────────────────────────────
     print("DeepUM step 2  load_trained_model + inference ...", flush=True)
-    model = dum_test.load_trained_model(device="cpu")
+    if args.ckpt is not None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from train_deepum_common import load_finetuned_encoder
+        print(f"DeepUM step 2  load_finetuned_encoder({args.ckpt}) ...", flush=True)
+        model = load_finetuned_encoder(str(args.ckpt), device="cpu")
+    else:
+        model = dum_test.load_trained_model(device="cpu")
     sim_matrix = dum_test.inference(model, str(data_dir))
     print(f"  sim_matrix shape={sim_matrix.shape} "
           f"(diag median {np.median(np.diag(sim_matrix)):.3f})", flush=True)
