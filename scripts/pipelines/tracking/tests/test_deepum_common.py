@@ -34,8 +34,41 @@ def test_augment_roll_preserves_shape_and_changes_values():
     print("test_augment_roll_preserves_shape_and_changes_values PASS")
 
 
+def test_add_deepum_to_path_imports_model():
+    from train_deepum_common import add_deepum_to_path
+    repo = add_deepum_to_path()
+    assert (repo / "DeepUnitMatch").is_dir()
+    from DeepUnitMatch.utils.mymodel import SpatioTemporalCNN_V2  # noqa: F401
+    print("test_add_deepum_to_path_imports_model PASS")
+
+
+def test_export_and_load_roundtrip(tmp_path_str=None):
+    import tempfile, os
+    import torch
+    from train_deepum_common import (add_deepum_to_path, build_export_checkpoint,
+                                      load_finetuned_encoder)
+    add_deepum_to_path()
+    from DeepUnitMatch.utils.mymodel import SpatioTemporalCNN_V2
+    from DeepUnitMatch.utils.losses import CustomClipLoss, Projector
+    model = SpatioTemporalCNN_V2(30, 60, 256).double()
+    clip_loss = CustomClipLoss().double()
+    projector = Projector(256, 128, 128, 1, 0.1).double()
+    export = build_export_checkpoint(model, clip_loss, projector)
+    assert set(export.keys()) == {"model", "clip_loss", "projector"}
+    d = tmp_path_str or tempfile.mkdtemp()
+    p = os.path.join(d, "export_epoch_0.pt")
+    torch.save(export, p)
+    reloaded = load_finetuned_encoder(p, device="cpu")
+    # weights identical to the originals
+    for k, v in model.state_dict().items():
+        assert torch.allclose(reloaded.state_dict()[k], v)
+    print("test_export_and_load_roundtrip PASS")
+
+
 if __name__ == "__main__":
     test_average_meter()
     test_augment_none_is_identity()
     test_augment_roll_preserves_shape_and_changes_values()
+    test_add_deepum_to_path_imports_model()
+    test_export_and_load_roundtrip()
     print("ALL COMMON-BASIC TESTS PASSED")
