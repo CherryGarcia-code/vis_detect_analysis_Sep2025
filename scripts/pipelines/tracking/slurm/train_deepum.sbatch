@@ -21,9 +21,12 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH -t 0-06:00
-#SBATCH -p a100
+#SBATCH -p gpu
 #SBATCH --gres=gpu:1
 #SBATCH --mem=100G
+# (training needs a GPU but not the a100's huge RAM; the `gpu` partition usually
+#  has free nodes when `a100` is jammed. Override at submit time if you prefer:
+#  sbatch -p a100 slurm/train_deepum.sbatch <mode>)
 
 set -e
 
