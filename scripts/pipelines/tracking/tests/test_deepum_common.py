@@ -65,10 +65,39 @@ def test_export_and_load_roundtrip(tmp_path_str=None):
     print("test_export_and_load_roundtrip PASS")
 
 
+def test_patch_augmentation_enables_train_mode():
+    import tempfile
+    from train_deepum_common import (add_deepum_to_path, patch_augmentation,
+                                      write_synthetic_cache)
+    add_deepum_to_path()
+    from DeepUnitMatch.utils.npdataset import NeuropixelsDataset
+    patch_augmentation(NeuropixelsDataset)
+    d = tempfile.mkdtemp()
+    write_synthetic_cache(d, n_sessions=2, units_per_session=5, seed=1)
+    ds = NeuropixelsDataset(d, batch_size=4, mode="train")
+    fh, sh, pos, exp, fp = ds[0]
+    assert fh.shape == (60, 30) and sh.shape == (60, 30)
+    print("test_patch_augmentation_enables_train_mode PASS")
+
+
+def test_write_synthetic_cache_layout():
+    import os, tempfile
+    from train_deepum_common import write_synthetic_cache
+    d = tempfile.mkdtemp()
+    write_synthetic_cache(d, n_sessions=2, units_per_session=3, seed=0)
+    sess = sorted(os.listdir(d))
+    assert sess == ["0", "1"]
+    files = sorted(os.listdir(os.path.join(d, "0")))
+    assert files == ["Unit0.npy", "Unit1.npy", "Unit2.npy"]
+    print("test_write_synthetic_cache_layout PASS")
+
+
 if __name__ == "__main__":
     test_average_meter()
     test_augment_none_is_identity()
     test_augment_roll_preserves_shape_and_changes_values()
     test_add_deepum_to_path_imports_model()
     test_export_and_load_roundtrip()
+    test_write_synthetic_cache_layout()
+    test_patch_augmentation_enables_train_mode()
     print("ALL COMMON-BASIC TESTS PASSED")

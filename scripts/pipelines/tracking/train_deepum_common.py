@@ -98,3 +98,52 @@ def load_finetuned_encoder(ckpt_path, device="cpu"):
     model.load_state_dict(state)
     model.eval()
     return model
+
+
+def patch_augmentation(dataset_cls):
+    """Install the missing _augment_original on the vendored dataset class so
+    mode='train' applies channel-roll augmentation. Vendor file untouched."""
+    def _augment_original(self, data):
+        return augment_channel_roll(data)
+    dataset_cls._augment_original = _augment_original
+    return dataset_cls
+
+
+def write_synthetic_cache(root, n_sessions=2, units_per_session=5, seed=0):
+    """Write a tiny NeuropixelsDataset-layout HDF5 cache for tests.
+    root/<session>/Unit<i>.npy each holds waveform (60,30,2) + MaxSitepos (2,)."""
+    import os
+    import h5py
+    rng = np.random.default_rng(seed)
+    for s in range(n_sessions):
+        sd = os.path.join(root, str(s))
+        os.makedirs(sd, exist_ok=True)
+        for u in range(units_per_session):
+            wf = rng.standard_normal((60, 30, 2)).astype(np.float64)
+            pos = np.array([rng.uniform(0, 70), rng.uniform(0, 3840)], dtype=np.float64)
+            with h5py.File(os.path.join(sd, f"Unit{u}.npy"), "w") as f:
+                f.create_dataset("waveform", data=wf)
+                f.create_dataset("MaxSitepos", data=pos)
+    return root
+
+
+def within_session_top1_accuracy(model, val_loader, device="cpu"):
+    """Proxy metric: per session batch, does each unit's CV-half-1 encoding pick its
+    own CV-half-2 as nearest? Returns mean accuracy across batches."""
+    import torch
+    add_deepum_to_path()
+    from DeepUnitMatch.utils.losses import clip_prob
+    model.eval()
+    accs = []
+    with torch.no_grad():
+        for estimates, candidates, *_ in val_loader:
+            estimates = estimates.to(device).double()
+            candidates = candidates.to(device).double()
+            bsz = estimates.shape[0]
+            if bsz < 2:
+                continue
+            probs = clip_prob(model(estimates), model(candidates))
+            pred = torch.argmax(probs, dim=1)
+            gt = torch.arange(bsz, device=probs.device)
+            accs.append((pred == gt).float().mean().item())
+    return float(np.mean(accs)) if accs else 0.0
