@@ -24,12 +24,13 @@ def test_augment_none_is_identity():
 def test_augment_roll_preserves_shape_and_changes_values():
     rng = np.random.default_rng(0)
     data = rng.standard_normal((60, 30))
+    before = data.copy()
     for choice in ("roll_up", "roll_down"):
         out = augment_channel_roll(data, choice=choice)
         assert out.shape == (60, 30)
         assert not np.array_equal(out, data)  # a non-constant input must change
-    # original is untouched
-    assert np.array_equal(data, data)
+    # original must be untouched by the (non-mutating) augmentation
+    assert np.array_equal(data, before)
     print("test_augment_roll_preserves_shape_and_changes_values PASS")
 
 
