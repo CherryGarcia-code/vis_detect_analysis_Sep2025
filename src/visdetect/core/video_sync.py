@@ -45,6 +45,7 @@ plot_sync_diagnostic      4-panel diagnostic figure
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import os
@@ -2580,7 +2581,7 @@ def sync_session(
 
 
 # =====================================================================
-# Anchor JSON helpers (Phase 1 of corneal-barcode redesign)
+# Anchor JSON helpers (Phase 2: list-of-anchors schema, v1 read compat)
 # =====================================================================
 
 
@@ -2591,16 +2592,100 @@ def _anchor_path(session_name: str, sync_dir: Optional[str] = None) -> str:
     return os.path.join(out_dir, f"{session_name}_anchor.json")
 
 
+def _migrate_anchor_v1_to_v2(d: dict) -> dict:
+    """Convert a Phase 1 (single-anchor) JSON dict to the Phase 2 (list) shape.
+
+    Idempotent: passing a v2 dict returns it unchanged.
+    """
+    if d.get("schema_version") == 2 or "anchors" in d:
+        return d
+    entry = {
+        "trial_index": int(d["anchor_trial_index"]),
+        "nidaq_baseline_on_s": float(d["nidaq_baseline_on_s"]),
+        "video_frame_idx": int(d["video_frame_idx"]),
+        "video_time_s": float(d["video_time_s"]),
+        "clicked_at": str(d["clicked_at"]),
+    }
+    return {
+        "session": str(d["session"]),
+        "schema_version": 2,
+        "frame_rate_fps": float(d["frame_rate_fps"]),
+        "n_trials": int(d["n_trials"]),
+        "anchors": [entry],
+    }
+
+
+def compute_implied_offset(anchor: dict) -> float:
+    """Return ``video_time_s - nidaq_baseline_on_s`` for a single anchor entry.
+
+    Used by HUDs and reports that want to display "the camera started this
+    many seconds after NI-DAQ" in a human-readable form.
+    """
+    return float(anchor["video_time_s"]) - float(anchor["nidaq_baseline_on_s"])
+
+
+def _build_anchor_entry(
+    baseline_on: np.ndarray,
+    ts_ms: np.ndarray,
+    trial_index: int,
+    frame_idx: int,
+) -> dict:
+    """Build a single v2 anchor entry from a clicked frame index."""
+    fi = int(frame_idx)
+    return {
+        "trial_index": int(trial_index),
+        "nidaq_baseline_on_s": float(baseline_on[int(trial_index)]),
+        "video_frame_idx": fi,
+        "video_time_s": float(ts_ms[fi] / 1000.0),
+        "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def _build_v2_anchor_file(
+    session_name: str,
+    fps: float,
+    n_trials: int,
+    anchor_entries: list,
+) -> dict:
+    """Construct the top-level v2 anchor JSON dict."""
+    return {
+        "session": str(session_name),
+        "schema_version": 2,
+        "frame_rate_fps": float(fps),
+        "n_trials": int(n_trials),
+        "anchors": list(anchor_entries),
+    }
+
+
+def _merge_anchor_into_file(base: dict, new_entry: dict) -> dict:
+    """Return a copy of *base* with *new_entry* merged into its anchors list.
+
+    Replaces any existing anchor with the same ``trial_index``. The result is
+    sorted by ``trial_index``.
+    """
+    new_idx = int(new_entry["trial_index"])
+    kept = [a for a in base["anchors"] if int(a["trial_index"]) != new_idx]
+    kept.append(new_entry)
+    kept.sort(key=lambda a: int(a["trial_index"]))
+    out = dict(base)
+    out["anchors"] = kept
+    return out
+
+
 def save_anchor(
     session_name: str,
     anchor: dict,
     sync_dir: Optional[str] = None,
 ) -> None:
-    """Write *anchor* to ``{sync_dir}/{session_name}_anchor.json``.
+    """Write *anchor* (v2 schema) to ``{sync_dir}/{session_name}_anchor.json``.
 
+    Callers must pass a v2 dict; building one is the responsibility of
+    :func:`_build_v2_anchor_file` (top-level) plus :func:`_build_anchor_entry`
+    (per-anchor) plus :func:`_merge_anchor_into_file` (composition).
     Overwrites any existing file. Creates the directory if needed.
     """
-    os.makedirs(sync_dir or VIDEO_SYNC_DIR, exist_ok=True)
+    out_dir = sync_dir or VIDEO_SYNC_DIR
+    os.makedirs(out_dir, exist_ok=True)
     with open(_anchor_path(session_name, sync_dir=sync_dir), "w") as f:
         json.dump(anchor, f, indent=2)
 
@@ -2609,12 +2694,18 @@ def load_anchor(
     session_name: str,
     sync_dir: Optional[str] = None,
 ) -> Optional[dict]:
-    """Read the anchor JSON for *session_name*, or return ``None`` if absent."""
+    """Read the anchor JSON for *session_name* and return it in v2 form.
+
+    Legacy v1 JSONs are migrated in memory (the on-disk file is NOT rewritten
+    by this read; it gets rewritten next time :func:`save_anchor` is called).
+    Returns ``None`` if no file exists.
+    """
     path = _anchor_path(session_name, sync_dir=sync_dir)
     if not os.path.exists(path):
         return None
     with open(path, "r") as f:
-        return json.load(f)
+        raw = json.load(f)
+    return _migrate_anchor_v1_to_v2(raw)
 
 
 def compute_predicted_frame_idx(

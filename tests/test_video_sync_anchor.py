@@ -45,7 +45,8 @@ def test_load_anchor_returns_saved_dict(tmp_path):
 
     loaded = vs.load_anchor("123", sync_dir=str(tmp_path))
 
-    assert loaded == anchor
+    # load_anchor now migrates v1 -> v2 in memory; compare to migrated form.
+    assert loaded == vs._migrate_anchor_v1_to_v2(anchor)
 
 
 def test_load_anchor_returns_none_when_missing(tmp_path):
@@ -221,3 +222,177 @@ def test_jump_to_predicted_frame_out_of_range_raises():
         ca.jump_to_predicted_frame(2, baseline_on, 0.0, ts_ms)
     with pytest.raises(IndexError):
         ca.jump_to_predicted_frame(-1, baseline_on, 0.0, ts_ms)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: anchor v1 -> v2 migration and helpers
+# ---------------------------------------------------------------------------
+
+
+def _v1_anchor_fixture() -> dict:
+    """A v1 anchor JSON identical in shape to what Phase 1.5 wrote."""
+    return {
+        "session": "09092025",
+        "anchor_trial_index": 0,
+        "nidaq_baseline_on_s": 27.829173432012986,
+        "video_frame_idx": 1167,
+        "video_time_s": 23.218682,
+        "implied_offset_s": -4.610491432012985,
+        "frame_rate_fps": 50.0400320251914,
+        "n_trials": 551,
+        "clicked_at": "2026-05-29T11:51:46",
+    }
+
+
+def test_migrate_anchor_v1_to_v2_basic():
+    v1 = _v1_anchor_fixture()
+    v2 = vs._migrate_anchor_v1_to_v2(v1)
+    assert v2["schema_version"] == 2
+    assert v2["session"] == "09092025"
+    assert v2["frame_rate_fps"] == 50.0400320251914
+    assert v2["n_trials"] == 551
+    assert isinstance(v2["anchors"], list)
+    assert len(v2["anchors"]) == 1
+    a = v2["anchors"][0]
+    assert a["trial_index"] == 0
+    assert a["nidaq_baseline_on_s"] == 27.829173432012986
+    assert a["video_frame_idx"] == 1167
+    assert a["video_time_s"] == 23.218682
+    assert a["clicked_at"] == "2026-05-29T11:51:46"
+    # implied_offset_s is dropped (derivable)
+    assert "implied_offset_s" not in a
+    # top-level v1 fields are dropped from anchor entries
+    assert "anchor_trial_index" not in a
+
+
+def test_migrate_anchor_v2_is_idempotent():
+    v1 = _v1_anchor_fixture()
+    v2 = vs._migrate_anchor_v1_to_v2(v1)
+    v2_again = vs._migrate_anchor_v1_to_v2(v2)
+    assert v2_again == v2
+
+
+def test_compute_implied_offset_from_anchor_entry():
+    anchor = {
+        "trial_index": 0,
+        "nidaq_baseline_on_s": 27.829,
+        "video_frame_idx": 1167,
+        "video_time_s": 23.219,
+        "clicked_at": "2026-05-29T11:51:46",
+    }
+    offset = vs.compute_implied_offset(anchor)
+    # offset = video_time_s - nidaq_baseline_on_s
+    assert abs(offset - (23.219 - 27.829)) < 1e-9
+
+
+def test_build_anchor_entry_returns_v2_shape():
+    ts_ms = np.arange(0.0, 100000.0, 20.0)  # 50fps, 5000 frames
+    baseline_on = np.array([27.829, 1574.27])
+    entry = vs._build_anchor_entry(
+        baseline_on=baseline_on,
+        ts_ms=ts_ms,
+        trial_index=0,
+        frame_idx=1167,
+    )
+    assert set(entry.keys()) == {
+        "trial_index", "nidaq_baseline_on_s",
+        "video_frame_idx", "video_time_s", "clicked_at",
+    }
+    assert entry["trial_index"] == 0
+    assert entry["video_frame_idx"] == 1167
+    assert abs(entry["video_time_s"] - (ts_ms[1167] / 1000.0)) < 1e-9
+    assert entry["nidaq_baseline_on_s"] == 27.829
+
+
+def test_build_v2_anchor_file_minimal():
+    entry0 = {
+        "trial_index": 0,
+        "nidaq_baseline_on_s": 27.829,
+        "video_frame_idx": 1167,
+        "video_time_s": 23.219,
+        "clicked_at": "2026-05-29T11:51:46",
+    }
+    f = vs._build_v2_anchor_file(
+        session_name="09092025",
+        fps=50.04,
+        n_trials=551,
+        anchor_entries=[entry0],
+    )
+    assert f["schema_version"] == 2
+    assert f["session"] == "09092025"
+    assert f["frame_rate_fps"] == 50.04
+    assert f["n_trials"] == 551
+    assert f["anchors"] == [entry0]
+
+
+def test_merge_anchor_into_file_appends_new_trial():
+    base = vs._build_v2_anchor_file(
+        session_name="09092025", fps=50.04, n_trials=551,
+        anchor_entries=[
+            {"trial_index": 0, "nidaq_baseline_on_s": 27.83,
+             "video_frame_idx": 1167, "video_time_s": 23.22,
+             "clicked_at": "2026-05-29T11:51:46"}
+        ],
+    )
+    new = {
+        "trial_index": 550, "nidaq_baseline_on_s": 7255.49,
+        "video_frame_idx": 363270, "video_time_s": 7259.79,
+        "clicked_at": "2026-06-01T14:00:00",
+    }
+    merged = vs._merge_anchor_into_file(base, new)
+    assert len(merged["anchors"]) == 2
+    # Sorted by trial_index
+    assert merged["anchors"][0]["trial_index"] == 0
+    assert merged["anchors"][1]["trial_index"] == 550
+
+
+def test_merge_anchor_into_file_overwrites_existing_trial_index():
+    base = vs._build_v2_anchor_file(
+        session_name="09092025", fps=50.04, n_trials=551,
+        anchor_entries=[
+            {"trial_index": 0, "nidaq_baseline_on_s": 27.83,
+             "video_frame_idx": 1167, "video_time_s": 23.22,
+             "clicked_at": "2026-05-29T11:51:46"}
+        ],
+    )
+    replacement = {
+        "trial_index": 0, "nidaq_baseline_on_s": 27.83,
+        "video_frame_idx": 1200, "video_time_s": 23.88,
+        "clicked_at": "2026-06-01T15:00:00",
+    }
+    merged = vs._merge_anchor_into_file(base, replacement)
+    assert len(merged["anchors"]) == 1
+    assert merged["anchors"][0]["video_frame_idx"] == 1200
+    assert merged["anchors"][0]["clicked_at"] == "2026-06-01T15:00:00"
+
+
+def test_load_anchor_migrates_v1_file_in_memory(tmp_path):
+    import json
+    v1 = _v1_anchor_fixture()
+    p = tmp_path / "09092025_anchor.json"
+    p.write_text(json.dumps(v1))
+
+    loaded = vs.load_anchor("09092025", sync_dir=str(tmp_path))
+
+    assert loaded["schema_version"] == 2
+    assert loaded["anchors"][0]["trial_index"] == 0
+    # On-disk file should NOT have been rewritten (load is read-only)
+    on_disk = json.loads(p.read_text())
+    assert "anchor_trial_index" in on_disk
+
+
+def test_save_anchor_writes_v2_only(tmp_path):
+    import json
+    f = vs._build_v2_anchor_file(
+        session_name="09092025", fps=50.04, n_trials=551,
+        anchor_entries=[
+            {"trial_index": 0, "nidaq_baseline_on_s": 27.83,
+             "video_frame_idx": 1167, "video_time_s": 23.22,
+             "clicked_at": "2026-05-29T11:51:46"}
+        ],
+    )
+    vs.save_anchor("09092025", f, sync_dir=str(tmp_path))
+    on_disk = json.loads((tmp_path / "09092025_anchor.json").read_text())
+    assert on_disk["schema_version"] == 2
+    assert "anchors" in on_disk
+    assert "anchor_trial_index" not in on_disk

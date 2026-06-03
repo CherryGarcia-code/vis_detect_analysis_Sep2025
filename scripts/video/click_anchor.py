@@ -15,7 +15,6 @@ Run:  py scripts/video/click_anchor.py --session 09092025
 from __future__ import annotations
 
 import argparse
-import datetime as _dt
 import json
 import logging
 import os
@@ -33,6 +32,10 @@ from visdetect.core.video_sync import (
     compute_predicted_frame_idx,
     load_anchor,
     save_anchor,
+    compute_implied_offset,
+    _build_anchor_entry,
+    _build_v2_anchor_file,
+    _merge_anchor_into_file,
 )
 from visdetect.analysis.config import VIDEO_SYNC_DIR
 
@@ -107,32 +110,35 @@ def stage2_frame_indices(stage1_click: int, fps: float, n_frames: int) -> list[i
     return [min(n_frames - 1, start + i) for i in range(N_CELLS)]
 
 
-def _build_anchor_dict(
+def _build_or_merge_anchor_file(
     session_name: str,
     baseline_on: np.ndarray,
     ts_ms: np.ndarray,
     fps: float,
+    trial_index: int,
     frame_idx: int,
 ) -> dict:
-    """Construct the Phase 1 anchor JSON dict from a chosen video frame index.
+    """Build a v2 anchor JSON dict that merges this anchor into any existing file.
 
     All three Phase 1 anchor-creation paths (2-stage click, scrub Save, scrub
-    preview-render) use this single helper so the schema stays consistent.
-    Always uses ``anchor_trial_index = 0`` and ``baseline_on[0]`` — anchoring
-    to a later trial is a Phase 2 concern.
+    preview-render) use this helper so the multi-anchor list stays consistent
+    across re-saves.
     """
-    fi = int(frame_idx)
-    return {
-        "session": session_name,
-        "anchor_trial_index": 0,
-        "nidaq_baseline_on_s": float(baseline_on[0]),
-        "video_frame_idx": fi,
-        "video_time_s": float(ts_ms[fi] / 1000.0),
-        "implied_offset_s": float(ts_ms[fi] / 1000.0 - float(baseline_on[0])),
-        "frame_rate_fps": float(fps),
-        "n_trials": int(len(baseline_on)),
-        "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
-    }
+    new_entry = _build_anchor_entry(
+        baseline_on=baseline_on,
+        ts_ms=ts_ms,
+        trial_index=trial_index,
+        frame_idx=frame_idx,
+    )
+    existing = load_anchor(session_name)
+    if existing is None:
+        return _build_v2_anchor_file(
+            session_name=session_name,
+            fps=fps,
+            n_trials=int(len(baseline_on)),
+            anchor_entries=[new_entry],
+        )
+    return _merge_anchor_into_file(existing, new_entry)
 
 
 def jump_to_predicted_frame(
@@ -367,7 +373,8 @@ def _run_scrub(
     def _implied_offset_for_jumps() -> float:
         """Use existing anchor's offset if present, else compute from current frame."""
         if existing_anchor is not None:
-            return float(existing_anchor["implied_offset_s"])
+            entry0 = existing_anchor["anchors"][0]
+            return compute_implied_offset(entry0)
         # Fall back: pretend current frame anchors trial 0.
         return float(ts_ms[state["frame_idx"]] / 1000.0 - float(baseline_on[0]))
 
@@ -409,8 +416,9 @@ def _run_scrub(
             ts_ms[fi] / 1000.0 - float(baseline_on[0])
         )
         if existing_anchor is not None:
-            existing_frame = int(existing_anchor["video_frame_idx"])
-            existing_offset_s = float(existing_anchor["implied_offset_s"])
+            existing_entry0 = existing_anchor["anchors"][0]
+            existing_frame = int(existing_entry0["video_frame_idx"])
+            existing_offset_s = compute_implied_offset(existing_entry0)
             existing_line = (
                 f"Existing anchor: frame {existing_frame} "
                 f"(implied_offset = {existing_offset_s:+.4f} s)"
@@ -486,25 +494,45 @@ def _run_scrub(
 
         if key in (" ", "enter"):
             fi = state["frame_idx"]
-            anchor = _build_anchor_dict(session_name, baseline_on, ts_ms, fps, state["frame_idx"])
+            anchor = _build_or_merge_anchor_file(
+                session_name, baseline_on, ts_ms, fps,
+                trial_index=0, frame_idx=state["frame_idx"],
+            )
             save_anchor(session_name, anchor)
             state["saved_anchor"] = anchor
+            entry0 = anchor["anchors"][0]
             logger.info(
                 "Anchor saved via scrub: frame %d (video time %.4fs); implied offset = %.4fs",
-                fi, anchor["video_time_s"], anchor["implied_offset_s"],
+                fi, entry0["video_time_s"], compute_implied_offset(entry0),
             )
             plt.close(fig)
             return
 
         if key == "r":
             # Render montage with current frame as candidate anchor (no save)
-            candidate = _build_anchor_dict(session_name, baseline_on, ts_ms, fps, state["frame_idx"])
+            candidate_file = _build_or_merge_anchor_file(
+                session_name, baseline_on, ts_ms, fps,
+                trial_index=0, frame_idx=state["frame_idx"],
+            )
+            # render_barcode_montage expects v1 single-anchor shape.
+            entry0 = candidate_file["anchors"][0]
+            candidate_for_render = {
+                "session": candidate_file["session"],
+                "anchor_trial_index": entry0["trial_index"],
+                "nidaq_baseline_on_s": entry0["nidaq_baseline_on_s"],
+                "video_frame_idx": entry0["video_frame_idx"],
+                "video_time_s": entry0["video_time_s"],
+                "implied_offset_s": compute_implied_offset(entry0),
+                "frame_rate_fps": candidate_file["frame_rate_fps"],
+                "n_trials": candidate_file["n_trials"],
+                "clicked_at": entry0["clicked_at"],
+            }
             montage_path = os.path.join(
                 FIGS_DIR, f"{session_name}_barcode_montage_PREVIEW.png"
             )
             render_barcode_montage(
                 session_name=session_name,
-                anchor=candidate,
+                anchor=candidate_for_render,
                 baseline_on=baseline_on,
                 video_path=video_path,
                 ts_ms=ts_ms,
@@ -696,7 +724,7 @@ def main() -> int:
         if start_mode is None:
             start_mode = "anchor" if existing is not None else "coarse"
         if start_mode == "anchor" and existing is not None:
-            start_frame = int(existing["video_frame_idx"])
+            start_frame = int(existing["anchors"][0]["video_frame_idx"])
         elif start_mode == "coarse":
             start_frame = predicted
         else:  # "zero" or "anchor" without existing anchor
@@ -746,20 +774,36 @@ def main() -> int:
                     logger.info("Stage 2 cancelled by user.")
                     return 1
 
-                anchor = _build_anchor_dict(session_name, baseline_on, ts_ms, fps, click2)
+                anchor = _build_or_merge_anchor_file(
+                    session_name, baseline_on, ts_ms, fps,
+                    trial_index=0, frame_idx=click2,
+                )
                 save_anchor(session_name, anchor)
+                entry0 = anchor["anchors"][0]
                 logger.info(
                     "Anchor saved: trial 0 @ frame %d (video time %.3fs); implied offset = %.3fs",
-                    anchor["video_frame_idx"],
-                    anchor["video_time_s"],
-                    anchor["implied_offset_s"],
+                    entry0["video_frame_idx"],
+                    entry0["video_time_s"],
+                    compute_implied_offset(entry0),
                 )
 
-    # Render montage
+    # Render montage. render_barcode_montage takes v1 single-anchor shape.
+    entry0 = anchor["anchors"][0]
+    anchor_for_render = {
+        "session": anchor["session"],
+        "anchor_trial_index": entry0["trial_index"],
+        "nidaq_baseline_on_s": entry0["nidaq_baseline_on_s"],
+        "video_frame_idx": entry0["video_frame_idx"],
+        "video_time_s": entry0["video_time_s"],
+        "implied_offset_s": compute_implied_offset(entry0),
+        "frame_rate_fps": anchor["frame_rate_fps"],
+        "n_trials": anchor["n_trials"],
+        "clicked_at": entry0["clicked_at"],
+    }
     montage_path = os.path.join(FIGS_DIR, f"{session_name}_barcode_montage.png")
     render_barcode_montage(
         session_name=session_name,
-        anchor=anchor,
+        anchor=anchor_for_render,
         baseline_on=baseline_on,
         video_path=video_path,
         ts_ms=ts_ms,
