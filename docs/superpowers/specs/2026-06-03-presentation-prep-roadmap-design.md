@@ -82,6 +82,11 @@ Each finished workstream commits its column + trust rule on its own branch; the 
   run `scripts/pipelines/tracking/validate_long_tracks.py` + `build_qc_sheets.py` (the
   `2026-05-22-tracking-qc-sheets-plan.md` plan) → `verdicts.csv` → `track_verdict`.
   **`feature/deepum-finetune` is upside only — never a blocker.**
+  **[Updated 2026-06-03 — see §9]** M1 is NOT purely mechanical: the GLT's `Global_UID`
+  (currently DeepUM) and the verdict producer (UM 3.2.9 `unit_index.csv`) are in different
+  ID spaces. M1 must unify them onto one canonical registry. Decision: **registry-agnostic,
+  late-bound** (one `--registry` param across GLT + validate + QC-sheets; the
+  UM-3.2.9-vs-DeepUM choice is a flag flipped when `deepum-finetune` reports).
 - **FSI/SPN waveform**: a clean producer on the **current per-session KS4 output** (NOT
   `scripts/pipelines/concat_sort/` — that approach is retired; `regen_waveform_labels.py` is
   suspect). Trough-to-peak width (+ half-width / repolarisation), bimodality check for the cutoff,
@@ -191,3 +196,40 @@ Everything in the ⏱ time-boxes can slip without touching the two headline figu
 Begin **P0 — spine audit** via the writing-plans skill: produce an implementation plan to test
 (and, if needed, rebuild) `build_unit_table()` and the GLT producer, and freeze the column schema
 that every other workstream writes to. Then spin up M1 / M2 / D1 in parallel worktree chats.
+
+---
+
+## 9. Groundwork findings (M1/M2 pre-plan, 2026-06-03)
+
+Read-only investigation done while P0 executes, so M1/M2 plans can be written quickly once P0
+lands and the column contract is stable.
+
+### M2 (FSI/SPN waveform) — ready to plan, mechanical
+- **Source:** RawWaveforms at `data/unit_match/input/BG_046/{DDMMYYYY}/RawWaveforms/Unit{ID}_RawSpikes.npy`
+  (shape ≈ (82, 383, 2) @ 30 kHz; mean across the 2 split-halves; peak channel by peak-to-peak).
+  This is the **UnitMatch input** — current, NOT concat-sort, NOT KS template waveforms.
+- **Reference implementation:** `AI_exploration/analysis_3_waveform_celltype.py` — features =
+  trough-to-peak (T2P) + half-width (+ depth from `.mat` `templateDepths`); 2-component
+  `sklearn.mixture.GaussianMixture` → **Narrow (FSI) / Broad (SPN)**.
+- **M2 plan shape:** port to a clean library producer (reuse `tracking_qc` waveform primitives
+  where they fit), emit a fresh `waveform_celltype_labels.csv` at a non-stale path, repoint
+  `WAVEFORM_LABELS_PATH`, fill P0's `celltype` contract column. P0-independent except for that column.
+
+### M1 (tracking) — registry reconciliation (NOT purely mechanical)
+- **Conflict:** `build_longitudinal_table.py` defaults `--registry` to DeepUM
+  (`data/deep_unit_match/output/BG_046/DeepUM_CellRegistry.csv`), but `validate_long_tracks.py`
+  (→ `track_validation_stats.csv` → verdicts → `track_verdict`) reads UM 3.2.9
+  (`X:/…/BG_046/unit_match/output/all42/unit_index.csv`). → `Global_UID` and `track_verdict`
+  would live in **different ID spaces** unless unified.
+- **Two formats to reconcile:** `unit_index.csv` (validate) vs `CellRegistry.csv` (GLT producer).
+- **Registries on disk:** UM 3.2.9 pairwise =
+  `data/unit_match/output/BG_046_ITI_only/{later}_to_{earlier}/CellRegistry{,_Conservative,_Intermediate,_Liberal}.csv`
+  (ITI-only, 4 thresholds) + global `all42/unit_index.csv` on `X:`. DeepUM global =
+  `data/deep_unit_match/output/BG_046/{DeepUM_CellRegistry,DeepUM_MatchTable,unit_index,Verified_Global_Units,Global_Unit_Quality_Metrics}.csv`
+  + `pair_registries/`.
+- **Decision (2026-06-03): registry-agnostic, late-bound.** The M1 plan unifies GLT + validate +
+  QC-sheets onto ONE canonical `--registry` param so `Global_UID` and `track_verdict` always share
+  an ID space; the UM-3.2.9-vs-DeepUM choice is a flag flipped when `deepum-finetune` reports. M1
+  does not block on that chat.
+- **Open items for the M1 plan:** confirm `X:/…/all42/unit_index.csv` is current/accessible; map the
+  `unit_index` ↔ `CellRegistry` schema (which columns carry the global id + per-(session,cluster) map).
