@@ -79,3 +79,21 @@ def test_build_unit_table_raises_on_duplicate_keys(tmp_path, monkeypatch):
 
     with pytest.raises(UnitTableContractError, match="duplicate"):
         L.build_unit_table(qc_only=True)
+
+
+import os
+from visdetect.analysis.config import GLT_PATH
+
+
+@pytest.mark.skipif(not os.path.exists(GLT_PATH),
+                    reason="GLT not regenerated yet (run build_longitudinal_table.py)")
+def test_build_unit_table_real_data_contract():
+    from visdetect.suite.loader import build_unit_table
+    from visdetect.suite.unit_table_schema import validate_unit_table, KEY_COLUMNS
+
+    df = build_unit_table(qc_only=True)
+    validate_unit_table(df)                       # contract holds on real data
+    assert df.duplicated(subset=KEY_COLUMNS).sum() == 0
+    assert len(df) > 0
+    # Global_UID must be present and at least partially populated (tracking output).
+    assert df["Global_UID"].notna().any()
