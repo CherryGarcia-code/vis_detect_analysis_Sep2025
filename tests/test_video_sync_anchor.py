@@ -396,3 +396,186 @@ def test_save_anchor_writes_v2_only(tmp_path):
     assert on_disk["schema_version"] == 2
     assert "anchors" in on_disk
     assert "anchor_trial_index" not in on_disk
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: SyncResult.per_trial_overrides + manual quality + fit_2anchor_clock
+# ---------------------------------------------------------------------------
+
+
+def test_sync_result_default_per_trial_overrides_is_none():
+    sr = vs.SyncResult(
+        slope=1.0, offset=0.0, n_anchors=2, n_baseline_on=10,
+        rmse_ms=0.0, max_residual_ms=0.0, cv_rmse_ms=0.0,
+        slope_ppm=0.0, durbin_watson=2.0,
+        detection_method="manual_slope_fit",
+    )
+    assert sr.per_trial_overrides is None
+
+
+def test_sync_result_to_dict_includes_per_trial_overrides_when_set():
+    sr = vs.SyncResult(
+        slope=1.0, offset=0.0, n_anchors=2, n_baseline_on=10,
+        rmse_ms=0.0, max_residual_ms=0.0, cv_rmse_ms=0.0,
+        slope_ppm=0.0, durbin_watson=2.0,
+        detection_method="manual_slope_fit",
+        per_trial_overrides={5: 250, 8: 400},
+    )
+    d = sr.to_dict()
+    assert "per_trial_overrides" in d
+    # JSON keys are strings on disk; field stays as int keys in memory.
+    assert d["per_trial_overrides"] == {5: 250, 8: 400}
+
+
+def test_sync_result_to_dict_omits_overrides_when_none():
+    sr = vs.SyncResult(
+        slope=1.0, offset=0.0, n_anchors=2, n_baseline_on=10,
+        rmse_ms=0.0, max_residual_ms=0.0, cv_rmse_ms=0.0,
+        slope_ppm=0.0, durbin_watson=2.0,
+        detection_method="manual_slope_fit",
+    )
+    d = sr.to_dict()
+    assert "per_trial_overrides" not in d
+
+
+def test_quality_manual_carve_out_returns_good_for_valid_2anchor():
+    sr = vs.SyncResult(
+        slope=1.0000234, offset=-4.61, n_anchors=2, n_baseline_on=551,
+        rmse_ms=0.0, max_residual_ms=0.0, cv_rmse_ms=0.0,
+        slope_ppm=23.4, durbin_watson=0.0,  # DW=0 would fail regression path
+        detection_method="manual_slope_fit",
+    )
+    assert sr.quality == "good"
+
+
+def test_quality_manual_carve_out_returns_failed_for_negative_slope():
+    sr = vs.SyncResult(
+        slope=-0.5, offset=10.0, n_anchors=2, n_baseline_on=551,
+        rmse_ms=0.0, max_residual_ms=0.0, cv_rmse_ms=0.0,
+        slope_ppm=-500000.0, durbin_watson=2.0,
+        detection_method="manual_slope_fit",
+    )
+    assert sr.quality == "failed"
+
+
+def test_quality_manual_carve_out_returns_failed_for_one_anchor():
+    sr = vs.SyncResult(
+        slope=1.0, offset=0.0, n_anchors=1, n_baseline_on=551,
+        rmse_ms=0.0, max_residual_ms=0.0, cv_rmse_ms=0.0,
+        slope_ppm=0.0, durbin_watson=2.0,
+        detection_method="manual_slope_fit",
+    )
+    assert sr.quality == "failed"
+
+
+# fit_2anchor_clock ---------------------------------------------------------
+
+
+def test_fit_2anchor_clock_exact_2_anchors():
+    fps = 50.0
+    anchors = [
+        {"trial_index": 0, "nidaq_baseline_on_s": 10.0,
+         "video_frame_idx": 500, "video_time_s": 10.0,
+         "clicked_at": "x"},
+        # video_time_s = 1010 / fps = 20.2 vs nidaq 20.0 => slope > 1
+        {"trial_index": 100, "nidaq_baseline_on_s": 20.0,
+         "video_frame_idx": 1010, "video_time_s": 20.2,
+         "clicked_at": "x"},
+    ]
+    sr = vs.fit_2anchor_clock(
+        anchors=anchors, fps=fps, n_baseline_on=101,
+    )
+    # slope = (20.2 - 10.0) / (20.0 - 10.0) = 1.02
+    # offset = 10.0 - 1.02 * 10.0 = -0.2
+    assert abs(sr.slope - 1.02) < 1e-9
+    assert abs(sr.offset - (-0.2)) < 1e-9
+    assert sr.n_anchors == 2
+    assert sr.n_baseline_on == 101
+    assert sr.rmse_ms == 0.0
+    assert sr.detection_method == "manual_slope_fit"
+    assert abs(sr.slope_ppm - 20000.0) < 1e-6
+
+
+def test_fit_2anchor_clock_3_anchor_lsq():
+    fps = 50.0
+    # Three exactly-collinear anchors → slope=1.02, offset=-0.2, rmse=0
+    anchors = [
+        {"trial_index": 0,   "nidaq_baseline_on_s": 10.0,
+         "video_frame_idx": 500,  "video_time_s": 10.0,
+         "clicked_at": "x"},
+        {"trial_index": 50,  "nidaq_baseline_on_s": 15.0,
+         "video_frame_idx": 755,  "video_time_s": 15.1,
+         "clicked_at": "x"},
+        {"trial_index": 100, "nidaq_baseline_on_s": 20.0,
+         "video_frame_idx": 1010, "video_time_s": 20.2,
+         "clicked_at": "x"},
+    ]
+    sr = vs.fit_2anchor_clock(
+        anchors=anchors, fps=fps, n_baseline_on=101,
+    )
+    assert abs(sr.slope - 1.02) < 1e-6
+    assert abs(sr.offset - (-0.2)) < 1e-6
+    assert sr.n_anchors == 3
+    assert sr.rmse_ms < 1e-3  # essentially zero
+
+
+def test_fit_2anchor_clock_rejects_fewer_than_2_anchors():
+    with pytest.raises(ValueError, match="at least 2"):
+        vs.fit_2anchor_clock(
+            anchors=[{"trial_index": 0, "nidaq_baseline_on_s": 0.0,
+                      "video_frame_idx": 0, "video_time_s": 0.0,
+                      "clicked_at": "x"}],
+            fps=50.0, n_baseline_on=10,
+        )
+
+
+def test_fit_2anchor_clock_rejects_non_positive_slope():
+    """Anchors that produce a slope <= 0 are physically impossible."""
+    fps = 50.0
+    anchors = [
+        {"trial_index": 0,   "nidaq_baseline_on_s": 10.0,
+         "video_frame_idx": 1000, "video_time_s": 20.0,
+         "clicked_at": "x"},
+        {"trial_index": 100, "nidaq_baseline_on_s": 20.0,
+         "video_frame_idx": 500, "video_time_s": 10.0,
+         "clicked_at": "x"},
+    ]
+    with pytest.raises(ValueError, match="non-positive"):
+        vs.fit_2anchor_clock(
+            anchors=anchors, fps=fps, n_baseline_on=101,
+        )
+
+
+def test_fit_2anchor_clock_rejects_duplicate_nidaq_times():
+    """Two anchors with identical nidaq_baseline_on_s must raise ValueError."""
+    anchors = [
+        {"trial_index": 0,  "nidaq_baseline_on_s": 10.0,
+         "video_frame_idx": 1000, "video_time_s": 20.0,
+         "clicked_at": "x"},
+        {"trial_index": 50, "nidaq_baseline_on_s": 10.0,
+         "video_frame_idx": 1010, "video_time_s": 20.2,
+         "clicked_at": "x"},
+    ]
+    with pytest.raises(ValueError, match="same nidaq"):
+        vs.fit_2anchor_clock(anchors=anchors, fps=50.0, n_baseline_on=100)
+
+
+def test_fit_2anchor_clock_max_residual_exceeds_rmse_for_noncollinear():
+    """For non-collinear anchors the max_residual_ms must be strictly > rmse_ms."""
+    # Middle point is pulled off the line: nidaq=[10,15,20], video=[10.0,15.5,20.2]
+    # The best-fit line through these three points has non-zero, unequal residuals.
+    anchors = [
+        {"trial_index": 0,   "nidaq_baseline_on_s": 10.0,
+         "video_frame_idx": 500,  "video_time_s": 10.0,
+         "clicked_at": "x"},
+        {"trial_index": 50,  "nidaq_baseline_on_s": 15.0,
+         "video_frame_idx": 775,  "video_time_s": 15.5,
+         "clicked_at": "x"},
+        {"trial_index": 100, "nidaq_baseline_on_s": 20.0,
+         "video_frame_idx": 1010, "video_time_s": 20.2,
+         "clicked_at": "x"},
+    ]
+    sr = vs.fit_2anchor_clock(anchors=anchors, fps=50.0, n_baseline_on=101)
+    assert sr.rmse_ms > 0
+    assert sr.max_residual_ms >= sr.rmse_ms
+    assert sr.max_residual_ms > sr.rmse_ms  # strictly greater for non-collinear data

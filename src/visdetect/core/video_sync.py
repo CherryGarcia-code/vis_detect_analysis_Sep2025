@@ -527,6 +527,7 @@ class SyncResult:
     residuals_ms: Optional[np.ndarray] = field(default=None, repr=False)
     matched_cam_ms: Optional[np.ndarray] = field(default=None, repr=False)
     matched_nidaq_s: Optional[np.ndarray] = field(default=None, repr=False)
+    per_trial_overrides: Optional[Dict[int, int]] = field(default=None, repr=False)
 
     @property
     def coverage(self) -> float:
@@ -535,6 +536,12 @@ class SyncResult:
     @property
     def quality(self) -> str:
         """Composite quality tier: good / review / failed."""
+        # Manual 2-anchor fits don't have the regression-style metrics
+        # the rest of this logic checks. A manual fit is "good" iff the
+        # slope is physically sensible and there are >=2 anchors.
+        if self.detection_method == "manual_slope_fit":
+            return "good" if (self.slope > 0 and self.n_anchors >= 2) else "failed"
+
         good_rmse = self.rmse_ms < _GOOD_RMSE_MS
         good_maxres = self.max_residual_ms < VIDEO_SYNC_MAX_RESIDUAL_MS
         good_dw = _GOOD_DW_RANGE[0] <= self.durbin_watson <= _GOOD_DW_RANGE[1]
@@ -564,7 +571,7 @@ class SyncResult:
             return "failed"
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "slope": self.slope,
             "offset": self.offset,
             "n_anchors": self.n_anchors,
@@ -581,6 +588,88 @@ class SyncResult:
             "n_dropped": self.n_dropped,
             "detection_method": self.detection_method,
         }
+        if self.per_trial_overrides is not None:
+            d["per_trial_overrides"] = self.per_trial_overrides
+        return d
+
+
+def fit_2anchor_clock(
+    anchors: List[dict],
+    fps: float,
+    n_baseline_on: int,
+) -> "SyncResult":
+    """Fit a linear clock model from 2+ v2 anchor entries.
+
+    Model: ``video_time_s = slope * nidaq_baseline_on_s + offset``.
+
+    For exactly 2 anchors: closed-form linear fit (rmse_ms = 0, max_residual_ms = 0).
+    For >=3 anchors: least-squares fit; rmse_ms and max_residual_ms from residuals.
+
+    Parameters
+    ----------
+    anchors : list of dict
+        Each dict must have ``nidaq_baseline_on_s`` and ``video_time_s`` keys.
+        The fit uses ``video_time_s`` directly; ``fps`` is currently unused and
+        reserved for forward compatibility.
+    fps : float
+        Camera frame rate (reserved; not used in the fit calculation).
+    n_baseline_on : int
+        Total number of Baseline_ON events in the session (for coverage reporting).
+
+    Returns a SyncResult with detection_method = "manual_slope_fit".
+    Raises ValueError on fewer than 2 anchors, duplicate nidaq times, or
+    non-positive slope.
+    """
+    if len(anchors) < 2:
+        raise ValueError(
+            f"fit_2anchor_clock needs at least 2 anchors; got {len(anchors)}"
+        )
+
+    x = np.array(
+        [float(a["nidaq_baseline_on_s"]) for a in anchors], dtype=np.float64
+    )
+    y = np.array(
+        [float(a["video_time_s"]) for a in anchors], dtype=np.float64
+    )
+
+    if len(anchors) == 2 and x[0] == x[1]:
+        raise ValueError(
+            f"Both anchors have the same nidaq baseline_on time ({x[0]:.6f}s); "
+            f"cannot fit a slope. Check for duplicate/erroneous anchor entries."
+        )
+
+    if len(anchors) == 2:
+        slope = float((y[1] - y[0]) / (x[1] - x[0]))
+        offset = float(y[0] - slope * x[0])
+        rmse_ms = 0.0
+        max_residual_ms = 0.0
+    else:
+        A = np.vstack([x, np.ones_like(x)]).T
+        soln, _, _, _ = np.linalg.lstsq(A, y, rcond=None)
+        slope = float(soln[0])
+        offset = float(soln[1])
+        residuals_s = y - (slope * x + offset)
+        rmse_ms = float(np.sqrt(np.mean(residuals_s ** 2)) * 1000.0)
+        max_residual_ms = float(np.max(np.abs(residuals_s)) * 1000.0)
+
+    if slope <= 0:
+        raise ValueError(
+            f"Computed slope {slope} is non-positive; anchors are likely "
+            f"out of order or one is wrong. Re-verify via --scrub."
+        )
+
+    return SyncResult(
+        slope=slope,
+        offset=offset,
+        n_anchors=int(len(anchors)),
+        n_baseline_on=int(n_baseline_on),
+        rmse_ms=rmse_ms,
+        max_residual_ms=max_residual_ms,
+        cv_rmse_ms=0.0,
+        slope_ppm=float((slope - 1.0) * 1e6),
+        durbin_watson=2.0,  # N/A for this fit type; report the neutral value
+        detection_method="manual_slope_fit",
+    )
 
 
 # =====================================================================
