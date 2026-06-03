@@ -121,20 +121,35 @@ def get_session_stage(session_name) -> Optional[str]:
 
 # ── Grand Longitudinal Table ─────────────────────────────────────────
 
-def load_glt(qc_only: bool = True) -> pd.DataFrame:
+def load_glt(qc_only: bool = True, glt_path: Optional[str] = None) -> pd.DataFrame:
     """Load Grand Longitudinal Table, optionally filtered to valid sessions.
 
     Merges stage and session_idx from the staging manifest.
+
+    Parameters
+    ----------
+    qc_only : bool
+        Filter to QC-passed sessions from the staging manifest.
+    glt_path : str, optional
+        Override the default GLT_PATH (used for testing).
+
+    Raises
+    ------
+    FileNotFoundError
+        If the GLT CSV is absent, with a message pointing at the regenerator.
     """
-    glt = pd.read_csv(GLT_PATH)
+    path = glt_path if glt_path is not None else GLT_PATH
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Grand Longitudinal Table not found at {path}. "
+            "Regenerate it with: "
+            "py scripts/analysis/build_longitudinal_table.py --workers 6  "
+            "(requires a UnitMatch registry + unitmatch_env)."
+        )
+    glt = pd.read_csv(path)
     manifest = load_staging_manifest(qc_only=qc_only)
-    # Build lookup maps
-    date_to_stage = dict(
-        zip(manifest["session_name"].astype(int), manifest["stage"])
-    )
-    date_to_idx = dict(
-        zip(manifest["session_name"].astype(int), manifest["session_idx"])
-    )
+    date_to_stage = dict(zip(manifest["session_name"].astype(int), manifest["stage"]))
+    date_to_idx = dict(zip(manifest["session_name"].astype(int), manifest["session_idx"]))
     if qc_only:
         valid = set(manifest["session_name"].astype(int))
         glt = glt[glt["Session_Date"].isin(valid)].copy()
@@ -288,27 +303,38 @@ def load_tf_classification_detrended() -> pd.DataFrame:
 
 # ── Waveform cell-type labels ────────────────────────────────────────
 
-def load_waveform_labels() -> pd.DataFrame:
-    """Load pre-computed waveform cell-type labels (Narrow/Broad).
+def load_waveform_labels(path: Optional[str] = None) -> pd.DataFrame:
+    """Load pre-computed waveform cell-type labels.
 
     Normalizes column names so downstream code can use:
       session_name, cluster_id, cell_type
+
+    Parameters
+    ----------
+    path : str, optional
+        Override WAVEFORM_LABELS_PATH (used for testing / regenerated labels).
+
+    Raises
+    ------
+    FileNotFoundError
+        If the labels CSV is absent (callers may catch this and fall back).
     """
-    if os.path.exists(WAVEFORM_LABELS_PATH):
-        df = pd.read_csv(WAVEFORM_LABELS_PATH)
-        # Normalize column names from CSV (session_date -> session_name, celltype -> cell_type)
-        rename = {}
-        if "session_date" in df.columns and "session_name" not in df.columns:
-            rename["session_date"] = "session_name"
-        if "celltype" in df.columns and "cell_type" not in df.columns:
-            rename["celltype"] = "cell_type"
-        if rename:
-            df = df.rename(columns=rename)
-        return df
-    raise FileNotFoundError(
-        f"Waveform labels not found at {WAVEFORM_LABELS_PATH}. "
-        "Run analysis_3_waveform_celltype.py in AI_exploration/ first."
-    )
+    p = path if path is not None else WAVEFORM_LABELS_PATH
+    if not os.path.exists(p):
+        raise FileNotFoundError(
+            f"Waveform labels not found at {p}. Regenerate cell-type labels from "
+            "the CURRENT per-session KS4 output (the FSI/SPN waveform workstream); "
+            "the legacy AI_exploration/preTprime CSV is stale and must not be used."
+        )
+    df = pd.read_csv(p)
+    rename = {}
+    if "session_date" in df.columns and "session_name" not in df.columns:
+        rename["session_date"] = "session_name"
+    if "celltype" in df.columns and "cell_type" not in df.columns:
+        rename["celltype"] = "cell_type"
+    if rename:
+        df = df.rename(columns=rename)
+    return df
 
 
 # ── Convenience: merged unit table ───────────────────────────────────
