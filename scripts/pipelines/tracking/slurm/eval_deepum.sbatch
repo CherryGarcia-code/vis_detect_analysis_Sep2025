@@ -5,10 +5,12 @@
 # tabulating the span distribution vs UM/stock baselines.
 #
 # This is the BIG-RAM, CPU profile (NOT the GPU training profile): the pipeline's
-# UnitMatch extract_metric_scores + Bayes fusion peaks ~180-230 GB and is CPU-only
-# -- identical resource shape to the stock run (run_deepunitmatch_cluster.sh).
+# UnitMatch extract_metric_scores + Bayes fusion peaks ~180-230 GB and is CPU-only.
+# Runs on the `cpu` partition's 512 GB nodes (enc3-node[1,2,4,5]); the --mem=350G
+# request keeps it off the 240 GB cpu nodes and gives ~120 GB headroom over peak.
 # Each checkpoint takes ~79 min, run sequentially, so pick STRIDE to bound runtime
-# (stride 25 over save_freq=5 -> ~3 checkpoints ~4 h).
+# (stride 25 over save_freq=5 -> ~3 checkpoints ~4 h). Run eval rungs ONE AT A TIME
+# (each re-extracts the shared processed_waveforms cache -> no concurrent jobs).
 #
 # Submit from UM_DIR after the matching training rung has finished:
 #   sbatch slurm/eval_deepum.sbatch rung1_warm_frozen 25
@@ -20,8 +22,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH -t 0-12:00
-#SBATCH -p a100
-#SBATCH --mem=400G
+#SBATCH -p cpu
+#SBATCH --mem=350G
 
 set -e
 
