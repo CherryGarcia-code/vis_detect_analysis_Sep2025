@@ -339,7 +339,7 @@ def load_waveform_labels(path: Optional[str] = None) -> pd.DataFrame:
 
 # ── Convenience: merged unit table ───────────────────────────────────
 
-def build_unit_table(qc_only: bool = True) -> pd.DataFrame:
+def build_unit_table(qc_only: bool = True, validate: bool = True) -> pd.DataFrame:
     """Build a comprehensive per-unit table merging GLT, lick, and cell-type data.
 
     Columns include: Global_UID, Session_Date, Cluster_ID, stage, session_idx,
@@ -428,5 +428,24 @@ def build_unit_table(qc_only: bool = True) -> pd.DataFrame:
         glt.drop(columns=["session_name", "cluster_id"], errors="ignore", inplace=True)
     else:
         glt["tier_detrended"] = "Non-responsive"
+
+    # ── Standardize tf_class from the detrended tier (TF-responsive workstream
+    #    will overwrite this column with its by-eye-matched classifier output) ──
+    if "tier_detrended" in glt.columns:
+        glt["tf_class"] = glt["tier_detrended"].fillna("unclassified")
+    else:
+        glt["tf_class"] = "unclassified"
+
+    # ── Add not-yet-produced contract columns with their defaults ──
+    from .unit_table_schema import add_label_defaults, validate_unit_table
+    glt = add_label_defaults(glt)
+
+    # ── Guard against row-multiplying merges: keys must be unique integers ──
+    for key in ("Session_Date", "Cluster_ID"):
+        if key in glt.columns:
+            glt[key] = glt[key].astype(int)
+
+    if validate:
+        validate_unit_table(glt)
 
     return glt
