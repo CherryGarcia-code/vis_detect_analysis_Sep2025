@@ -579,3 +579,24 @@ def test_fit_2anchor_clock_max_residual_exceeds_rmse_for_noncollinear():
     assert sr.rmse_ms > 0
     assert sr.max_residual_ms >= sr.rmse_ms
     assert sr.max_residual_ms > sr.rmse_ms  # strictly greater for non-collinear data
+
+
+def test_predicted_last_trial_frame_from_anchor_0():
+    ca = _import_click_anchor()
+    ts_ms = np.arange(0.0, 10000000.0, 20.0)  # 50fps, 500k frames
+    baseline_on = np.array([27.83, 1000.0, 7255.49])
+    # Anchor 0: trial 0, video_time = 23.22 s
+    anchor0 = {
+        "trial_index": 0,
+        "nidaq_baseline_on_s": 27.83,
+        "video_frame_idx": 1161,
+        "video_time_s": 23.22,
+        "clicked_at": "x",
+    }
+    # implied_offset = 23.22 - 27.83 = -4.61
+    # Predicted last trial video time = 7255.49 + (-4.61) = 7250.88 s
+    # Predicted last frame = 7250.88 * 50 = 362544
+    frame = ca._predicted_last_trial_frame(anchor0, baseline_on, ts_ms)
+    expected_ms = (7255.49 - 4.61) * 1000.0
+    expected_frame = int(np.argmin(np.abs(ts_ms - expected_ms)))
+    assert frame == expected_frame

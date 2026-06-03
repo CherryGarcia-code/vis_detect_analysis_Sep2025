@@ -165,6 +165,29 @@ def jump_to_predicted_frame(
     return int(np.argmin(np.abs(ts_ms - target_ms)))
 
 
+def _predicted_last_trial_frame(
+    anchor0: dict,
+    baseline_on: np.ndarray,
+    ts_ms: np.ndarray,
+) -> int:
+    """Predict the video frame for the last task trial using anchor 0's offset.
+
+    Used to seed the --anchor-last scrubber so it opens close to the actual
+    last-trial Baseline_ON. Uses slope=1 (the offset from anchor 0); the
+    scrubber lets the user correct any drift.
+    """
+    implied_offset_s = (
+        float(anchor0["video_time_s"]) - float(anchor0["nidaq_baseline_on_s"])
+    )
+    last_nidaq_s = float(baseline_on[-1])
+    target_ms = (last_nidaq_s + implied_offset_s) * 1000.0
+    if target_ms <= ts_ms[0]:
+        return 0
+    if target_ms >= ts_ms[-1]:
+        return int(len(ts_ms) - 1)
+    return int(np.argmin(np.abs(ts_ms - target_ms)))
+
+
 # ---------------------------------------------------------------------------
 # Frame I/O + eye-region crop
 # ---------------------------------------------------------------------------
@@ -337,6 +360,7 @@ def _run_scrub(
     n_frames: int,
     start_frame: int,
     existing_anchor: Optional[dict],
+    anchor_trial_index: int = 0,
 ) -> Optional[dict]:
     """Keyboard-driven frame-by-frame scrubber for the eye-cam video.
 
@@ -373,6 +397,9 @@ def _run_scrub(
     def _implied_offset_for_jumps() -> float:
         """Use existing anchor's offset if present, else compute from current frame."""
         if existing_anchor is not None:
+            # Always use the trial-0 anchor for jump offset (slope=1 approximation).
+            # --anchor-last intentionally passes the full v2 file; trial-0 remains the
+            # best linear seed even when a last-trial anchor is also present.
             entry0 = existing_anchor["anchors"][0]
             return compute_implied_offset(entry0)
         # Fall back: pretend current frame anchors trial 0.
@@ -413,14 +440,14 @@ def _run_scrub(
         )
         delta = fi - predicted_frame
         if_saved_offset_s = float(
-            ts_ms[fi] / 1000.0 - float(baseline_on[0])
+            ts_ms[fi] / 1000.0 - float(baseline_on[int(anchor_trial_index)])
         )
         if existing_anchor is not None:
             existing_entry0 = existing_anchor["anchors"][0]
             existing_frame = int(existing_entry0["video_frame_idx"])
             existing_offset_s = compute_implied_offset(existing_entry0)
             existing_line = (
-                f"Existing anchor: frame {existing_frame} "
+                f"Existing anchor [trial {int(existing_entry0['trial_index'])}]: frame {existing_frame} "
                 f"(implied_offset = {existing_offset_s:+.4f} s)"
             )
         else:
@@ -430,7 +457,7 @@ def _run_scrub(
             existing_line,
             f"Nearest trial: {trial_idx}  (NI {float(baseline_on[trial_idx]):.4f} s, "
             f"predicted frame {predicted_frame}, Delta = {delta:+d} frame{'s' if abs(delta) != 1 else ''})",
-            f"If saved here (anchor for trial 0): implied_offset = {if_saved_offset_s:+.4f} s",
+            f"If saved here (anchor for trial {anchor_trial_index}): implied_offset = {if_saved_offset_s:+.4f} s",
             "",
             "Arrow keys = +/-1 frame    Shift+Arrow = +/-10    Ctrl+Arrow = +/-100",
             "J / K = next/prev predicted trial    Home/End = first/last trial    R = re-render montage",
@@ -496,14 +523,18 @@ def _run_scrub(
             fi = state["frame_idx"]
             anchor = _build_or_merge_anchor_file(
                 session_name, baseline_on, ts_ms, fps,
-                trial_index=0, frame_idx=state["frame_idx"],
+                trial_index=int(anchor_trial_index),
+                frame_idx=state["frame_idx"],
             )
             save_anchor(session_name, anchor)
             state["saved_anchor"] = anchor
-            entry0 = anchor["anchors"][0]
+            saved_entry = next(
+                a for a in anchor["anchors"]
+                if int(a["trial_index"]) == int(anchor_trial_index)
+            )
             logger.info(
                 "Anchor saved via scrub: frame %d (video time %.4fs); implied offset = %.4fs",
-                fi, entry0["video_time_s"], compute_implied_offset(entry0),
+                fi, saved_entry["video_time_s"], compute_implied_offset(saved_entry),
             )
             plt.close(fig)
             return
@@ -512,20 +543,24 @@ def _run_scrub(
             # Render montage with current frame as candidate anchor (no save)
             candidate_file = _build_or_merge_anchor_file(
                 session_name, baseline_on, ts_ms, fps,
-                trial_index=0, frame_idx=state["frame_idx"],
+                trial_index=int(anchor_trial_index),
+                frame_idx=state["frame_idx"],
             )
             # render_barcode_montage expects v1 single-anchor shape.
-            entry0 = candidate_file["anchors"][0]
+            entry = next(
+                a for a in candidate_file["anchors"]
+                if int(a["trial_index"]) == int(anchor_trial_index)
+            )
             candidate_for_render = {
                 "session": candidate_file["session"],
-                "anchor_trial_index": entry0["trial_index"],
-                "nidaq_baseline_on_s": entry0["nidaq_baseline_on_s"],
-                "video_frame_idx": entry0["video_frame_idx"],
-                "video_time_s": entry0["video_time_s"],
-                "implied_offset_s": compute_implied_offset(entry0),
+                "anchor_trial_index": entry["trial_index"],
+                "nidaq_baseline_on_s": entry["nidaq_baseline_on_s"],
+                "video_frame_idx": entry["video_frame_idx"],
+                "video_time_s": entry["video_time_s"],
+                "implied_offset_s": compute_implied_offset(entry),
                 "frame_rate_fps": candidate_file["frame_rate_fps"],
                 "n_trials": candidate_file["n_trials"],
-                "clicked_at": entry0["clicked_at"],
+                "clicked_at": entry["clicked_at"],
             }
             montage_path = os.path.join(
                 FIGS_DIR, f"{session_name}_barcode_montage_PREVIEW.png"
@@ -662,6 +697,11 @@ def main() -> int:
         "--start-from", choices=("anchor", "coarse", "zero"), default=None,
         help="Starting frame for --scrub. Default: 'anchor' if anchor JSON exists, else 'coarse'.",
     )
+    parser.add_argument(
+        "--anchor-last", action="store_true",
+        help="Anchor the LAST task trial (uses scrubber UI, requires a trial-0 "
+             "anchor to already exist).",
+    )
     args = parser.parse_args()
 
     session_name = args.session
@@ -717,7 +757,52 @@ def main() -> int:
 
     # Anchor: load existing or run two-stage click
     anchor: Optional[dict] = None
-    if args.scrub:
+    if args.anchor_last:
+        existing = load_anchor(session_name)
+        if existing is None:
+            logger.error(
+                "--anchor-last requires an existing anchor file. "
+                "Run --session %s first (no --anchor-last) to anchor trial 0.",
+                session_name,
+            )
+            return 2
+        # Find anchor for trial 0 (must exist).
+        anchor0 = next(
+            (a for a in existing["anchors"] if int(a["trial_index"]) == 0),
+            None,
+        )
+        if anchor0 is None:
+            logger.error(
+                "Existing anchor file has no trial-0 anchor. "
+                "Run --session %s first (no --anchor-last) to anchor trial 0.",
+                session_name,
+            )
+            return 2
+        last_trial_idx = int(len(baseline_on)) - 1
+        if last_trial_idx <= 0:
+            logger.error("Session has <=1 trial; nothing to anchor as 'last'.")
+            return 2
+        start_frame = _predicted_last_trial_frame(anchor0, baseline_on, ts_ms)
+        logger.info(
+            "Opening scrubber at predicted last-trial (idx %d) frame %d.",
+            last_trial_idx, start_frame,
+        )
+        anchor_after = _run_scrub(
+            session_name=session_name,
+            video_path=video_path,
+            baseline_on=baseline_on,
+            ts_ms=ts_ms,
+            fps=fps,
+            n_frames=n_frames,
+            start_frame=start_frame,
+            existing_anchor=existing,  # full v2 file for HUD context + jump offsets
+            anchor_trial_index=last_trial_idx,
+        )
+        if anchor_after is None:
+            logger.info("Scrubber exited without saving.")
+            return 1
+        anchor = anchor_after
+    elif args.scrub:
         # Resolve start-frame.
         start_mode = args.start_from
         existing = load_anchor(session_name)
