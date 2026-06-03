@@ -53,11 +53,14 @@ def augment_channel_roll(data, choice=None, rng=random):
 
 def add_deepum_to_path():
     """Locate the vendored DeepUnitMatch source via the installed UnitMatchPy
-    package and put it on sys.path. Mirrors run_deepunitmatch_all.py."""
+    package and put it on sys.path. The editable-install layout differs between
+    machines (DeepUnitMatch/ may sit at __path__[0] itself, its parent, or its
+    grandparent), so check all three -- mirrors run_deepunitmatch_all.py."""
     import UnitMatchPy as _umpy
     candidates = []
     try:
-        candidates.append(Path(next(iter(_umpy.__path__))).resolve().parent)
+        base = Path(next(iter(_umpy.__path__))).resolve()
+        candidates += [base, base.parent, base.parent.parent]
     except Exception:
         pass
     repo = next((c for c in candidates if (c / "DeepUnitMatch").is_dir()), None)
