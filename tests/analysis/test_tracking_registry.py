@@ -50,3 +50,52 @@ def test_find_collisions_empty_when_clean(tmp_path):
     csv = _write_long(tmp_path, [["1072025", 3, 0], ["1072025", 4, 1]])
     df = load_canonical_long(csv)
     assert find_cluster_collisions(df).empty
+
+
+from visdetect.analysis.tracking_registry import (
+    resolve_collisions, long_to_cellregistry,
+)
+
+
+def test_resolve_collisions_keeps_supported_uid(tmp_path):
+    csv = _write_long(tmp_path, [
+        ["1072025", 3, 0],   # uid 0 keeps this session (supported)
+        ["1072025", 3, 9],   # uid 9 does NOT keep this session
+        ["2072025", 4, 1],   # uncontested
+    ])
+    df = load_canonical_long(csv)
+    kept = {0: {1072025}, 9: {2072025}}           # int-session kept-sets
+    out = resolve_collisions(df, kept)
+    # Only uid 0 retains (01072025, 3); uid 9's contested row dropped.
+    held = out[(out["session"] == "01072025") & (out["ks_unit_id"] == 3)]
+    assert list(held["global_uid"]) == [0]
+    assert len(out) == 2                           # uncontested row survives
+
+
+def test_resolve_collisions_drops_when_ambiguous(tmp_path):
+    csv = _write_long(tmp_path, [["1072025", 3, 0], ["1072025", 3, 9]])
+    df = load_canonical_long(csv)
+    kept = {0: {1072025}, 9: {1072025}}            # BOTH keep it -> ambiguous
+    out = resolve_collisions(df, kept)
+    assert out[(out["session"] == "01072025") & (out["ks_unit_id"] == 3)].empty
+
+
+def test_long_to_cellregistry_pivots_and_zero_pads(tmp_path):
+    csv = _write_long(tmp_path, [
+        ["1072025", 3, 0], ["2072025", 5, 0], ["1072025", 4, 1],
+    ])
+    df = load_canonical_long(csv)
+    reg = long_to_cellregistry(df)
+    # index = global_uid; columns = 8-digit sessions; cells = ks_unit_id
+    assert list(reg.index) == [0, 1]
+    assert "01072025" in reg.columns and "02072025" in reg.columns
+    assert str(reg.loc[0, "01072025"]) == "3"
+    assert pd.isna(reg.loc[1, "02072025"])
+
+
+def test_long_to_cellregistry_joins_oversplit_with_semicolon(tmp_path):
+    # uid 0 has TWO clusters (3 and 7) in the same session -> "3;7"
+    csv = _write_long(tmp_path, [["1072025", 3, 0], ["1072025", 7, 0]])
+    df = load_canonical_long(csv)
+    reg = long_to_cellregistry(df)
+    assert set(str(reg.loc[0, "01072025"]).split(";")) == {"3", "7"}

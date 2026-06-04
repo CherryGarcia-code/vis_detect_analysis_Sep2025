@@ -10,6 +10,8 @@ See docs/superpowers/specs/2026-06-03-presentation-prep-roadmap-design.md (§9).
 """
 from __future__ import annotations
 
+from typing import Dict, Set
+
 import pandas as pd
 
 CANONICAL_COLS = ["session", "ks_unit_id", "global_uid"]
@@ -47,3 +49,61 @@ def find_cluster_collisions(long_df: pd.DataFrame) -> pd.DataFrame:
     """
     n_uid = long_df.groupby(["session", "ks_unit_id"])["global_uid"].transform("nunique")
     return long_df[n_uid > 1].copy()
+
+
+def resolve_collisions(
+    long_df: pd.DataFrame,
+    kept_sessions_by_uid: Dict[int, Set[int]],
+) -> pd.DataFrame:
+    """Resolve (session, ks_unit_id)-claimed-by->1-UID collisions.
+
+    Policy (trust rule, 2026-06-03): for a contested cluster, keep the UID whose
+    stable kept-subset includes that session; if exactly one UID qualifies, keep
+    it and drop the others; if zero or more than one qualify, drop ALL claims on
+    that cluster (ambiguous -> excluded from the registry). Uncontested rows pass
+    through untouched.
+
+    Parameters
+    ----------
+    long_df : canonical long registry (from load_canonical_long).
+    kept_sessions_by_uid : {global_uid -> set of kept sessions as int}.
+    """
+    collisions = find_cluster_collisions(long_df)
+    if collisions.empty:
+        return long_df.copy()
+
+    contested_keys = set(map(tuple, collisions[["session", "ks_unit_id"]].values))
+    keep_rows = []
+    for idx, row in long_df.iterrows():
+        key = (row["session"], row["ks_unit_id"])
+        if key not in contested_keys:
+            keep_rows.append(idx)
+            continue
+        # Among UIDs claiming this cluster, which keep this session in their subset?
+        sess_int = int(row["session"])
+        claimants = long_df[(long_df["session"] == row["session"]) &
+                            (long_df["ks_unit_id"] == row["ks_unit_id"])]["global_uid"]
+        supported = [u for u in claimants
+                     if sess_int in kept_sessions_by_uid.get(int(u), set())]
+        if len(supported) == 1 and int(row["global_uid"]) == supported[0]:
+            keep_rows.append(idx)
+        # else: drop (ambiguous or unsupported)
+    return long_df.loc[keep_rows].copy()
+
+
+def long_to_cellregistry(long_df: pd.DataFrame) -> pd.DataFrame:
+    """Pivot canonical long -> wide CellRegistry consumed by build_grand_table.
+
+    index = global_uid; columns = 8-digit session strings; cells = ks_unit_id
+    (``;``-joined string when a UID has multiple clusters in one session).
+    """
+    def _join(s):
+        vals = sorted(int(v) for v in s)
+        return ";".join(str(v) for v in vals) if len(vals) > 1 else str(vals[0])
+
+    wide = (long_df
+            .groupby(["global_uid", "session"])["ks_unit_id"]
+            .apply(_join)
+            .unstack("session"))
+    wide.index.name = "UID"
+    return wide
