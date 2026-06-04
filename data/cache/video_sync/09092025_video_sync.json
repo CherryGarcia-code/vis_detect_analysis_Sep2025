@@ -1,0 +1,21 @@
+{
+  "session_name": "09092025",
+  "eye_cam": {
+    "slope": 1.0000253347329524,
+    "offset": -4.611196476690171,
+    "n_anchors": 2,
+    "n_baseline_on": 551,
+    "coverage": 0.0036,
+    "rmse_ms": 0.0,
+    "max_residual_ms": 0.0,
+    "cv_rmse_ms": 0.0,
+    "slope_ppm": 25.33,
+    "durbin_watson": 2.0,
+    "quality": "good",
+    "roi": null,
+    "n_frames": 0,
+    "n_dropped": 0,
+    "detection_method": "manual_slope_fit"
+  },
+  "quality": "good"
+}
