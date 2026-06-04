@@ -19,6 +19,7 @@ import pandas as pd
 
 from .config import (
     CACHE_DIR,
+    FIGURE_DIR,
     GLT_PATH,
     HMM_DIR,
     HMM_LABEL_RENAME,
@@ -339,7 +340,8 @@ def load_waveform_labels(path: Optional[str] = None) -> pd.DataFrame:
 
 # ── Convenience: merged unit table ───────────────────────────────────
 
-def build_unit_table(qc_only: bool = True, validate: bool = True) -> pd.DataFrame:
+def build_unit_table(qc_only: bool = True, validate: bool = True,
+                     verdicts_path: Optional[str] = None) -> pd.DataFrame:
     """Build a comprehensive per-unit table merging GLT, lick, and cell-type data.
 
     Columns include: Global_UID, Session_Date, Cluster_ID, stage, session_idx,
@@ -435,6 +437,20 @@ def build_unit_table(qc_only: bool = True, validate: bool = True) -> pd.DataFram
         glt["tf_class"] = glt["tier_detrended"].fillna("unclassified")
     else:
         glt["tf_class"] = "unclassified"
+
+    # ── Resolve track_verdict per (Global_UID, Session_Date) (M1) ──
+    vpath = verdicts_path or os.path.join(
+        FIGURE_DIR, "tracking_qc", "verdicts_trimmed.csv")
+    if "Global_UID" in glt.columns and os.path.exists(vpath):
+        from visdetect.analysis.track_verdict import (
+            load_kept_map, load_trimmed_verdicts, resolve_row_verdict,
+        )
+        kept_map = load_kept_map(vpath)
+        verd_map = load_trimmed_verdicts(vpath)
+        glt["track_verdict"] = [
+            resolve_row_verdict(u, s, kept_map, verd_map)
+            for u, s in zip(glt["Global_UID"], glt["Session_Date"])
+        ]
 
     # ── Add not-yet-produced contract columns with their defaults ──
     from .unit_table_schema import add_label_defaults, validate_unit_table

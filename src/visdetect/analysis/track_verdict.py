@@ -26,8 +26,13 @@ def load_kept_map(trimmed_path) -> Dict[int, Set[int]]:
     for _, row in df.iterrows():
         raw = row.get("kept_sessions")
         sessions: Set[int] = set()
-        if isinstance(raw, str) and raw.strip():
+        if pd.isna(raw) if not isinstance(raw, (list, set)) else False:
+            pass  # NaN / empty → empty set
+        elif isinstance(raw, str) and raw.strip():
             sessions = {_to_int_session(s) for s in raw.split(";") if s.strip()}
+        elif not isinstance(raw, str):
+            # Numeric scalar (e.g. np.int64 when CSV has a single session without semicolons)
+            sessions = {_to_int_session(raw)}
         out[int(row["global_uid"])] = sessions
     return out
 
