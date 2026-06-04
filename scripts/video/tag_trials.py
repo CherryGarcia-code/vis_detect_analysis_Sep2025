@@ -370,6 +370,15 @@ def main() -> int:
     if "eye_cam" not in sync:
         logger.error("Sync JSON for %s has no eye_cam entry.", session_name)
         return 2
+    method = (sync.get("eye_cam") or {}).get("detection_method", "")
+    if method != "manual_slope_fit":
+        logger.error(
+            "Sync JSON for %s was not produced by fit_sync.py "
+            "(detection_method=%r, expected 'manual_slope_fit'). "
+            "Run fit_sync.py --session %s first.",
+            session_name, method, session_name,
+        )
+        return 2
 
     sess = load_session(session_name)
     baseline_on = np.asarray(

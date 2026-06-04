@@ -30,6 +30,7 @@ from visdetect.core.video_sync import (
     find_camera_files,
     load_camera_metadata,
     load_anchor,
+    load_video_sync,
     save_video_sync,
     fit_2anchor_clock,
 )
@@ -109,6 +110,18 @@ def main() -> int:
     except ValueError as exc:
         logger.error("Slope fit failed: %s", exc)
         return 2
+
+    # Preserve any manual per-trial overrides from a prior tag_trials run:
+    # re-fitting must not silently erase the user's hand-verified frames.
+    existing_sync = load_video_sync(session_name)
+    if existing_sync is not None:
+        prior = (existing_sync.get("eye_cam") or {}).get("per_trial_overrides") or {}
+        if prior:
+            sync_result.per_trial_overrides = {int(k): int(v) for k, v in prior.items()}
+            logger.info(
+                "Preserved %d existing per-trial override(s) from prior sync JSON.",
+                len(sync_result.per_trial_overrides),
+            )
 
     # Persist via existing save_video_sync.
     out_path = save_video_sync(
