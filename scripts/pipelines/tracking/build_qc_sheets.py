@@ -1,12 +1,28 @@
 #!/usr/bin/env python3
-"""Build per-UID QC sheets for the UnitMatch long-track cohort.
+"""Build per-UID QC sheets for a cross-session tracking long-track cohort.
+
+Defaults reproduce the UnitMatch ``output/all42`` cohort exactly. Every input
+(registry, prob-matrix + its row-index, ISI stats) and every output path is
+overridable, so the same sheets can be built for an alternative tracker (e.g. a
+DeepUnitMatch fine-tune run) whose output uses a flat layout (``unit_index.csv``
++ ``prob_matrix.npy`` with no ``batch0/`` subdir). Raw waveforms and pkls are
+keyed by (session, ks_unit_id) and therefore shared across trackers.
 
 See docs/superpowers/specs/2026-05-21-tracking-qc-sheets-design.md and
 docs/superpowers/plans/2026-05-22-tracking-qc-sheets-plan.md.
 
 Usage:
-    py scripts/pipelines/tracking/build_qc_sheets.py \
-        [--rebuild-cache] [--uids 334 1294 600] [--max-uids N]
+    # default UM cohort (unchanged behaviour)
+    py scripts/pipelines/tracking/build_qc_sheets.py [--rebuild-cache] [--uids 334 ...]
+
+    # alternative tracker (e.g. DeepUM rung3-ep0), flat output layout
+    py scripts/pipelines/tracking/build_qc_sheets.py --rebuild-cache \
+        --registry   <run>/unit_index.csv \
+        --prob-matrix <run>/prob_matrix.npy --prob-index <run>/unit_index.csv \
+        --isi-stats  FIGURES/tracking_qc/track_validation_stats_rung3ep0.csv \
+        --out-dir    FIGURES/tracking_qc/per_uid_sheets_rung3ep0 \
+        --verdicts-csv FIGURES/tracking_qc/verdicts_rung3ep0.csv \
+        --cache-path data/cache/tracking_qc_intermediates_rung3ep0.pkl
 """
 
 from __future__ import annotations
@@ -29,7 +45,7 @@ from visdetect.analysis.tracking_qc import (        # noqa: E402
     UIDIntermediate, SessionRecord,
     select_long_tracks, annotate_naive_to_expert,
     extract_session_records, load_channel_positions,
-    load_isi_scores, load_um_pair_scores,
+    load_isi_scores,
     depth_std_um, waveform_corr, fr_cv,
     isi_peak_agreement, baseline_psth_corr, baseline_isi_hist_corr,
     badge_isi, badge_depth, badge_waveform, badge_fr,
@@ -44,28 +60,36 @@ from visdetect.suite.loader import load_staging_manifest, load_filtered_manifest
 
 from qc_sheet_figures import write_uid_pdf                       # noqa: E402
 
-UM_ROOT       = Path("X:/public/projects/BeJG_20230130_VisDetect/wEPhys/"
-                     "BG_046/unit_match/output/all42")
-UNIT_INDEX    = UM_ROOT / "unit_index.csv"
-ISI_STATS     = REPO_ROOT / "FIGURES" / "tracking_qc" / "track_validation_stats.csv"
-RAW_WF_ROOT   = REPO_ROOT / "data" / "unit_match" / "input" / "BG_046"
-PKL_DIR       = REPO_ROOT / "data" / "pkls" / "BG_046"
+# Defaults reproduce the UnitMatch output/all42 cohort. All are overridable on
+# the CLI (see main()) so the same sheets can be built for any tracker.
+DEFAULT_UM_ROOT      = Path("X:/public/projects/BeJG_20230130_VisDetect/wEPhys/"
+                            "BG_046/unit_match/output/all42")
+DEFAULT_REGISTRY     = DEFAULT_UM_ROOT / "unit_index.csv"
+# Prob-matrix + its row-index. UM stores these under batch0/ (matrix named
+# output_prob_matrix.npy); a flat fine-tune run stores prob_matrix.npy +
+# unit_index.csv directly. Both are row-aligned with their own registry.
+DEFAULT_PROB_MATRIX  = DEFAULT_UM_ROOT / "batch0" / "output_prob_matrix.npy"
+DEFAULT_PROB_INDEX   = DEFAULT_UM_ROOT / "batch0" / "unit_index.csv"
+DEFAULT_ISI_STATS    = REPO_ROOT / "FIGURES" / "tracking_qc" / "track_validation_stats.csv"
+DEFAULT_RAW_WF_ROOT  = REPO_ROOT / "data" / "unit_match" / "input" / "BG_046"
+DEFAULT_PKL_DIR      = REPO_ROOT / "data" / "pkls" / "BG_046"
 
-OUT_DIR       = REPO_ROOT / "FIGURES" / "tracking_qc" / "per_uid_sheets"
-VERDICTS_CSV  = REPO_ROOT / "FIGURES" / "tracking_qc" / "verdicts.csv"
-CACHE_PATH    = REPO_ROOT / "data" / "cache" / "tracking_qc_intermediates.pkl"
+DEFAULT_OUT_DIR      = REPO_ROOT / "FIGURES" / "tracking_qc" / "per_uid_sheets"
+DEFAULT_VERDICTS_CSV = REPO_ROOT / "FIGURES" / "tracking_qc" / "verdicts.csv"
+DEFAULT_CACHE_PATH   = REPO_ROOT / "data" / "cache" / "tracking_qc_intermediates.pkl"
 
 
-def _session_pkl(session_name: str) -> Optional[Path]:
+def _session_pkl(session_name: str, pkl_dir: Path) -> Optional[Path]:
     for s in (session_name, session_name.zfill(8)):
-        p = PKL_DIR / f"BG_046_{s}.pkl"
+        p = pkl_dir / f"BG_046_{s}.pkl"
         if p.exists():
             return p
     return None
 
 
 def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
-                manifest: pd.DataFrame) -> Dict[int, UIDIntermediate]:
+                manifest: pd.DataFrame, raw_wf_root: Path, pkl_dir: Path,
+                ) -> Dict[int, UIDIntermediate]:
     """Outer loop by session.  Returns dict[uid -> UIDIntermediate]."""
 
     def _norm_session(name) -> str:
@@ -119,18 +143,18 @@ def build_cache(unit_index_df: pd.DataFrame, cohort: pd.DataFrame,
     )
 
     for sess in sess_set:
-        pkl = _session_pkl(sess)
+        pkl = _session_pkl(sess, pkl_dir)
         if pkl is None:
             print(f"  skip {sess}: no pkl", flush=True); continue
         t0 = time.time()
         S = load_session(str(pkl))
-        chan_pos = load_channel_positions(RAW_WF_ROOT, sess)
+        chan_pos = load_channel_positions(raw_wf_root, sess)
         uids_here = [u for u, ks in uid_to_ks.items() if sess in ks]
         ks_ids_here = [uid_to_ks[u][sess] for u in uids_here]
         records = extract_session_records(
             S, ks_ids_here, session_name=sess,
             stage=stage_by_session.get(_norm_session(sess), "Unknown"),
-            raw_wf_root=RAW_WF_ROOT, channel_positions=chan_pos,
+            raw_wf_root=raw_wf_root, channel_positions=chan_pos,
         )
         for u in uids_here:
             rec = records.get(int(uid_to_ks[u][sess]))
@@ -195,6 +219,43 @@ def compute_uid_metrics(uid: UIDIntermediate,
     return out
 
 
+def _pair_scores_from_paths(matrix_path, index_path,
+                            uid_to_sessions: Dict[int, List[str]],
+                            uid_to_ks: Dict[int, Dict[str, int]],
+                            ) -> Dict[int, np.ndarray]:
+    """Per-UID consecutive-session match probabilities from an explicit
+    prob-matrix + its row-index unit_index.csv.
+
+    Faithful re-implementation of tracking_qc.load_um_pair_scores but taking
+    explicit file paths instead of a UM root, so it also handles the flat
+    fine-tune output layout (prob_matrix.npy + unit_index.csv, no batch0/).
+    For the default UM paths it reads the same files load_um_pair_scores would
+    and returns identical arrays. Returns {uid: ndarray(n_sess-1,)}; all-empty
+    if either file is missing.
+    """
+    matrix_path, index_path = Path(matrix_path), Path(index_path)
+    if not matrix_path.exists() or not index_path.exists():
+        print(f"  pair-score matrix/index missing ({matrix_path.name}) — "
+              f"sheets will show no match-probability trace", flush=True)
+        return {uid: np.array([]) for uid in uid_to_sessions}
+    mat = np.load(matrix_path)
+    idx = pd.read_csv(index_path)
+    idx["session"] = idx["session"].astype(str)
+    lookup: Dict[Tuple[str, int], int] = {}
+    for i, row in idx.iterrows():
+        lookup[(str(row["session"]), int(row["ks_unit_id"]))] = i
+
+    out: Dict[int, np.ndarray] = {}
+    for uid, sess_list in uid_to_sessions.items():
+        ks_map = uid_to_ks.get(uid, {})
+        rows = [lookup.get((s, int(ks_map[s]))) if s in ks_map else None
+                for s in sess_list]
+        scores = [np.nan if (a is None or b is None) else float(mat[a, b])
+                  for a, b in zip(rows[:-1], rows[1:])]
+        out[uid] = np.array(scores, dtype=float)
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rebuild-cache", action="store_true")
@@ -208,9 +269,29 @@ def main() -> int:
              "in each UID's page 2 (cross-event comparison mode). Default: "
              "per-event baseline from EVENT_RESPONSIVENESS_WINDOWS.",
     )
+    # ── Input/output paths (defaults reproduce the UM all42 cohort) ──────────
+    parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY,
+                        help="unit_index.csv (session, ks_unit_id, global_uid)")
+    parser.add_argument("--prob-matrix", type=Path, default=DEFAULT_PROB_MATRIX,
+                        help="Match-probability matrix; used for pair-score "
+                             "traces AND probe-drift estimation")
+    parser.add_argument("--prob-index", type=Path, default=DEFAULT_PROB_INDEX,
+                        help="unit_index.csv giving the row order of --prob-matrix")
+    parser.add_argument("--isi-stats", type=Path, default=DEFAULT_ISI_STATS,
+                        help="track_validation_stats.csv (span + median ISI corr)")
+    parser.add_argument("--raw-wf-root", type=Path, default=DEFAULT_RAW_WF_ROOT,
+                        help="UnitMatch raw-waveform input root (shared across trackers)")
+    parser.add_argument("--pkl-dir", type=Path, default=DEFAULT_PKL_DIR,
+                        help="Session pkl directory (shared across trackers)")
+    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR,
+                        help="Directory for uid_XXXX.pdf sheets")
+    parser.add_argument("--verdicts-csv", type=Path, default=DEFAULT_VERDICTS_CSV,
+                        help="Per-UID verdict CSV (trimmed CSV derived alongside)")
+    parser.add_argument("--cache-path", type=Path, default=DEFAULT_CACHE_PATH,
+                        help="Intermediate cache pkl (use a distinct path per tracker)")
     args = parser.parse_args()
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    args.out_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading manifest + cohort ...", flush=True)
     # Tracking-QC uses a looser filter than behavioral analyses: keeps engaged
@@ -229,19 +310,20 @@ def main() -> int:
         min_trials=150,
         min_dprime=None,
     )
-    unit_index_df = pd.read_csv(UNIT_INDEX)
-    cohort = select_long_tracks(UNIT_INDEX, ISI_STATS, min_span=10)
+    unit_index_df = pd.read_csv(args.registry)
+    cohort = select_long_tracks(args.registry, args.isi_stats, min_span=10)
     cohort = annotate_naive_to_expert(cohort, manifest)
     print(f"  cohort size: {len(cohort)}", flush=True)
 
-    if args.rebuild_cache or not CACHE_PATH.exists():
+    if args.rebuild_cache or not args.cache_path.exists():
         print("Building cache (this is slow — outer loop by session) ...", flush=True)
-        intermediates = build_cache(unit_index_df, cohort, manifest)
-        save_cache(intermediates, CACHE_PATH)
-        print(f"  saved cache to {CACHE_PATH}", flush=True)
+        intermediates = build_cache(unit_index_df, cohort, manifest,
+                                    args.raw_wf_root, args.pkl_dir)
+        save_cache(intermediates, args.cache_path)
+        print(f"  saved cache to {args.cache_path}", flush=True)
     else:
-        print(f"Loading cached intermediates from {CACHE_PATH}", flush=True)
-        intermediates = load_cache(CACHE_PATH)
+        print(f"Loading cached intermediates from {args.cache_path}", flush=True)
+        intermediates = load_cache(args.cache_path)
 
     uid_to_sessions = {u: [r.session_name for r in iv.sessions]
                        for u, iv in intermediates.items()}
@@ -249,25 +331,27 @@ def main() -> int:
     for _, row in unit_index_df.iterrows():
         uid = int(row["global_uid"])
         uid_to_ks.setdefault(uid, {})[str(row["session"])] = int(row["ks_unit_id"])
-    pair_scores = load_um_pair_scores(UM_ROOT, uid_to_sessions, uid_to_ks)
+    pair_scores = _pair_scores_from_paths(args.prob_matrix, args.prob_index,
+                                          uid_to_sessions, uid_to_ks)
 
-    isi_scores = load_isi_scores(ISI_STATS)
+    isi_scores = load_isi_scores(args.isi_stats)
 
-    # Estimate per-session probe drift from high-confidence UM matches.
-    # output_prob_matrix.npy lives under batch0/ and is row-aligned with the
-    # top-level unit_index.csv (same row order, same length — verified).
+    # Estimate per-session probe drift from high-confidence matches.
+    # --prob-matrix must be row-aligned with --registry (same run): true for the
+    # UM batch0/output_prob_matrix.npy + all42/unit_index.csv pair (verified) and
+    # for a flat fine-tune run's prob_matrix.npy + its own unit_index.csv.
     #
-    # NOTE: we walk ALL UM sessions (not just the 26 QC-filtered manifest
-    # sessions). The manifest skips QC-failing sessions, which can leave
-    # multi-week gaps between consecutive pairs — too long for reliable
-    # high-prob anchors. Using all 42 UM sessions gives a dense chain that
-    # is then sampled by SessionRecord.session_name at lookup time.
-    prob_matrix_path = UM_ROOT / "batch0" / "output_prob_matrix.npy"
+    # NOTE: we walk ALL sessions in the registry (not just the QC-filtered
+    # manifest sessions). The manifest skips QC-failing sessions, which can leave
+    # multi-week gaps between consecutive pairs — too long for reliable high-prob
+    # anchors. Using all registry sessions gives a dense chain that is then
+    # sampled by SessionRecord.session_name at lookup time.
+    prob_matrix_path = args.prob_matrix
     if prob_matrix_path.exists():
         prob_matrix = np.load(prob_matrix_path)
-        # Chronological order over all UM sessions. UM stores names in
-        # DDMMYYYY (sometimes D-MMYYYY with leading zero stripped); pad to 8
-        # chars then sort by (year, month, day) for a true date order.
+        # Chronological order over all sessions. Names are DDMMYYYY (sometimes
+        # D-MMYYYY with leading zero stripped); pad to 8 chars then sort by
+        # (year, month, day) for a true date order.
         def _date_key(s: str) -> Tuple[int, int, int]:
             p = str(s).zfill(8)
             return (int(p[4:8]), int(p[2:4]), int(p[0:2]))
@@ -276,9 +360,9 @@ def main() -> int:
             key=_date_key,
         )
         print(f"Estimating cross-session probe drift across {len(um_sessions_all)} "
-              f"UM sessions ...", flush=True)
+              f"sessions ...", flush=True)
         drift_offsets = estimate_session_drift(
-            unit_index_df, prob_matrix, RAW_WF_ROOT, um_sessions_all,
+            unit_index_df, prob_matrix, args.raw_wf_root, um_sessions_all,
         )
         n_finite = sum(1 for v in drift_offsets.values() if np.isfinite(v))
         # drift_offsets has 2 keys per session (raw + zfill(8)); count uniques.
@@ -291,7 +375,8 @@ def main() -> int:
               f"sessions", flush=True)
     else:
         drift_offsets = {}
-        print("UM prob matrix missing — drift correction disabled", flush=True)
+        print(f"prob matrix missing ({prob_matrix_path}) — drift correction "
+              f"disabled", flush=True)
 
     rows = []
     uids_to_render = sorted(intermediates)
@@ -356,7 +441,7 @@ def main() -> int:
         metrics = compute_uid_metrics(iv, drift_offsets=drift_offsets)
         isi = isi_scores[uid]
         trim = uid_trim_info[uid]
-        out_path = OUT_DIR / f"uid_{uid:04d}.pdf"
+        out_path = args.out_dir / f"uid_{uid:04d}.pdf"
         # PDF stays at 4-badge layout (visual unchanged); write_uid_pdf returns
         # the 4-badge composite verdict it renders in the header.  Trim info
         # (dropped sessions, kept-count, trimmed verdict) is forwarded so the
@@ -419,8 +504,8 @@ def main() -> int:
         })
         print(f"  uid {uid}: csv={verdict_csv} pdf={verdict_pdf}", flush=True)
 
-    pd.DataFrame(rows).to_csv(VERDICTS_CSV, index=False)
-    print(f"Wrote {VERDICTS_CSV}", flush=True)
+    pd.DataFrame(rows).to_csv(args.verdicts_csv, index=False)
+    print(f"Wrote {args.verdicts_csv}", flush=True)
 
     # Per-UID stable-subset (Tier-2 rescue) analysis — reuses the precomputed
     # trim info to avoid recomputing find_stable_subset or trimmed metrics.
@@ -473,7 +558,8 @@ def main() -> int:
             "rescued": rescued,
         })
 
-    trimmed_csv = REPO_ROOT / "FIGURES" / "tracking_qc" / "verdicts_trimmed.csv"
+    trimmed_csv = args.verdicts_csv.with_name(
+        args.verdicts_csv.stem + "_trimmed.csv")
     pd.DataFrame(trimmed_rows).to_csv(trimmed_csv, index=False)
     print(f"Wrote {trimmed_csv}  ({sum(1 for r in trimmed_rows if r['rescued'])} rescued)", flush=True)
     return 0
