@@ -44,6 +44,11 @@ def main():
     resolved = resolve_collisions(long_df, kept)
     print(f"after collision resolution: {len(resolved)} rows")
 
+    if resolved.empty:
+        raise ValueError(
+            "resolved registry is empty (all rows ambiguous/dropped) — check the "
+            "collision policy / kept-sessions inputs before the expensive GLT step")
+
     wide = long_to_cellregistry(resolved)
     WIDE_OUT.parent.mkdir(parents=True, exist_ok=True)
     wide.to_csv(WIDE_OUT)
@@ -54,6 +59,12 @@ def main():
            "--registry", str(WIDE_OUT), "--output", str(GLT_OUT), "--workers", str(args.workers)]
     print("running:", " ".join(cmd))
     subprocess.run(cmd, check=True)
+
+    # build_longitudinal_table.py can exit 0 even if it fails to find/write a
+    # registry; guard so we don't rebuild the unit table on a stale/absent GLT.
+    if not GLT_OUT.exists() or GLT_OUT.stat().st_size == 0:
+        raise RuntimeError(
+            f"GLT not produced at {GLT_OUT} after build_longitudinal_table.py")
 
     # Rebuild + validate the unit table.
     from visdetect.suite.loader import build_unit_table
