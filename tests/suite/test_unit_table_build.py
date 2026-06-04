@@ -99,6 +99,19 @@ def test_build_unit_table_real_data_contract():
     assert df["Global_UID"].notna().any()
 
 
+def test_default_verdicts_path_is_repo_figures_not_analysis_suite():
+    """Regression: build_unit_table's default verdicts path must be repo-root
+    FIGURES/tracking_qc (where the QC-sheets pipeline writes verdicts), NOT
+    analysis_suite/figures (FIGURE_DIR). The latter silently yields all-unknown
+    track_verdict on real data."""
+    import os as _os
+    from visdetect.suite import loader as L
+    from visdetect.suite.config import ROOT
+    assert L.DEFAULT_VERDICTS_PATH == _os.path.join(
+        ROOT, "FIGURES", "tracking_qc", "verdicts_trimmed.csv")
+    assert "analysis_suite" not in L.DEFAULT_VERDICTS_PATH
+
+
 def test_build_unit_table_fills_track_verdict(tmp_path, monkeypatch):
     from visdetect.suite import loader as L
 
