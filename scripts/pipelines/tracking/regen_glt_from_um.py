@@ -14,8 +14,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-import pandas as pd  # noqa: E402
-
 from visdetect.analysis.tracking_registry import (  # noqa: E402
     load_canonical_long, find_cluster_collisions, resolve_collisions, long_to_cellregistry,
 )

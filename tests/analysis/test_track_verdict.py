@@ -63,3 +63,11 @@ def test_empty_kept_sessions_is_suspect(tmp_path):
     kept, verds = load_kept_map(csv), load_trimmed_verdicts(csv)
     assert kept[500] == set()            # NaN/empty parsed to empty set
     assert resolve_row_verdict(500, 1072025, kept, verds) == "suspect"
+
+
+def test_nan_global_uid_is_unknown(tmp_path):
+    import numpy as np
+    csv = _write_trimmed(tmp_path)
+    kept, verds = load_kept_map(csv), load_trimmed_verdicts(csv)
+    assert resolve_row_verdict(np.nan, 2092025, kept, verds) == "unknown"
+    assert resolve_row_verdict(float("nan"), 1072025, kept, verds) == "unknown"

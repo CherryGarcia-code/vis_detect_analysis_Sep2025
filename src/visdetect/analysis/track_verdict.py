@@ -51,6 +51,8 @@ def resolve_row_verdict(
     trimmed_verdict_map: Dict[int, str],
 ) -> str:
     """Return track_verdict for one (global_uid, session) row."""
+    if pd.isna(global_uid):
+        return "unknown"
     uid = int(global_uid)
     if uid not in trimmed_verdict_map:
         return "unknown"
