@@ -447,6 +447,8 @@ def build_unit_table(qc_only: bool = True, validate: bool = True,
         )
         kept_map = load_kept_map(vpath)
         verd_map = load_trimmed_verdicts(vpath)
+        # Session_Date is a GLT key (never NaN); it is cast to int just below /
+        # enforced by validate_unit_table, so resolve_row_verdict's int parse is safe.
         glt["track_verdict"] = [
             resolve_row_verdict(u, s, kept_map, verd_map)
             for u, s in zip(glt["Global_UID"], glt["Session_Date"])
