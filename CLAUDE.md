@@ -248,6 +248,7 @@ See `docs/NORMALIZATION.md` for the full audit and fix history.
 5. **Are existing utility functions used?** Search the codebase before writing new code.
 6. **Are color palettes consistent?** Use `STAGE_COLORS`, `HMM_STATE_COLORS`, `OUTCOME_COLORS`, `CELLTYPE_COLORS` from config.
 7. **Is normalization correct?** Shared baseline, normalize-then-average, division-by-zero guards.
+8. **Is the analysis grounded in the literature?** At design time, consult the relevant synthesis indexed under `## Literature` in MEMORY.md (e.g. DDM / behavior fits → `synthesis-phase3-theory`; D1/D2/FSI cell-typing → `synthesis-phase3-celltypes`; HMM states / movement confounds → `synthesis-phase3-behavioral-state`; decoding & population codes → `synthesis-batch06-brainwide-population` + `synthesis-phase3-theory`) and base methodological/interpretive choices on it. Record the rationale in the script docstring or plan so it persists in the repo.
 
 ---
 
@@ -381,6 +382,7 @@ if __name__ == "__main__":
 - [ ] Cleans up sessions with `del sess; gc.collect()`
 - [ ] Color palette matches project conventions
 - [ ] No duplicate implementation of existing utility functions
+- [ ] Methodological/interpretive choices grounded in the relevant `## Literature` synthesis (MEMORY.md), with the rationale noted in the docstring
 
 ---
 
