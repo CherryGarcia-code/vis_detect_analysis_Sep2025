@@ -97,3 +97,47 @@ def test_build_unit_table_real_data_contract():
     assert len(df) > 0
     # Global_UID must be present and at least partially populated (tracking output).
     assert df["Global_UID"].notna().any()
+
+
+def test_default_verdicts_path_is_repo_figures_not_analysis_suite():
+    """Regression: build_unit_table's default verdicts path must be repo-root
+    FIGURES/tracking_qc (where the QC-sheets pipeline writes verdicts), NOT
+    analysis_suite/figures (FIGURE_DIR). The latter silently yields all-unknown
+    track_verdict on real data."""
+    import os as _os
+    from visdetect.suite import loader as L
+    from visdetect.suite.config import ROOT
+    assert L.DEFAULT_VERDICTS_PATH == _os.path.join(
+        ROOT, "FIGURES", "tracking_qc", "verdicts_trimmed.csv")
+    assert "analysis_suite" not in L.DEFAULT_VERDICTS_PATH
+
+
+def test_build_unit_table_fills_track_verdict(tmp_path, monkeypatch):
+    from visdetect.suite import loader as L
+
+    glt = pd.DataFrame({
+        "Session_Date": [2092025, 1072025, 1072025],
+        "Cluster_ID": [3, 4, 5],
+        "Global_UID": [177, 177, 9999],
+        "stage": ["Expert", "Learning", "Learning"],
+        "session_idx": [20, 0, 0],
+    })
+    trimmed = tmp_path / "verdicts_trimmed.csv"
+    pd.DataFrame({
+        "global_uid": [177],
+        "kept_sessions": ["2092025"],
+        "trimmed_verdict": ["trusted"],
+    }).to_csv(trimmed, index=False)
+
+    monkeypatch.setattr(L, "load_glt", lambda qc_only=True: glt.copy())
+    monkeypatch.setattr(L, "load_all_lick_responsiveness", lambda: pd.DataFrame())
+    monkeypatch.setattr(L, "load_waveform_labels",
+                        lambda path=None: (_ for _ in ()).throw(FileNotFoundError("none")))
+    monkeypatch.setattr(L, "load_tf_responsiveness_detrended", lambda: pd.DataFrame())
+    monkeypatch.setattr(L, "load_tf_classification_detrended", lambda: pd.DataFrame())
+
+    df = L.build_unit_table(qc_only=True, verdicts_path=str(trimmed))
+    by_key = df.set_index(["Session_Date", "Cluster_ID"])["track_verdict"]
+    assert by_key[(2092025, 3)] == "trusted"     # 177 kept this session
+    assert by_key[(1072025, 4)] == "suspect"     # 177, session dropped from subset
+    assert by_key[(1072025, 5)] == "unknown"     # 9999 not in trimmed cohort

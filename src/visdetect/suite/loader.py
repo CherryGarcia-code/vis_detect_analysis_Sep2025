@@ -27,6 +27,7 @@ from .config import (
     HMM_TRAJECTORY_PATH,
     LICK_DIR,
     PKL_DIR,
+    ROOT,
     STAGING_MANIFEST_PATH,
     SUBJECT,
     VALID_STAGES,
@@ -45,6 +46,10 @@ from visdetect.analysis.config import (   # noqa: F401
 
 from visdetect.analysis.constants import DEFAULT_Z_THRESH_TF
 from visdetect.core.session import load_session as _load_session_raw
+
+# Canonical trimmed-verdict cohort location: repo-root FIGURES/tracking_qc
+# (where the QC-sheets pipeline writes it) — NOT analysis_suite/figures.
+DEFAULT_VERDICTS_PATH = os.path.join(ROOT, "FIGURES", "tracking_qc", "verdicts_trimmed.csv")
 
 
 # ── Session loading ───────────────────────────────────────────────────
@@ -339,7 +344,8 @@ def load_waveform_labels(path: Optional[str] = None) -> pd.DataFrame:
 
 # ── Convenience: merged unit table ───────────────────────────────────
 
-def build_unit_table(qc_only: bool = True, validate: bool = True) -> pd.DataFrame:
+def build_unit_table(qc_only: bool = True, validate: bool = True,
+                     verdicts_path: Optional[str] = None) -> pd.DataFrame:
     """Build a comprehensive per-unit table merging GLT, lick, and cell-type data.
 
     Columns include: Global_UID, Session_Date, Cluster_ID, stage, session_idx,
@@ -435,6 +441,21 @@ def build_unit_table(qc_only: bool = True, validate: bool = True) -> pd.DataFram
         glt["tf_class"] = glt["tier_detrended"].fillna("unclassified")
     else:
         glt["tf_class"] = "unclassified"
+
+    # ── Resolve track_verdict per (Global_UID, Session_Date) (M1) ──
+    vpath = verdicts_path or DEFAULT_VERDICTS_PATH
+    if "Global_UID" in glt.columns and os.path.exists(vpath):
+        from visdetect.analysis.track_verdict import (
+            load_kept_map, load_trimmed_verdicts, resolve_row_verdict,
+        )
+        kept_map = load_kept_map(vpath)
+        verd_map = load_trimmed_verdicts(vpath)
+        # Session_Date is a GLT key (never NaN); it is cast to int just below /
+        # enforced by validate_unit_table, so resolve_row_verdict's int parse is safe.
+        glt["track_verdict"] = [
+            resolve_row_verdict(u, s, kept_map, verd_map)
+            for u, s in zip(glt["Global_UID"], glt["Session_Date"])
+        ]
 
     # ── Add not-yet-produced contract columns with their defaults ──
     from .unit_table_schema import add_label_defaults, validate_unit_table

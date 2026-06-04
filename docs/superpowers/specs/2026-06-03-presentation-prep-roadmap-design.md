@@ -246,3 +246,33 @@ lands and the column contract is stable.
   does not block on that chat.
 - **Open items for the M1 plan:** confirm `X:/…/all42/unit_index.csv` is current/accessible; map the
   `unit_index` ↔ `CellRegistry` schema (which columns carry the global id + per-(session,cluster) map).
+
+> **M1 done (2026-06-04):** GLT regenerated from UM 3.2.9 (`all42/unit_index.csv`,
+> 6679 unit-session rows, 3776 UIDs × 42 sessions) via
+> `scripts/pipelines/tracking/regen_glt_from_um.py`
+> (`tracking_registry.load_canonical_long` → `resolve_collisions` →
+> `long_to_cellregistry` → `build_longitudinal_table.py` → `build_unit_table`).
+> `Global_UID` and `track_verdict` now share the UM 3.2.9 ID space. `track_verdict`
+> rule = trimmed verdict iff the row's session ∈ the UID's kept-sessions, else
+> `suspect`, else (UID not in the trimmed cohort) `unknown`; sessions compared as
+> int to bridge 7/8-digit DDMMYYYY. Cluster collisions (one cluster → >1 UID) in
+> the canonical registry: **0** (clean at the (session, ks_unit_id) level), so
+> `resolve_collisions` was a pass-through; the P0 dedupe guard was not tripped.
+> P0's `test_build_unit_table_real_data_contract` now **PASSES** (was skipped);
+> unit table = 4237 rows (qc_only), 0 duplicate (Session_Date, Cluster_ID) keys.
+> **track_verdict counts:** trusted 233, review 19, suspect 617, unknown 3368.
+>
+> Two bugs found & worked around:
+> 1. **GLT-producer zfill bug:** `build_grand_table` only accepts a session column
+>    if `c.isdigit() and len(c) == 8`, silently dropping 7-digit single-digit-day
+>    dates (e.g. `1072025`). The adapter (`load_canonical_long`) zero-pads sessions
+>    to 8-digit DDMMYYYY so every session column survives.
+> 2. **Default verdicts-path bug (fixed in `build_unit_table`):** the default path
+>    used `FIGURE_DIR` (= `analysis_suite/figures`) instead of repo-root `FIGURES`,
+>    so the verdicts file was never found and every row defaulted to `unknown`.
+>    Fixed to `ROOT/FIGURES/tracking_qc/verdicts_trimmed.csv` (the canonical
+>    QC-sheets output location), with a regression test pinning the default.
+>
+> **Late-bound swap:** to evaluate fine-tuned DeepUM instead, emit a canonical long
+> registry (`session, ks_unit_id, global_uid`) from its output and pass it via
+> `regen_glt_from_um.py --registry-long`; everything downstream is unchanged.
