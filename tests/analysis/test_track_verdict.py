@@ -1,6 +1,5 @@
 """Tests for row-level track_verdict resolution (M1)."""
 import pandas as pd
-import pytest
 
 from visdetect.analysis.track_verdict import (
     load_kept_map, load_trimmed_verdicts, resolve_row_verdict,
@@ -51,3 +50,16 @@ def test_output_in_contract_vocabulary(tmp_path):
     allowed = ALLOWED_VALUES["track_verdict"]
     for uid, sess in [(177, 2092025), (177, 1072025), (262, 25072025), (1, 1072025)]:
         assert resolve_row_verdict(uid, sess, kept, verds) in allowed
+
+
+def test_empty_kept_sessions_is_suspect(tmp_path):
+    """A UID in the trimmed cohort but with no kept sessions → 'suspect'."""
+    csv = tmp_path / "verdicts_trimmed_empty.csv"
+    pd.DataFrame({
+        "global_uid": [500],
+        "kept_sessions": [""],          # empty -> no kept sessions
+        "trimmed_verdict": ["review"],
+    }).to_csv(csv, index=False)
+    kept, verds = load_kept_map(csv), load_trimmed_verdicts(csv)
+    assert kept[500] == set()            # NaN/empty parsed to empty set
+    assert resolve_row_verdict(500, 1072025, kept, verds) == "suspect"

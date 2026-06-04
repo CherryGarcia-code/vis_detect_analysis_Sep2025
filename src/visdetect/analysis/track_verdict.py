@@ -13,7 +13,10 @@ import pandas as pd
 
 
 def _to_int_session(s) -> int:
-    return int(str(s).strip())
+    """Convert session label to int.  Handles int, str, np.int64, and
+    float-string forms (e.g. "2092025.0") that arise when a CSV column is
+    inferred as float64 by pandas."""
+    return int(float(str(s).strip()))
 
 
 def load_kept_map(trimmed_path) -> Dict[int, Set[int]]:
