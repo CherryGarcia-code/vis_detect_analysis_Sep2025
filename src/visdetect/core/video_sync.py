@@ -45,6 +45,7 @@ plot_sync_diagnostic      4-panel diagnostic figure
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import os
@@ -526,6 +527,7 @@ class SyncResult:
     residuals_ms: Optional[np.ndarray] = field(default=None, repr=False)
     matched_cam_ms: Optional[np.ndarray] = field(default=None, repr=False)
     matched_nidaq_s: Optional[np.ndarray] = field(default=None, repr=False)
+    per_trial_overrides: Optional[Dict[int, int]] = field(default=None, repr=False)
 
     @property
     def coverage(self) -> float:
@@ -534,6 +536,12 @@ class SyncResult:
     @property
     def quality(self) -> str:
         """Composite quality tier: good / review / failed."""
+        # Manual 2-anchor fits don't have the regression-style metrics
+        # the rest of this logic checks. A manual fit is "good" iff the
+        # slope is physically sensible and there are >=2 anchors.
+        if self.detection_method == "manual_slope_fit":
+            return "good" if (self.slope > 0 and self.n_anchors >= 2) else "failed"
+
         good_rmse = self.rmse_ms < _GOOD_RMSE_MS
         good_maxres = self.max_residual_ms < VIDEO_SYNC_MAX_RESIDUAL_MS
         good_dw = _GOOD_DW_RANGE[0] <= self.durbin_watson <= _GOOD_DW_RANGE[1]
@@ -563,7 +571,7 @@ class SyncResult:
             return "failed"
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "slope": self.slope,
             "offset": self.offset,
             "n_anchors": self.n_anchors,
@@ -580,6 +588,88 @@ class SyncResult:
             "n_dropped": self.n_dropped,
             "detection_method": self.detection_method,
         }
+        if self.per_trial_overrides is not None:
+            d["per_trial_overrides"] = self.per_trial_overrides
+        return d
+
+
+def fit_2anchor_clock(
+    anchors: List[dict],
+    fps: float,
+    n_baseline_on: int,
+) -> "SyncResult":
+    """Fit a linear clock model from 2+ v2 anchor entries.
+
+    Model: ``video_time_s = slope * nidaq_baseline_on_s + offset``.
+
+    For exactly 2 anchors: closed-form linear fit (rmse_ms = 0, max_residual_ms = 0).
+    For >=3 anchors: least-squares fit; rmse_ms and max_residual_ms from residuals.
+
+    Parameters
+    ----------
+    anchors : list of dict
+        Each dict must have ``nidaq_baseline_on_s`` and ``video_time_s`` keys.
+        The fit uses ``video_time_s`` directly; ``fps`` is currently unused and
+        reserved for forward compatibility.
+    fps : float
+        Camera frame rate (reserved; not used in the fit calculation).
+    n_baseline_on : int
+        Total number of Baseline_ON events in the session (for coverage reporting).
+
+    Returns a SyncResult with detection_method = "manual_slope_fit".
+    Raises ValueError on fewer than 2 anchors, duplicate nidaq times, or
+    non-positive slope.
+    """
+    if len(anchors) < 2:
+        raise ValueError(
+            f"fit_2anchor_clock needs at least 2 anchors; got {len(anchors)}"
+        )
+
+    x = np.array(
+        [float(a["nidaq_baseline_on_s"]) for a in anchors], dtype=np.float64
+    )
+    y = np.array(
+        [float(a["video_time_s"]) for a in anchors], dtype=np.float64
+    )
+
+    if len(anchors) == 2 and x[0] == x[1]:
+        raise ValueError(
+            f"Both anchors have the same nidaq baseline_on time ({x[0]:.6f}s); "
+            f"cannot fit a slope. Check for duplicate/erroneous anchor entries."
+        )
+
+    if len(anchors) == 2:
+        slope = float((y[1] - y[0]) / (x[1] - x[0]))
+        offset = float(y[0] - slope * x[0])
+        rmse_ms = 0.0
+        max_residual_ms = 0.0
+    else:
+        A = np.vstack([x, np.ones_like(x)]).T
+        soln, _, _, _ = np.linalg.lstsq(A, y, rcond=None)
+        slope = float(soln[0])
+        offset = float(soln[1])
+        residuals_s = y - (slope * x + offset)
+        rmse_ms = float(np.sqrt(np.mean(residuals_s ** 2)) * 1000.0)
+        max_residual_ms = float(np.max(np.abs(residuals_s)) * 1000.0)
+
+    if slope <= 0:
+        raise ValueError(
+            f"Computed slope {slope} is non-positive; anchors are likely "
+            f"out of order or one is wrong. Re-verify via --scrub."
+        )
+
+    return SyncResult(
+        slope=slope,
+        offset=offset,
+        n_anchors=int(len(anchors)),
+        n_baseline_on=int(n_baseline_on),
+        rmse_ms=rmse_ms,
+        max_residual_ms=max_residual_ms,
+        cv_rmse_ms=0.0,
+        slope_ppm=float((slope - 1.0) * 1e6),
+        durbin_watson=2.0,  # N/A for this fit type; report the neutral value
+        detection_method="manual_slope_fit",
+    )
 
 
 # =====================================================================
@@ -2577,3 +2667,161 @@ def sync_session(
     )
 
     return load_video_sync(session_name, sync_dir=_sync_dir)
+
+
+# =====================================================================
+# Anchor JSON helpers (Phase 2: list-of-anchors schema, v1 read compat)
+# =====================================================================
+
+
+def _anchor_path(session_name: str, sync_dir: Optional[str] = None) -> str:
+    """Path to the anchor JSON for *session_name*."""
+    out_dir = sync_dir or VIDEO_SYNC_DIR
+    session_name = str(int(session_name)).zfill(8)
+    return os.path.join(out_dir, f"{session_name}_anchor.json")
+
+
+def _migrate_anchor_v1_to_v2(d: dict) -> dict:
+    """Convert a Phase 1 (single-anchor) JSON dict to the Phase 2 (list) shape.
+
+    Idempotent: passing a v2 dict returns it unchanged.
+    """
+    if d.get("schema_version") == 2 or "anchors" in d:
+        return d
+    entry = {
+        "trial_index": int(d["anchor_trial_index"]),
+        "nidaq_baseline_on_s": float(d["nidaq_baseline_on_s"]),
+        "video_frame_idx": int(d["video_frame_idx"]),
+        "video_time_s": float(d["video_time_s"]),
+        "clicked_at": str(d["clicked_at"]),
+    }
+    return {
+        "session": str(d["session"]),
+        "schema_version": 2,
+        "frame_rate_fps": float(d["frame_rate_fps"]),
+        "n_trials": int(d["n_trials"]),
+        "anchors": [entry],
+    }
+
+
+def compute_implied_offset(anchor: dict) -> float:
+    """Return ``video_time_s - nidaq_baseline_on_s`` for a single anchor entry.
+
+    Used by HUDs and reports that want to display "the camera started this
+    many seconds after NI-DAQ" in a human-readable form.
+    """
+    return float(anchor["video_time_s"]) - float(anchor["nidaq_baseline_on_s"])
+
+
+def _build_anchor_entry(
+    baseline_on: np.ndarray,
+    ts_ms: np.ndarray,
+    trial_index: int,
+    frame_idx: int,
+) -> dict:
+    """Build a single v2 anchor entry from a clicked frame index."""
+    fi = int(frame_idx)
+    return {
+        "trial_index": int(trial_index),
+        "nidaq_baseline_on_s": float(baseline_on[int(trial_index)]),
+        "video_frame_idx": fi,
+        "video_time_s": float(ts_ms[fi] / 1000.0),
+        "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def _build_v2_anchor_file(
+    session_name: str,
+    fps: float,
+    n_trials: int,
+    anchor_entries: list,
+) -> dict:
+    """Construct the top-level v2 anchor JSON dict."""
+    return {
+        "session": str(session_name),
+        "schema_version": 2,
+        "frame_rate_fps": float(fps),
+        "n_trials": int(n_trials),
+        "anchors": list(anchor_entries),
+    }
+
+
+def _merge_anchor_into_file(base: dict, new_entry: dict) -> dict:
+    """Return a copy of *base* with *new_entry* merged into its anchors list.
+
+    Replaces any existing anchor with the same ``trial_index``. The result is
+    sorted by ``trial_index``.
+    """
+    new_idx = int(new_entry["trial_index"])
+    kept = [a for a in base["anchors"] if int(a["trial_index"]) != new_idx]
+    kept.append(new_entry)
+    kept.sort(key=lambda a: int(a["trial_index"]))
+    out = dict(base)
+    out["anchors"] = kept
+    return out
+
+
+def save_anchor(
+    session_name: str,
+    anchor: dict,
+    sync_dir: Optional[str] = None,
+) -> None:
+    """Write *anchor* (v2 schema) to ``{sync_dir}/{session_name}_anchor.json``.
+
+    Callers must pass a v2 dict; building one is the responsibility of
+    :func:`_build_v2_anchor_file` (top-level) plus :func:`_build_anchor_entry`
+    (per-anchor) plus :func:`_merge_anchor_into_file` (composition).
+    Overwrites any existing file. Creates the directory if needed.
+    """
+    out_dir = sync_dir or VIDEO_SYNC_DIR
+    os.makedirs(out_dir, exist_ok=True)
+    with open(_anchor_path(session_name, sync_dir=sync_dir), "w") as f:
+        json.dump(anchor, f, indent=2)
+
+
+def load_anchor(
+    session_name: str,
+    sync_dir: Optional[str] = None,
+) -> Optional[dict]:
+    """Read the anchor JSON for *session_name* and return it in v2 form.
+
+    Legacy v1 JSONs are migrated in memory (the on-disk file is NOT rewritten
+    by this read; it gets rewritten next time :func:`save_anchor` is called).
+    Returns ``None`` if no file exists.
+    """
+    path = _anchor_path(session_name, sync_dir=sync_dir)
+    if not os.path.exists(path):
+        return None
+    with open(path, "r") as f:
+        raw = json.load(f)
+    return _migrate_anchor_v1_to_v2(raw)
+
+
+def compute_predicted_frame_idx(
+    baseline_on_s: float,
+    coarse_offset_s: float,
+    ts_ms: np.ndarray,
+) -> int:
+    """Map a NI-DAQ Baseline_ON time to the nearest video frame index.
+
+    Parameters
+    ----------
+    baseline_on_s
+        NI-DAQ time of the event, in seconds.
+    coarse_offset_s
+        Seconds elapsed in NI-DAQ clock before video recording started.
+    ts_ms
+        Camera-frame timestamps in milliseconds, relative to video start.
+        Typically returned by :func:`load_camera_metadata`.
+
+    Returns
+    -------
+    int
+        Index of the closest frame in ``ts_ms``. Clamped to ``[0, len(ts_ms) - 1]``.
+    """
+    video_ms = (baseline_on_s - coarse_offset_s) * 1000.0
+    if video_ms <= ts_ms[0]:
+        return 0
+    if video_ms >= ts_ms[-1]:
+        return int(len(ts_ms) - 1)
+    return int(np.argmin(np.abs(ts_ms - video_ms)))
