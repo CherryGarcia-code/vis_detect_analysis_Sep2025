@@ -38,6 +38,17 @@ archive/
 
 # Raw data and matlab session files
 data/
+# ...but DO track the small video-sync result sidecars (anchor + sync JSONs).
+# Nested negation: re-include each parent dir, re-ignore its other contents,
+# then re-include only the JSON sidecars (montage PNGs etc. stay ignored).
+!data/
+data/*
+!data/cache/
+data/cache/*
+!data/cache/video_sync/
+data/cache/video_sync/*
+!data/cache/video_sync/*_anchor.json
+!data/cache/video_sync/*_video_sync.json
 
 # Notebook outputs, generated images, and tables
 FIGURES/
