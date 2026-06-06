@@ -1,13 +1,13 @@
-"""Ensure tests in this worktree load source from the worktree itself.
+"""Ensure pytest imports `visdetect` from this repo's ``src/`` directory.
 
-The shared .venv uses an editable install that resolves visdetect to
-E:/python_analysis/git_repos/vis_detect_analysis_Sep2025/src/. Prepending
-this worktree's src/ directory to sys.path overrides that so all tests
-here run against the code being developed in this branch.
+Prepends the repo's ``src/`` to ``sys.path`` so tests run against the code in
+this checkout rather than any editable install elsewhere on the machine.
 """
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 
-_WORKTREE_SRC = str(Path(__file__).parent / "src")
-if _WORKTREE_SRC not in sys.path:
-    sys.path.insert(0, _WORKTREE_SRC)
+_SRC = Path(__file__).parent / "src"
+if _SRC.exists() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))

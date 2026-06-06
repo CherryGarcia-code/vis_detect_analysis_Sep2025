@@ -98,6 +98,22 @@ def prepare_session_data(
 ) -> Dict[str, Any]:
     """Extract binary choice vector *y* and covariate matrix *X* from a Session.
 
+    Choice encoding (commitment, see specs/2026-05-27-hmm-glm-audit-design.md §1.1):
+    ----------------------------------------------------------------------------
+    ``y = is_hit | is_fa`` — the mouse "licked" if it produced ANY lick on the
+    trial, whether a response-window lick after a real change (``is_hit``) or
+    an early/impulsive lick before the change was presented (``is_fa``).
+
+    This encoding is a scientific commitment, not a hyperparameter. The project's
+    a priori three-state hypothesis (Impulsive / Stimulus-sensitive / Disengaged)
+    requires the Impulsive state to be identifiable as a distinct cognitive
+    regime — one in which the mouse licks regardless of stimulus. Treating fa
+    as a no-lick observation would fold impulsive licking into the Disengaged
+    state and collapse the K=3 structure to K=2.
+
+    The alternative — ``y = is_hit`` only — is documented and rejected in F4 of
+    the audit spec.
+
     Parameters
     ----------
     session : Session
@@ -108,9 +124,11 @@ def prepare_session_data(
     Returns
     -------
     dict with keys:
-        y               : ndarray (T,)  binary choice (1=licked, 0=no-lick)
-        X               : ndarray (T, D) design matrix [bias, stim, prev_choice, prev_reward]
-        df              : DataFrame      trial-level metadata for the *included* trials
+        y               : ndarray (T,)  binary choice (1 = lick, 0 = no-lick)
+        X               : ndarray (T, D) design matrix
+                          [bias, log2(change_size), prev_choice, prev_reward,
+                          prev_early_lick]
+        df              : DataFrame      trial-level metadata (filtered)
         session_name    : str
         feature_names   : list[str]
     """
@@ -715,6 +733,39 @@ def _fit_single_K(task: KFitTask) -> Tuple[int, Optional["GLMHMM"], float, int]:
     return K, best_model_K, best_ll_K, n_failures
 
 
+def _baseline_bernoulli_ll(y_all: np.ndarray) -> float:
+    """Log-likelihood of a constant-rate Bernoulli null model.
+
+    Used as the baseline against which bits-per-trial is computed
+    (Ashwood Eq. 22). The null model predicts each y_t to be a Bernoulli
+    draw with probability equal to the empirical mean of y.
+    """
+    if y_all.size == 0:
+        return 0.0
+    p = float(np.clip(y_all.mean(), _EPS, 1 - _EPS))
+    return float((y_all * np.log(p) + (1 - y_all) * np.log(1 - p)).sum())
+
+
+def ll_to_bits_per_trial(
+    ll: float,
+    sessions_data: List[Dict[str, Any]],
+) -> float:
+    """Convert raw log-likelihood to bits-per-trial vs Bernoulli null.
+
+    bits_per_trial = (LL_model - LL_null) / (n_trials * log(2))
+
+    where LL_null is the log-likelihood of a single-probability Bernoulli
+    model. This matches Ashwood Methods Eq. 22 and makes log-likelihoods
+    comparable across animals with different trial counts.
+    """
+    y_all = np.concatenate([s["y"] for s in sessions_data if len(s["y"]) > 0])
+    n = len(y_all)
+    if n == 0:
+        return 0.0
+    ll_null = _baseline_bernoulli_ll(y_all)
+    return (ll - ll_null) / (n * np.log(2.0))
+
+
 def fit_best_model(
     sessions_data: List[Dict[str, Any]],
     K_range: Sequence[int] = (2, 3, 4, 5),
@@ -722,42 +773,43 @@ def fit_best_model(
     verbose: bool = True,
     n_workers: int = 1,
     seed: int = 0,
-) -> Tuple["GLMHMM", pd.DataFrame, Dict[int, "GLMHMM"]]:
-    """Fit GLM-HMMs for each K, selecting the best by BIC.
+    use_cross_validation: bool = True,
+    cv_n_restarts: int = 5,
+) -> Tuple["GLMHMM", pd.DataFrame, Dict[Any, "GLMHMM"]]:
+    """Fit GLM-HMMs for each K, selecting the best by CV LL (default) or BIC.
 
-    For each K, ``config.n_restarts`` random restarts are run and the
-    restart with the highest log-likelihood is kept. K values can be
-    fit in parallel using multiple workers.
+    Default: maximises mean leave-one-session-out CV LL in bits-per-trial
+    (Ashwood Methods Eq. 22). To revert to BIC selection (legacy), pass
+    ``use_cross_validation=False``.
 
     Parameters
     ----------
     sessions_data : list of session dicts.
     K_range : sequence of int
-        Candidate numbers of states to try.
-    config : GLMHMMConfig, optional
+    config : GLMHMMConfig, optional.
     verbose : bool
-    n_workers : int, default=1
-        Number of parallel workers. If > 1, K values are fit in parallel.
-    seed : int, default=0
-        Base random seed for reproducibility.
+    n_workers : int.  Parallel workers across K values for the training fit.
+    seed : int.
+    use_cross_validation : bool, default True.
+        True  → select K on maximum cv_ll_bits_per_trial via LOSO.
+        False → select K on minimum BIC (legacy path).
+    cv_n_restarts : int, default 5.
+        Random restarts within each LOSO fold (smaller than training to
+        keep CV affordable; LOSO already enforces stability).
 
     Returns
     -------
-    best_model : GLMHMM
-        Fitted model with the lowest BIC.
-    selection_df : DataFrame
-        Columns: K, best_ll, bic, aic, n_params.
-    all_models : dict[int, GLMHMM]
-        Mapping from K to the best fitted model at that K.
+    best_model, selection_df, all_models.
+    selection_df columns when use_cross_validation=True:
+        K, train_ll, bic, aic, n_params,
+        cv_ll_bits_per_trial, cv_ll_std
     """
     cfg = config or GLMHMMConfig()
     cfg_copy = GLMHMMConfig(**{k: getattr(cfg, k) for k in cfg.__dataclass_fields__})
-    # suppress per-restart verbosity for workers
     cfg_copy.verbose = False
 
     n_features = sessions_data[0]["X"].shape[1] if len(sessions_data) > 0 else len(FEATURE_NAMES)
 
-    # Build tasks for each K
     tasks = [
         KFitTask(
             K=K,
@@ -770,82 +822,221 @@ def fit_best_model(
         for K in K_range
     ]
 
-    records = []
-    all_models: Dict[int, GLMHMM] = {}
+    records: List[Dict[str, Any]] = []
+    all_models: Dict[Any, GLMHMM] = {}
 
+    # ---------------- Stage 1: training fits ----------------
+    fit_results: Dict[int, Tuple[Optional[GLMHMM], float, int]] = {}
     if n_workers > 1:
-        # Parallel execution
         if verbose:
-            print(f"\nFitting {len(K_range)} K values in parallel with {n_workers} workers...")
-            print(f"Each K: {cfg.n_restarts} random restarts\n")
-        
+            print(f"\nFitting {len(K_range)} K values in parallel with {n_workers} workers")
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             futures = [executor.submit(_fit_single_K, task) for task in tasks]
-            for future in tqdm(futures, desc="Fitting K values", disable=not verbose):
-                try:
-                    K, best_model_K, best_ll_K, n_failures = future.result()
-                    
-                    if best_model_K is not None:
-                        bic_val = best_model_K.bic(sessions_data)
-                        aic_val = best_model_K.aic(sessions_data)
-                        all_models[K] = best_model_K
-                        records.append({
-                            "K": K,
-                            "best_ll": best_ll_K,
-                            "bic": bic_val,
-                            "aic": aic_val,
-                            "n_params": best_model_K.n_params(),
-                        })
-                        if verbose:
-                            msg = f"K={K}  LL={best_ll_K:.2f}  BIC={bic_val:.2f}  AIC={aic_val:.2f}"
-                            if n_failures > 0:
-                                msg += f"  ({n_failures}/{cfg.n_restarts} restarts failed)"
-                            print(f"  {msg}")
-                    else:
-                        if verbose:
-                            print(f"  K={K}: All restarts failed.")
-                except Exception as exc:
-                    if verbose:
-                        print(f"  K={K}: FAILED - {exc}")
+            for future in tqdm(futures, desc="K-fits", disable=not verbose):
+                K, m, ll, nf = future.result()
+                fit_results[K] = (m, ll, nf)
     else:
-        # Sequential execution (original behavior)
         for task in tasks:
-            K = task.K
+            K, m, ll, nf = _fit_single_K(task)
+            fit_results[K] = (m, ll, nf)
             if verbose:
-                print(f"\n{'='*50}")
-                print(f"Fitting K={K} states  ({cfg.n_restarts} restarts)")
-                print(f"{'='*50}")
-            
-            K, best_model_K, best_ll_K, n_failures = _fit_single_K(task)
+                print(f"  K={K}  train LL={ll:.2f}")
 
-            if best_model_K is not None:
-                bic_val = best_model_K.bic(sessions_data)
-                aic_val = best_model_K.aic(sessions_data)
-                all_models[K] = best_model_K
-                records.append({
-                    "K": K,
-                    "best_ll": best_ll_K,
-                    "bic": bic_val,
-                    "aic": aic_val,
-                    "n_params": best_model_K.n_params(),
-                })
-                if verbose:
-                    msg = f">>> K={K}  best LL={best_ll_K:.2f}  BIC={bic_val:.2f}  AIC={aic_val:.2f}"
-                    if n_failures > 0:
-                        msg += f"  ({n_failures}/{cfg.n_restarts} restarts failed)"
-                    print(f"  {msg}")
+    # ---------------- Stage 2 (optional): cross-validation ----------------
+    cv_results: Dict[int, Tuple[float, float]] = {}
+    if use_cross_validation:
+        from visdetect.analysis.hmm_downstream import loso_cross_validation
+        for K in K_range:
+            if verbose:
+                print(f"\n  LOSO CV at K={K}  ({len(sessions_data)} folds, "
+                      f"{cv_n_restarts} restarts/fold)")
+            cv_cfg = GLMHMMConfig(**{
+                k: getattr(cfg_copy, k) for k in cfg_copy.__dataclass_fields__
+            })
+            cv_cfg.n_restarts = cv_n_restarts
+            cv_df = loso_cross_validation(
+                sessions_data, K=K, config=cv_cfg,
+                n_restarts=cv_n_restarts, seed=seed, verbose=False,
+            )
+            # Compute bits-per-trial relative to per-session null
+            if len(cv_df):
+                bpt = []
+                for _, row in cv_df.iterrows():
+                    held_out_y = sessions_data[int(row["fold"])]["y"]
+                    null_ll = _baseline_bernoulli_ll(held_out_y)
+                    n = int(row["n_trials_test"])
+                    bpt.append((row["test_ll"] - null_ll) / (n * np.log(2.0)))
+                cv_results[K] = (float(np.mean(bpt)), float(np.std(bpt)))
+            else:
+                cv_results[K] = (np.nan, np.nan)
+
+    # ---------------- Aggregate selection_df ----------------
+    for K in K_range:
+        best_model_K, best_ll_K, n_failures = fit_results[K]
+        if best_model_K is None:
+            if verbose:
+                print(f"  K={K}: All restarts failed.")
+            continue
+        bic_val = best_model_K.bic(sessions_data)
+        aic_val = best_model_K.aic(sessions_data)
+        all_models[K] = best_model_K
+        row: Dict[str, Any] = {
+            "K": K,
+            "train_ll": best_ll_K,
+            "bic": bic_val,
+            "aic": aic_val,
+            "n_params": best_model_K.n_params(),
+        }
+        if use_cross_validation:
+            mean, std = cv_results.get(K, (np.nan, np.nan))
+            row["cv_ll_bits_per_trial"] = mean
+            row["cv_ll_std"] = std
+        records.append(row)
+
+    # Lapse "L" baseline (F3)
+    try:
+        lapse_model = fit_lapse_model(
+            sessions_data, n_features=n_features, config=cfg_copy, seed=seed,
+        )
+        lapse_ll = lapse_model.log_likelihood(sessions_data)
+        row_L: Dict[str, Any] = {
+            "K": "L",
+            "train_ll": lapse_ll,
+            "bic": lapse_model.bic(sessions_data),
+            "aic": lapse_model.aic(sessions_data),
+            "n_params": lapse_model.n_params(),
+        }
+        if use_cross_validation:
+            # CV the lapse model with its own per-fold inner loop because
+            # `loso_cross_validation` is hard-coded for K=int.
+            bpt = []
+            for fold_idx in range(len(sessions_data)):
+                train = [s for i, s in enumerate(sessions_data) if i != fold_idx]
+                held = sessions_data[fold_idx]
+                if len(held["y"]) == 0:
+                    continue
+                try:
+                    m_fold = fit_lapse_model(
+                        train, n_features=n_features, config=cfg_copy, seed=seed + fold_idx,
+                    )
+                    test_ll = m_fold.log_likelihood([held])
+                    null_ll = _baseline_bernoulli_ll(held["y"])
+                    n = len(held["y"])
+                    bpt.append((test_ll - null_ll) / (n * np.log(2.0)))
+                except Exception:
+                    continue
+            if bpt:
+                row_L["cv_ll_bits_per_trial"] = float(np.mean(bpt))
+                row_L["cv_ll_std"] = float(np.std(bpt))
+            else:
+                row_L["cv_ll_bits_per_trial"] = np.nan
+                row_L["cv_ll_std"] = np.nan
+        records.append(row_L)
+        all_models["L"] = lapse_model
+    except Exception as exc:
+        warnings.warn(
+            f"Lapse model fit failed: {exc}  (continuing without 'L' row)",
+            RuntimeWarning,
+        )
 
     selection_df = pd.DataFrame(records)
     if selection_df.empty:
         raise RuntimeError("All model fits failed.")
 
-    best_K = int(selection_df.loc[selection_df["bic"].idxmin(), "K"])
+    K_only = selection_df[selection_df["K"] != "L"]
+    if K_only.empty:
+        raise RuntimeError("No integer-K fits succeeded; cannot select a best model.")
+    if use_cross_validation:
+        if K_only["cv_ll_bits_per_trial"].isna().all():
+            raise RuntimeError(
+                "All LOSO cross-validation folds failed for every K. "
+                "Cannot select best model by CV LL. "
+                "Pass use_cross_validation=False to fall back to BIC selection."
+            )
+        best_K = int(K_only.loc[K_only["cv_ll_bits_per_trial"].idxmax(), "K"])
+    else:
+        best_K = int(K_only.loc[K_only["bic"].idxmin(), "K"])
+
     best_model = all_models[best_K]
     if verbose:
-        print(f"\n*** Best model: K={best_K} (by BIC) ***\n")
+        criterion = "CV LL (bits/trial)" if use_cross_validation else "BIC"
+        print(f"\n*** Best model: K={best_K} (by {criterion}) ***\n")
         print(best_model.summary())
 
     return best_model, selection_df, all_models
+
+
+# =====================================================================
+# Lapse model baseline (F3)
+# =====================================================================
+
+class _LapseGLMHMM(GLMHMM):
+    """Restricted 2-state GLM-HMM for the Ashwood "L" baseline.
+
+    Constraints (enforced after each M-step):
+      - State 1 (lapse) has zero weights except for bias.
+      - Transition matrix has identical rows (lapse probability is
+        time-independent and stimulus-independent).
+    """
+
+    def _m_step(self, sessions_data, all_gamma, total_xi, total_init):
+        super()._m_step(sessions_data, all_gamma, total_xi, total_init)
+        # Enforce constraint: lapse state has only a bias term.
+        self._weights[1, 1:] = 0.0
+        # Enforce constraint: identical transition rows (stationary lapse).
+        A = np.exp(self._log_A)
+        col_means = A.mean(axis=0, keepdims=True)        # avg of two rows
+        col_means = col_means / col_means.sum()           # renormalise
+        A_constrained = np.repeat(col_means, 2, axis=0)
+        self._log_A = np.log(A_constrained + _EPS)
+
+    def sort_states_by_bias(self):
+        """Disabled for the lapse model.
+
+        The lapse constraint is enforced by state INDEX (index 1 must have
+        zero non-bias weights). Re-sorting would silently break the
+        invariant. Override to a no-op with a warning.
+        """
+        warnings.warn(
+            "sort_states_by_bias is a no-op on _LapseGLMHMM (the lapse "
+            "constraint is enforced by state index).",
+            RuntimeWarning,
+        )
+
+
+def fit_lapse_model(
+    sessions_data: List[Dict[str, Any]],
+    n_features: int,
+    config: Optional[GLMHMMConfig] = None,
+    seed: int = 0,
+) -> _LapseGLMHMM:
+    """Fit the restricted 2-state lapse model used as Ashwood's "L" baseline.
+
+    Returns the fitted _LapseGLMHMM with the highest log-likelihood across
+    ``config.n_restarts`` random restarts.
+
+    For lick/no-lick (binary y), the lapse state's single bias parameter
+    captures the spontaneous-lick probability (analog of Ashwood's
+    γ_lick / (γ_lick + γ_no_lick) ratio under binary choice).
+    """
+    cfg = config or GLMHMMConfig()
+    cfg_copy = GLMHMMConfig(**{k: getattr(cfg, k) for k in cfg.__dataclass_fields__})
+    cfg_copy.verbose = False
+
+    best_ll = -np.inf
+    best_model: Optional[_LapseGLMHMM] = None
+    for r in range(cfg.n_restarts):
+        m = _LapseGLMHMM(n_states=2, n_features=n_features, config=cfg_copy)
+        try:
+            ll = m.fit(sessions_data, seed=seed + r * 137, smart_init=(r == 0))
+        except Exception:
+            continue
+        if ll > best_ll:
+            best_ll = ll
+            best_model = m
+    if best_model is None:
+        raise RuntimeError("Lapse model: all restarts failed.")
+    return best_model
 
 
 # =====================================================================
@@ -904,6 +1095,125 @@ def auto_label_states(model: GLMHMM) -> List[str]:
     return labels
 
 
+def auto_label_states_explicit(
+    model: GLMHMM,
+    *,
+    tau_low: float = 0.2,
+    tau_high: float = 0.5,
+    stim_high: float = 2.0,
+) -> List[str]:
+    """Assign labels using explicit a priori criteria over (P(lick|catch), P(lick|large-go)).
+
+    Foundation for cross-mouse state correspondence (see audit spec §1.1, F25,
+    CC-2). Unlike ``auto_label_states`` (rank-based), this guarantees that two
+    states labeled "Impulsive" in different fits/animals satisfy the same joint
+    signature.
+
+    Criteria:
+        Impulsive          : p_catch >  tau_high AND p_high >= tau_high
+        Stimulus_sensitive : p_catch <  tau_low  AND p_high >= tau_high
+        Disengaged         : p_catch <  tau_low  AND p_high <  tau_high
+        else               : "Intermediate_{k}"
+
+    For K > 3, multiple states may match the same region; suffix with `_1, _2`
+    by ascending sensitivity (p_high - p_catch).
+
+    Parameters
+    ----------
+    model : GLMHMM
+        Fitted model.
+    tau_low : float
+        Upper bound on P(lick|catch) for "low impulsivity" classification.
+    tau_high : float
+        Lower bound on P(lick) for "high responsiveness" classification.
+    stim_high : float
+        log2(change_size) value treated as "large go" stimulus. Default 2.0
+        (= log2(4.0), the largest change_size in the BG_046 protocol).
+
+    Returns
+    -------
+    list of str, length K.
+    """
+    K, D = model.n_states, model.n_features
+    x_catch = np.zeros(D); x_catch[0] = 1.0
+    x_high  = np.zeros(D); x_high[0]  = 1.0; x_high[1] = stim_high
+
+    p_catch = np.array([float(expit(model.weights[k] @ x_catch)) for k in range(K)])
+    p_high  = np.array([float(expit(model.weights[k] @ x_high))  for k in range(K)])
+
+    raw_labels: List[str] = []
+    for k in range(K):
+        if p_catch[k] > tau_high and p_high[k] >= tau_high:
+            raw_labels.append("Impulsive")
+        elif p_catch[k] < tau_low and p_high[k] >= tau_high:
+            raw_labels.append("Stimulus_sensitive")
+        elif p_catch[k] < tau_low and p_high[k] < tau_high:
+            raw_labels.append("Disengaged")
+        else:
+            raw_labels.append(f"Intermediate_{k}")
+
+    # Disambiguate duplicates by sensitivity ascending.
+    sensitivity = p_high - p_catch
+    counts: Dict[str, int] = {}
+    for lbl in raw_labels:
+        counts[lbl] = counts.get(lbl, 0) + 1
+
+    final: List[str] = list(raw_labels)
+    for canonical in ("Impulsive", "Stimulus_sensitive", "Disengaged"):
+        if counts.get(canonical, 0) > 1:
+            idxs = [i for i, lbl in enumerate(raw_labels) if lbl == canonical]
+            order = sorted(idxs, key=lambda i: sensitivity[i])
+            for rank, idx in enumerate(order, start=1):
+                final[idx] = f"{canonical}_{rank}"
+    return final
+
+
+# =====================================================================
+# Gating safety (F14)
+# =====================================================================
+
+def assign_states_with_confidence(
+    posteriors: np.ndarray,
+    threshold: float = 0.8,
+) -> np.ndarray:
+    """Assign each trial to its argmax state, except return -1 when no state's
+    posterior exceeds *threshold*.
+
+    The purpose is gating safety for downstream neural analyses: trials with
+    ambiguous posteriors (e.g., γ = [0.45, 0.55, 0.0]) should not contribute
+    to any per-state PSTH or decoder, because they reflect a mixed regime.
+
+    Parameters
+    ----------
+    posteriors : ndarray (T, K)
+        Posterior state probabilities (each row sums to ~1).
+    threshold : float, default 0.8
+        Minimum γ_max to accept the argmax assignment.
+
+    Returns
+    -------
+    states : ndarray (T,) int
+        argmax-assigned state per trial, with -1 where γ_max <= threshold.
+
+    Notes
+    -----
+    Use this for neural-conditioning calls (per-state PSTHs, decoders, …).
+    For behavioral characterization (state fractions, dwell times), prefer
+    the raw Viterbi sequence from ``GLMHMM.most_likely_states``.
+    """
+    posteriors = np.asarray(posteriors)
+    if posteriors.ndim != 2:
+        raise ValueError(
+            f"posteriors must be a 2D array (T, K); got ndim={posteriors.ndim}."
+        )
+    if posteriors.size == 0:
+        return np.empty(0, dtype=int)
+    max_prob = posteriors.max(axis=1)
+    assigned = posteriors.argmax(axis=1).astype(int)
+    assigned[max_prob <= threshold] = -1
+    return assigned
+
+
 # =====================================================================
 # Session decoding (key downstream interface)
 # =====================================================================
@@ -912,13 +1222,23 @@ def decode_session(
     model: GLMHMM,
     session: Session,
     state_labels: Optional[List[str]] = None,
+    confidence_threshold: Optional[float] = None,
 ) -> pd.DataFrame:
     """Decode a session: return a DataFrame with per-trial state assignments.
 
     Columns added to the trial DataFrame:
       hmm_state          : int    (Viterbi)
       hmm_state_label    : str    (if *state_labels* provided)
-      p_state_0 … K-1   : float  (posterior probabilities)
+      p_state_0 … K-1    : float  (posterior probabilities)
+      hmm_state_gated    : int    (only if confidence_threshold given;
+                                   -1 where γ_max <= threshold)
+
+    Parameters
+    ----------
+    confidence_threshold : float, optional
+        If given, also add ``hmm_state_gated`` column using
+        ``assign_states_with_confidence`` for gating-safe neural analyses.
+        Typical value: 0.8.
 
     The returned DataFrame only contains valid (non-excluded) trials.
     """
@@ -935,5 +1255,10 @@ def decode_session(
         df["hmm_state_label"] = [state_labels[s] for s in states]
     for k in range(model.n_states):
         df[f"p_state_{k}"] = posteriors[:, k]
+
+    if confidence_threshold is not None:
+        df["hmm_state_gated"] = assign_states_with_confidence(
+            posteriors, threshold=confidence_threshold
+        )
 
     return df
