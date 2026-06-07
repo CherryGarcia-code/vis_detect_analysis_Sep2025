@@ -102,3 +102,8 @@ _DeepUnitMatch_repo/
 analysis_suite/cache/
 analysis_suite/*_log.txt
 analysis_suite/*_output.txt
+
+# Claude / superpowers tooling + session logs (not project code)
+.superpowers/
+.claudeignore
+staging_log.txt
