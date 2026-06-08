@@ -2,7 +2,7 @@
 Batch runner for behavior analysis pipeline.
 
 Usage:
-    python scripts/analysis/behavior/batch_run_behavior.py --pkl-dir pkls/BG_046 --out FIGURES/behavior/BG_046 --workers 4
+    python scripts/analysis/behavior/batch_run_behavior.py --pkl-dir data/pkls/BG_046 --out FIGURES/behavior/BG_046 --workers 4
 """
 import argparse
 import subprocess
