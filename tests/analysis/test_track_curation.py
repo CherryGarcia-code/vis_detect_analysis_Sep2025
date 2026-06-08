@@ -240,3 +240,31 @@ def test_curate_registry_builds_links_and_tracks():
         "liberal_uid", "anchor_session", "candidate_session", "wave_corr",
         "depth_jump_um", "isi_shape_corr", "func_corr", "func_evaluable",
         "link_decision", "review_flag", "stop_reason"}
+
+
+import pandas as pd
+
+
+def test_held_out_isi_auc_separates_matched_from_nonmatched():
+    rng = np.random.default_rng(0)
+    # Two distinct unit "shapes": A peaks early, B peaks late.
+    shapeA = np.exp(-((np.arange(50) - 10) ** 2) / 20.0)
+    shapeB = np.exp(-((np.arange(50) - 40) ** 2) / 20.0)
+
+    def noisy(shape):
+        h = shape + rng.normal(0, 0.02, size=50)
+        h = np.clip(h, 0, None)
+        return h / h.sum()
+
+    # uid 1 = unit A across S1,S2,S3 ; uid 2 = unit B across S1,S2,S3
+    holdout = {}
+    for s in ["S1", "S2", "S3"]:
+        holdout[(1, s)] = noisy(shapeA)
+        holdout[(2, s)] = noisy(shapeB)
+    tracks = pd.DataFrame([
+        {"curated_uid": 1, "kept_sessions": "S1;S2;S3", "confidence_tier": "trusted"},
+        {"curated_uid": 2, "kept_sessions": "S1;S2;S3", "confidence_tier": "trusted"},
+    ])
+    out = tc.held_out_isi_auc_by_tier(tracks, holdout)
+    assert out["trusted"]["auc"] > 0.9
+    assert out["trusted"]["n_matched"] == 6     # 2 uids * C(3,2)=3

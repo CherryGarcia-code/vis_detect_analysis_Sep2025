@@ -341,3 +341,57 @@ def curate_registry(uid_to_sessions: Dict[int, List[str]],
             "confidence_tier": res.confidence_tier,
         })
     return pd.DataFrame(link_rows), pd.DataFrame(track_rows)
+
+
+from itertools import combinations
+
+
+def _auc(matched: np.ndarray, nonmatched: np.ndarray) -> float:
+    """ROC AUC of matched (label 1) vs nonmatched (label 0) scores."""
+    if len(matched) == 0 or len(nonmatched) == 0:
+        return float("nan")
+    scores = np.concatenate([matched, nonmatched])
+    labels = np.concatenate([np.ones_like(matched), np.zeros_like(nonmatched)])
+    order = np.argsort(-scores)
+    labels = labels[order]
+    tp = np.cumsum(labels); fp = np.cumsum(1 - labels)
+    tpr = tp / max(1, labels.sum()); fpr = fp / max(1, (1 - labels).sum())
+    return float(np.trapz(tpr, fpr))
+
+
+def held_out_isi_auc_by_tier(tracks_df, holdout_isi: Dict) -> Dict[str, dict]:
+    """Per-tier held-out-ISI AUC (spec sec 8.2).
+
+    tracks_df: must have curated_uid, kept_sessions (';'-joined), confidence_tier.
+    holdout_isi: {(curated_uid, session) -> holdout ISI hist (50,)}.
+    Matched = cross-session pairs within a curated_uid's kept sessions.
+    Non-matched = within-session pairs across different curated_uids.
+    """
+    out: Dict[str, dict] = {}
+    for tier, grp in tracks_df.groupby("confidence_tier"):
+        matched: List[float] = []
+        # matched: cross-session, same uid
+        sess_by_uid: Dict[int, List[str]] = {}
+        for _, row in grp.iterrows():
+            uid = int(row["curated_uid"])
+            sess = [s for s in str(row["kept_sessions"]).split(";") if s]
+            sess_by_uid[uid] = sess
+            for s1, s2 in combinations(sess, 2):
+                r = _pearson(holdout_isi.get((uid, s1)), holdout_isi.get((uid, s2)))
+                if np.isfinite(r):
+                    matched.append(r)
+        # non-matched: within-session, different uid
+        nonmatched: List[float] = []
+        uids = list(sess_by_uid)
+        for u1, u2 in combinations(uids, 2):
+            shared = set(sess_by_uid[u1]) & set(sess_by_uid[u2])
+            for s in shared:
+                r = _pearson(holdout_isi.get((u1, s)), holdout_isi.get((u2, s)))
+                if np.isfinite(r):
+                    nonmatched.append(r)
+        out[str(tier)] = {
+            "auc": _auc(np.array(matched), np.array(nonmatched)),
+            "n_matched": len(matched),
+            "n_nonmatched": len(nonmatched),
+        }
+    return out
