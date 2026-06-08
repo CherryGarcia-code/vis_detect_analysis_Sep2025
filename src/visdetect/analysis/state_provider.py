@@ -62,3 +62,73 @@ def in_zone_trial_indices(session_name: str, states_dir,
     table = load_state_table(session_name, states_dir)
     return sorted(t for t, (lab, conf) in table.items()
                   if lab == IN_ZONE and conf >= min_confidence)
+
+
+import re
+from typing import List, Optional
+
+from visdetect.core.session import Session
+
+_HMM_CANONICAL = {
+    "Stimulus_sensitive": IN_ZONE,
+    "Impulsive": IMPULSIVE,
+    "Disengaged": DISENGAGED,
+}
+
+
+def canonical_from_hmm_label(label: str) -> Optional[str]:
+    """Map an HMM label to the canonical vocabulary; None if not one of the three.
+
+    Strips a trailing rank suffix ('_1', '_2') produced by
+    hmm.auto_label_states_explicit for duplicate states. 'Intermediate_*' has no
+    canonical equivalent -> None (trial gets no state -> excluded from in_zone).
+    """
+    base = re.sub(r"_\d+$", "", str(label))
+    return _HMM_CANONICAL.get(base)
+
+
+def rows_from_decoded_df(df) -> List[Tuple[int, str, float]]:
+    """Convert a decode_session DataFrame to state-table rows.
+
+    Requires columns 'trial_idx' (raw index), 'hmm_state_label', 'p_state_max'.
+    Rows whose label has no canonical mapping are dropped.
+    """
+    rows: List[Tuple[int, str, float]] = []
+    for _, r in df.iterrows():
+        canon = canonical_from_hmm_label(r["hmm_state_label"])
+        if canon is None:
+            continue
+        rows.append((int(r["trial_idx"]), canon, float(r["p_state_max"])))
+    return rows
+
+
+class UniformInZoneStateProvider:
+    """Bootstrap provider: labels EVERY valid trial 'in_zone' (confidence 1.0).
+
+    Temporary — lets the curation pipeline run end-to-end before the final
+    state-identification method exists. Equivalent to all-trials fingerprinting.
+    """
+
+    def write(self, session: Session, session_name: str, states_dir) -> Path:
+        from visdetect.analysis.behavior import get_trial_dataframe
+        df = get_trial_dataframe(session)
+        rows = [(int(i), IN_ZONE, 1.0) for i in df["trial_idx"].tolist()]
+        return write_state_table(session_name, rows, states_dir)
+
+
+class HMMStateProvider:
+    """Provider wrapping a fitted GLM-HMM via hmm.decode_session."""
+
+    def __init__(self, model, state_labels: List[str]):
+        self.model = model
+        self.state_labels = state_labels
+
+    def write(self, session: Session, session_name: str, states_dir) -> Path:
+        from visdetect.analysis.hmm import decode_session
+        df = decode_session(self.model, session, state_labels=self.state_labels)
+        if "p_state_max" not in df.columns:
+            pcols = [c for c in df.columns if c.startswith("p_state_")]
+            df = df.copy()
+            df["p_state_max"] = df[pcols].max(axis=1) if pcols else 1.0
+        rows = rows_from_decoded_df(df)
+        return write_state_table(session_name, rows, states_dir)
