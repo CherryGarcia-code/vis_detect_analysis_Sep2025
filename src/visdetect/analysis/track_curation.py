@@ -294,3 +294,50 @@ def sweep_uid(features_by_session: Dict[str, CurationFeature],
         kept_sessions=kept, skipped_sessions=skipped, dropped_sessions=dropped,
         links=links, confidence_tier=tier,
     )
+
+
+import pandas as pd
+
+
+def curate_registry(uid_to_sessions: Dict[int, List[str]],
+                    features: Dict, params: CurationParams):
+    """Run the sweep for every uid; return (links_df, tracks_df).
+
+    uid_to_sessions: {liberal_uid -> chronological-ascending session list}.
+    features: {(liberal_uid, session_name) -> CurationFeature}.
+    """
+    link_rows: List[dict] = []
+    track_rows: List[dict] = []
+    for uid in sorted(uid_to_sessions):
+        order = uid_to_sessions[uid]
+        feats = {s: features[(uid, s)] for s in order if (uid, s) in features}
+        res = sweep_uid(feats, [s for s in order if s in feats], params,
+                        liberal_uid=uid)
+        for lr in res.links:
+            link_rows.append({
+                "liberal_uid": uid,
+                "anchor_session": lr.anchor_session,
+                "candidate_session": lr.candidate_session,
+                "gap_sessions": lr.gap_sessions,
+                "wave_corr": lr.wave_corr,
+                "depth_jump_um": lr.depth_jump_um,
+                "isi_shape_corr": lr.isi_shape_corr,
+                "func_corr": lr.func_corr,
+                "func_evaluable": lr.func_evaluable,
+                "n_inzone_trials": lr.n_inzone_trials,
+                "link_decision": lr.decision,
+                "review_flag": lr.review_flag,
+                "stop_reason": lr.stop_reason,
+            })
+        track_rows.append({
+            "curated_uid": uid,            # 1:1 with liberal_uid (Expert-anchored)
+            "liberal_uid": uid,
+            "anchor_session": res.anchor_session,
+            "kept_sessions": ";".join(res.kept_sessions),
+            "skipped_sessions": ";".join(res.skipped_sessions),
+            "dropped_sessions": ";".join(res.dropped_sessions),
+            "trimmed_span": len(res.kept_sessions),
+            "n_bridged": len(res.skipped_sessions),
+            "confidence_tier": res.confidence_tier,
+        })
+    return pd.DataFrame(link_rows), pd.DataFrame(track_rows)

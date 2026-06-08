@@ -216,3 +216,27 @@ def test_sweep_skips_exhausted_drops_trailing():
 def test_compute_tier_short_is_suspect():
     p = tc.CurationParams()
     assert tc.compute_tier(["S4"], [], [], p) == "suspect"
+
+
+def test_curate_registry_builds_links_and_tracks():
+    p = tc.CurationParams()
+    order = ["S1", "S2", "S3", "S4"]
+    uid_to_sessions = {10: order, 11: ["S1", "S2"]}
+    feats = {}
+    for s in order:
+        feats[(10, s)] = _feat(s, wave=_W, depth=100.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+    # uid 11: a swap between its two sessions -> short/suspect
+    feats[(11, "S2")] = _feat("S2", wave=_W, depth=100.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+    feats[(11, "S1")] = _feat("S1", wave=-_W, depth=220.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+
+    links_df, tracks_df = tc.curate_registry(uid_to_sessions, feats, p)
+
+    t10 = tracks_df[tracks_df.liberal_uid == 10].iloc[0]
+    assert t10.confidence_tier == "trusted"
+    assert t10.trimmed_span == 4
+    t11 = tracks_df[tracks_df.liberal_uid == 11].iloc[0]
+    assert t11.confidence_tier == "suspect"
+    assert set(links_df.columns) >= {
+        "liberal_uid", "anchor_session", "candidate_session", "wave_corr",
+        "depth_jump_um", "isi_shape_corr", "func_corr", "func_evaluable",
+        "link_decision", "review_flag", "stop_reason"}
