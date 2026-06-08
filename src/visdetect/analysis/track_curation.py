@@ -138,6 +138,7 @@ class LinkResult:
     gap_sessions: int
     wave_corr: float
     depth_jump_um: float
+    depth_evaluable: bool
     isi_shape_corr: float
     func_corr: float
     func_evaluable: bool
@@ -178,17 +179,41 @@ def _func_corr(ref: CurationFeature, cand: CurationFeature) -> float:
     return float(np.median(rs)) if rs else float("nan")
 
 
+def _depth_jump(anchor: CurationFeature, candidate: CurationFeature) -> float:
+    """Cross-session depth difference (um), measured in a consistent frame.
+
+    Prefer drift-CORRECTED depth when both sessions have it; otherwise fall back
+    to RAW depth. On BG_046 whole-probe inter-session drift is ~0 (amplitude-depth
+    fingerprint diagnostic, corr 0.88), so raw depth is comparable across days and
+    the match-based correction — which starves on low-anchor sessions and returns
+    NaN — must not be allowed to manufacture a depth "contradiction". NaN only if
+    NEITHER frame is available for both units, in which case the caller treats
+    depth as not-evaluable (abstain), not as a fail.
+    """
+    ac = float(anchor.peak_depth_corrected_um)
+    bc = float(candidate.peak_depth_corrected_um)
+    if np.isfinite(ac) and np.isfinite(bc):
+        return abs(ac - bc)
+    ar = float(anchor.peak_depth_um)
+    br = float(candidate.peak_depth_um)
+    if np.isfinite(ar) and np.isfinite(br):
+        return abs(ar - br)
+    return float("nan")
+
+
 def score_link(anchor: CurationFeature, candidate: CurationFeature,
                corroborator_ref: CurationFeature, params: CurationParams,
                gap_sessions: int = 1) -> LinkResult:
     """Decide one cross-session link: biophysical gate + functional corroborator."""
     wave_corr = _pearson(anchor.waveform_peak, candidate.waveform_peak)
-    depth_jump = abs(anchor.peak_depth_corrected_um
-                     - candidate.peak_depth_corrected_um)
+    depth_jump = _depth_jump(anchor, candidate)
     isi_corr = _pearson(anchor.isi_hist_curation, candidate.isi_hist_curation)
 
     w = badge_waveform(wave_corr)
-    d = badge_depth(depth_jump)
+    # Depth abstains (does not vote) when it cannot be measured in any frame.
+    # "unknown depth" != "depths disagree" — abstain never fails/stops a link.
+    depth_evaluable = bool(np.isfinite(depth_jump))
+    d = badge_depth(depth_jump) if depth_evaluable else "na"
 
     # Functional corroborator (availability-gated).
     func_evaluable = candidate.n_inzone_trials >= params.min_inzone_trials
@@ -200,7 +225,8 @@ def score_link(anchor: CurationFeature, candidate: CurationFeature,
         anchor_session=anchor.session_name,
         candidate_session=candidate.session_name,
         gap_sessions=int(gap_sessions),
-        wave_corr=wave_corr, depth_jump_um=depth_jump, isi_shape_corr=isi_corr,
+        wave_corr=wave_corr, depth_jump_um=depth_jump,
+        depth_evaluable=depth_evaluable, isi_shape_corr=isi_corr,
         func_corr=func_corr, func_evaluable=func_evaluable,
         n_inzone_trials=candidate.n_inzone_trials,
     )
@@ -208,10 +234,12 @@ def score_link(anchor: CurationFeature, candidate: CurationFeature,
     if w == "fail" and d == "fail":
         return LinkResult(**base, decision="STOP", review_flag=False,
                           stop_reason="hard_contradiction")
-    if w == "pass" and d == "pass":
+    if w == "pass" and d in ("pass", "na"):
         review = (badge_isi_hist_corr(isi_corr) != "pass")
         if func_evaluable and badge_func_resp(func_corr) != "pass":
             review = True
+        if not depth_evaluable:
+            review = True               # kept without depth corroboration
         return LinkResult(**base, decision="KEEP", review_flag=review)
     return LinkResult(**base, decision="SKIP", review_flag=False)
 
@@ -321,6 +349,7 @@ def curate_registry(uid_to_sessions: Dict[int, List[str]],
                 "gap_sessions": lr.gap_sessions,
                 "wave_corr": lr.wave_corr,
                 "depth_jump_um": lr.depth_jump_um,
+                "depth_evaluable": lr.depth_evaluable,
                 "isi_shape_corr": lr.isi_shape_corr,
                 "func_corr": lr.func_corr,
                 "func_evaluable": lr.func_evaluable,

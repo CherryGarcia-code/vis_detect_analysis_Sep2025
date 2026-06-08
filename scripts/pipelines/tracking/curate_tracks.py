@@ -44,11 +44,22 @@ DEFAULT_PKL_DIR = REPO_ROOT / "data" / "pkls" / "BG_046"
 DEFAULT_STATES_DIR = REPO_ROOT / "data" / "cache" / "states" / "BG_046"
 DEFAULT_OUT_DIR = REPO_ROOT / "FIGURES" / "tracking_qc" / "curation"
 DEFAULT_CACHE = REPO_ROOT / "data" / "cache" / "curation_features.pkl"
+DEFAULT_DRIFT_CSV = REPO_ROOT / "FIGURES" / "tracking_qc" / "intersession_drift.csv"
 
 
 def _date_key(s: str) -> Tuple[int, int, int]:
     p = str(s).zfill(8)
     return (int(p[4:8]), int(p[2:4]), int(p[0:2]))
+
+
+def _load_fingerprint_offsets(csv_path: Path) -> Dict[str, float]:
+    """Per-session drift offset (um) from the amplitude-depth fingerprint
+    diagnostic CSV (diagnose_intersession_drift.py). Keyed by zero-padded
+    session name; uses the cumulative `drift_vs_ref0_um` column.
+    """
+    df = pd.read_csv(csv_path)
+    return {str(r["session"]).zfill(8): float(r["drift_vs_ref0_um"])
+            for _, r in df.iterrows()}
 
 
 def _session_pkl(pkl_dir: Path, sess: str):
@@ -75,6 +86,14 @@ def main() -> int:
     ap.add_argument("--min-inzone-trials", type=int, default=tc.MIN_INZONE_TRIALS)
     ap.add_argument("--min-trusted-span", type=int, default=tc.MIN_TRUSTED_SPAN)
     ap.add_argument("--corroborator-ref", choices=["rolling", "expert"], default="rolling")
+    ap.add_argument("--drift-source", choices=["none", "fingerprint", "match"],
+                    default="none",
+                    help="Depth drift correction source. 'none' (default) = RAW depth "
+                         "(BG_046 whole-probe drift ~0 per the fingerprint diagnostic); "
+                         "'fingerprint' = offsets from --drift-csv; 'match' = legacy "
+                         "UnitMatch-anchor estimator (starves on low-anchor sessions).")
+    ap.add_argument("--drift-csv", type=Path, default=DEFAULT_DRIFT_CSV,
+                    help="intersession_drift.csv for --drift-source fingerprint")
     ap.add_argument("--rebuild-cache", action="store_true")
     args = ap.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -98,13 +117,29 @@ def main() -> int:
                      for _, r in manifest.iterrows()}
 
     # ── Drift offsets across all registry sessions ───────────────────────
+    # Default 'none': the depth gate uses RAW probe depth. The amplitude-depth
+    # fingerprint diagnostic (diagnose_intersession_drift.py) shows ~0 whole-probe
+    # inter-session drift on BG_046 (corr 0.88), and the legacy 'match' estimator
+    # starves on low-anchor sessions (NaN for ~26/42 sessions) and emits spurious
+    # large offsets where it does run — so correcting with it is worse than not.
     all_sess = sorted(reg["session"].unique().tolist(), key=_date_key)
-    drift_offsets = {}
-    if args.prob_matrix.exists():
-        prob = np.load(args.prob_matrix)
-        drift_offsets = estimate_session_drift(reg, prob, args.raw_wf_root, all_sess)
-    else:
-        print("prob matrix missing — depth uses raw (offset 0)", flush=True)
+    drift_offsets: Dict[str, float] = {}
+    if args.drift_source == "match":
+        if args.prob_matrix.exists():
+            prob = np.load(args.prob_matrix)
+            drift_offsets = estimate_session_drift(reg, prob, args.raw_wf_root, all_sess)
+        else:
+            print("prob matrix missing — depth uses raw (offset 0)", flush=True)
+    elif args.drift_source == "fingerprint":
+        if args.drift_csv.exists():
+            drift_offsets = _load_fingerprint_offsets(args.drift_csv)
+            print(f"fingerprint drift: {len(drift_offsets)} session offsets "
+                  f"from {args.drift_csv.name}", flush=True)
+        else:
+            print(f"drift csv {args.drift_csv} missing — depth uses raw (offset 0)",
+                  flush=True)
+    else:  # none
+        print("drift-source=none — depth gate uses RAW depth (offset 0)", flush=True)
 
     # ── Build / load feature cache (outer loop by session) ───────────────
     if args.rebuild_cache or not args.cache_path.exists():

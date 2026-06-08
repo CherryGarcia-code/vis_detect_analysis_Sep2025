@@ -85,8 +85,13 @@ def test_extract_curation_feature_missing_waveform_returns_none(tmp_path):
     assert feat is None
 
 
-def _feat(session_name, *, wave, depth, isi, psth_val, n_inzone, n_bins=40):
-    """Build a minimal CurationFeature for score_link tests."""
+def _feat(session_name, *, wave, depth, isi, psth_val, n_inzone, n_bins=40,
+          corr_depth="same"):
+    """Build a minimal CurationFeature for score_link tests.
+
+    corr_depth: drift-corrected depth. Default "same" => equals raw `depth`.
+    Pass a float (incl. nan) to set corrected independently of raw.
+    """
     wave = np.asarray(wave, dtype=float)
     isi = np.asarray(isi, dtype=float)
     psth = None if psth_val is None else np.full(n_bins, 0.0)
@@ -95,10 +100,11 @@ def _feat(session_name, *, wave, depth, isi, psth_val, n_inzone, n_bins=40):
         # a modulated ramp scaled by psth_val so two features correlate or not
         ramp = np.linspace(0, 1, n_bins) * 10.0
         psths["baseline_on"] = ramp * psth_val
+    corrected = depth if corr_depth == "same" else corr_depth
     return tc.CurationFeature(
         session_name=session_name, ks_unit_id=0, stage="Expert",
         waveform_peak=wave, footprint=np.zeros((1, 1)), footprint_channels=np.array([0]),
-        peak_chan=0, peak_depth_um=depth, peak_depth_corrected_um=depth,
+        peak_chan=0, peak_depth_um=depth, peak_depth_corrected_um=corrected,
         baseline_fr_hz=5.0, isi_hist_curation=isi, isi_hist_holdout=isi,
         inzone_psths=psths, n_inzone_trials=n_inzone,
     )
@@ -152,6 +158,61 @@ def test_score_link_func_not_evaluable_when_few_inzone():
     assert lr.decision == "KEEP"
     assert lr.func_evaluable is False
     assert lr.review_flag is False
+
+
+_NAN = float("nan")
+
+
+def test_score_link_uses_raw_depth_when_corrected_missing():
+    # Corrected depth unavailable (broken drift chain) -> fall back to RAW depth.
+    p = tc.CurationParams()
+    a = _feat("S2", wave=_W, depth=100.0, isi=_ISI, psth_val=1.0, n_inzone=50, corr_depth=_NAN)
+    b = _feat("S1", wave=_W, depth=102.0, isi=_ISI, psth_val=1.0, n_inzone=50, corr_depth=_NAN)
+    lr = tc.score_link(a, b, a, p, gap_sessions=1)
+    assert lr.decision == "KEEP"
+    assert lr.depth_evaluable is True
+    assert lr.depth_jump_um == pytest.approx(2.0)       # raw 100 vs 102
+
+
+def test_score_link_raw_depth_contradiction_still_stops():
+    # Even via raw fallback, a flipped waveform + big depth jump is a hard stop.
+    p = tc.CurationParams()
+    a = _feat("S2", wave=-_W, depth=100.0, isi=_ISI, psth_val=1.0, n_inzone=50, corr_depth=_NAN)
+    b = _feat("S1", wave=_W, depth=300.0, isi=_ISI, psth_val=1.0, n_inzone=50, corr_depth=_NAN)
+    lr = tc.score_link(a, b, a, p, gap_sessions=1)
+    assert lr.decision == "STOP"
+    assert lr.stop_reason == "hard_contradiction"
+
+
+def test_score_link_abstains_when_all_depth_missing():
+    # Neither corrected nor raw depth available -> depth ABSTAINS (not a veto).
+    p = tc.CurationParams()
+    a = _feat("S2", wave=_W, depth=_NAN, isi=_ISI, psth_val=1.0, n_inzone=50, corr_depth=_NAN)
+    b = _feat("S1", wave=_W, depth=_NAN, isi=_ISI, psth_val=1.0, n_inzone=50, corr_depth=_NAN)
+    lr = tc.score_link(a, b, a, p, gap_sessions=1)
+    assert lr.decision == "KEEP"            # waveform passes; depth abstains
+    assert lr.depth_evaluable is False
+    assert lr.review_flag is True           # kept without depth corroboration -> review
+
+
+def test_score_link_abstain_does_not_stop_on_waveform_fail():
+    # Missing depth must never manufacture a hard_contradiction STOP.
+    p = tc.CurationParams()
+    a = _feat("S2", wave=_W, depth=_NAN, isi=_ISI, psth_val=1.0, n_inzone=50, corr_depth=_NAN)
+    b = _feat("S1", wave=-_W, depth=_NAN, isi=_ISI, psth_val=1.0, n_inzone=50, corr_depth=_NAN)
+    lr = tc.score_link(a, b, a, p, gap_sessions=1)
+    assert lr.decision == "SKIP"
+    assert lr.stop_reason == ""
+
+
+def test_score_link_prefers_corrected_over_raw_when_both_present():
+    # When corrected depth exists for both, use it (raw difference would mislead).
+    p = tc.CurationParams()
+    a = _feat("S2", wave=_W, depth=100.0, isi=_ISI, psth_val=1.0, n_inzone=50, corr_depth=100.0)
+    b = _feat("S1", wave=_W, depth=300.0, isi=_ISI, psth_val=1.0, n_inzone=50, corr_depth=102.0)
+    lr = tc.score_link(a, b, a, p, gap_sessions=1)
+    assert lr.decision == "KEEP"
+    assert lr.depth_jump_um == pytest.approx(2.0)       # corrected 100 vs 102, NOT raw 200
 
 
 def _chain_feats(session_names, *, swap_at=None, dropout_at=None):
