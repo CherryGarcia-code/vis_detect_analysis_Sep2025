@@ -214,3 +214,83 @@ def score_link(anchor: CurationFeature, candidate: CurationFeature,
             review = True
         return LinkResult(**base, decision="KEEP", review_flag=review)
     return LinkResult(**base, decision="SKIP", review_flag=False)
+
+
+@dataclass
+class SweepResult:
+    liberal_uid: int
+    anchor_session: str
+    kept_sessions: List[str]
+    skipped_sessions: List[str]
+    dropped_sessions: List[str]
+    links: List[LinkResult] = field(default_factory=list)
+    confidence_tier: str = "suspect"
+
+
+def compute_tier(kept_sessions: List[str], skipped_sessions: List[str],
+                 kept_links: List[LinkResult], params: CurationParams) -> str:
+    """trusted / review / suspect for a curated track (spec sec 6.2)."""
+    span = len(kept_sessions)
+    if span < 2:
+        return "suspect"
+    any_review = any(lr.review_flag for lr in kept_links)
+    any_bridge = len(skipped_sessions) > 0
+    if span >= params.min_trusted_span and not any_review and not any_bridge:
+        return "trusted"
+    return "review"
+
+
+def sweep_uid(features_by_session: Dict[str, CurationFeature],
+              session_order: List[str], params: CurationParams,
+              liberal_uid: int = -1) -> SweepResult:
+    """Expert->Naive backward sweep over one liberal-uid's sessions.
+
+    session_order: chronological ascending; anchor = most-recent (last).
+    """
+    present = [s for s in session_order if s in features_by_session]
+    if not present:
+        return SweepResult(liberal_uid, "", [], [], list(session_order))
+    anchor_sess = present[-1]
+    expert_anchor = features_by_session[anchor_sess]
+    anchor = expert_anchor
+    anchor_pos = len(present) - 1
+
+    kept = [anchor_sess]
+    skipped: List[str] = []
+    dropped: List[str] = []
+    pending: List[str] = []
+    links: List[LinkResult] = []
+    n_bridge = 0
+
+    i = len(present) - 2
+    while i >= 0:
+        cand_sess = present[i]
+        cand = features_by_session[cand_sess]
+        ref = anchor if params.corroborator_ref == "rolling" else expert_anchor
+        lr = score_link(anchor, cand, ref, params, gap_sessions=anchor_pos - i)
+        links.append(lr)
+        if lr.decision == "KEEP":
+            kept.append(cand_sess)
+            skipped.extend(pending); pending = []
+            anchor = cand; anchor_pos = i; n_bridge = 0
+        elif lr.decision == "SKIP":
+            pending.append(cand_sess); n_bridge += 1
+            if n_bridge > params.max_bridge_gap:
+                dropped.extend(pending); pending = []
+                dropped.extend(present[:i])         # all earlier sessions
+                break
+        else:  # STOP
+            dropped.extend(pending); pending = []
+            dropped.append(cand_sess)
+            dropped.extend(present[:i])
+            break
+        i -= 1
+    dropped.extend(pending)                          # trailing unclosed skips
+
+    kept_links = [lr for lr in links if lr.decision == "KEEP"]
+    tier = compute_tier(kept, skipped, kept_links, params)
+    return SweepResult(
+        liberal_uid=liberal_uid, anchor_session=anchor_sess,
+        kept_sessions=kept, skipped_sessions=skipped, dropped_sessions=dropped,
+        links=links, confidence_tier=tier,
+    )

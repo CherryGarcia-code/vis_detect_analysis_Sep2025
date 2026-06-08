@@ -152,3 +152,67 @@ def test_score_link_func_not_evaluable_when_few_inzone():
     assert lr.decision == "KEEP"
     assert lr.func_evaluable is False
     assert lr.review_flag is False
+
+
+def _chain_feats(session_names, *, swap_at=None, dropout_at=None):
+    """Build a per-session feature dict for a clean chain, with optional defects.
+
+    swap_at: session name whose unit is a different neuron (flipped wf + depth jump).
+    dropout_at: session name whose unit is garbled (flipped wf only -> soft skip).
+    """
+    feats = {}
+    for s in session_names:
+        wave, depth = _W.copy(), 100.0
+        if s == swap_at:
+            wave, depth = -_W.copy(), 220.0      # hard contradiction
+        elif s == dropout_at:
+            depth = 130.0                         # soft (depth warn) -> SKIP
+        feats[s] = _feat(s, wave=wave, depth=depth, isi=_ISI, psth_val=1.0, n_inzone=50)
+    return feats
+
+
+def test_sweep_clean_chain_is_one_trusted_track():
+    p = tc.CurationParams()
+    order = ["S1", "S2", "S3", "S4"]            # chronological ascending
+    feats = _chain_feats(order)
+    res = tc.sweep_uid(feats, order, p)
+    assert res.anchor_session == "S4"
+    assert set(res.kept_sessions) == {"S1", "S2", "S3", "S4"}
+    assert res.confidence_tier == "trusted"
+
+
+def test_sweep_mid_chain_swap_stops_and_truncates():
+    p = tc.CurationParams()
+    order = ["S1", "S2", "S3", "S4"]
+    feats = _chain_feats(order, swap_at="S2")    # walking back S4->S3->S2 hits swap
+    res = tc.sweep_uid(feats, order, p)
+    assert "S2" in res.dropped_sessions and "S1" in res.dropped_sessions
+    assert set(res.kept_sessions) == {"S3", "S4"}
+
+
+def test_sweep_single_dropout_is_bridged():
+    p = tc.CurationParams()                       # max_bridge_gap default 2
+    order = ["S1", "S2", "S3", "S4"]
+    feats = _chain_feats(order, dropout_at="S3")  # S3 soft-fails, S2/S1 clean -> resurface
+    res = tc.sweep_uid(feats, order, p)
+    assert "S3" in res.skipped_sessions
+    assert set(res.kept_sessions) == {"S1", "S2", "S4"}
+    assert res.confidence_tier == "review"        # a bridge present
+
+
+def test_sweep_skips_exhausted_drops_trailing():
+    p = tc.CurationParams(max_bridge_gap=1)
+    order = ["S1", "S2", "S3", "S4"]
+    # S3 and S2 both soft-fail -> 2 consecutive skips > max_bridge_gap=1 -> STOP
+    feats = _chain_feats(order)
+    feats["S3"] = _feat("S3", wave=_W, depth=130.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+    feats["S2"] = _feat("S2", wave=_W, depth=130.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+    res = tc.sweep_uid(feats, order, p)
+    assert res.kept_sessions == ["S4"]
+    assert "S3" in res.dropped_sessions and "S2" in res.dropped_sessions
+    assert res.confidence_tier == "suspect"       # span 1
+
+
+def test_compute_tier_short_is_suspect():
+    p = tc.CurationParams()
+    assert tc.compute_tier(["S4"], [], [], p) == "suspect"
