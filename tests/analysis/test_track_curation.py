@@ -83,3 +83,72 @@ def test_extract_curation_feature_missing_waveform_returns_none(tmp_path):
         in_zone_idx=list(range(20)), drift_offset=0.0,
     )
     assert feat is None
+
+
+def _feat(session_name, *, wave, depth, isi, psth_val, n_inzone, n_bins=40):
+    """Build a minimal CurationFeature for score_link tests."""
+    wave = np.asarray(wave, dtype=float)
+    isi = np.asarray(isi, dtype=float)
+    psth = None if psth_val is None else np.full(n_bins, 0.0)
+    psths = {}
+    if psth_val is not None:
+        # a modulated ramp scaled by psth_val so two features correlate or not
+        ramp = np.linspace(0, 1, n_bins) * 10.0
+        psths["baseline_on"] = ramp * psth_val
+    return tc.CurationFeature(
+        session_name=session_name, ks_unit_id=0, stage="Expert",
+        waveform_peak=wave, footprint=np.zeros((1, 1)), footprint_channels=np.array([0]),
+        peak_chan=0, peak_depth_um=depth, peak_depth_corrected_um=depth,
+        baseline_fr_hz=5.0, isi_hist_curation=isi, isi_hist_holdout=isi,
+        inzone_psths=psths, n_inzone_trials=n_inzone,
+    )
+
+
+_W = np.array([0.0, 1.0, 0.0, -1.0, 0.0, 0.5, -0.5, 0.2])
+_ISI = np.linspace(0, 1, 50)
+
+
+def test_score_link_clean_pair_keeps_no_flag():
+    p = tc.CurationParams()
+    a = _feat("S2", wave=_W, depth=100.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+    b = _feat("S1", wave=_W, depth=102.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+    lr = tc.score_link(a, b, a, p, gap_sessions=1)
+    assert lr.decision == "KEEP"
+    assert lr.review_flag is False
+    assert lr.func_evaluable is True
+
+
+def test_score_link_hard_contradiction_stops():
+    p = tc.CurationParams()
+    a = _feat("S2", wave=_W, depth=100.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+    b = _feat("S1", wave=-_W, depth=200.0, isi=_ISI, psth_val=1.0, n_inzone=50)  # flipped wf + 100um jump
+    lr = tc.score_link(a, b, a, p, gap_sessions=1)
+    assert lr.decision == "STOP"
+    assert lr.stop_reason == "hard_contradiction"
+
+
+def test_score_link_soft_depth_warn_skips():
+    p = tc.CurationParams()
+    a = _feat("S2", wave=_W, depth=100.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+    b = _feat("S1", wave=_W, depth=130.0, isi=_ISI, psth_val=1.0, n_inzone=50)  # 30um = depth warn
+    lr = tc.score_link(a, b, a, p, gap_sessions=1)
+    assert lr.decision == "SKIP"
+
+
+def test_score_link_func_conflict_flags_review_but_keeps():
+    p = tc.CurationParams()
+    a = _feat("S2", wave=_W, depth=100.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+    b = _feat("S1", wave=_W, depth=101.0, isi=_ISI, psth_val=-1.0, n_inzone=50)  # anti-correlated PSTH
+    lr = tc.score_link(a, b, a, p, gap_sessions=1)
+    assert lr.decision == "KEEP"
+    assert lr.review_flag is True
+
+
+def test_score_link_func_not_evaluable_when_few_inzone():
+    p = tc.CurationParams()      # min_inzone_trials default 20
+    a = _feat("S2", wave=_W, depth=100.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+    b = _feat("S1", wave=_W, depth=101.0, isi=_ISI, psth_val=-1.0, n_inzone=5)  # too few in-zone
+    lr = tc.score_link(a, b, a, p, gap_sessions=1)
+    assert lr.decision == "KEEP"
+    assert lr.func_evaluable is False
+    assert lr.review_flag is False

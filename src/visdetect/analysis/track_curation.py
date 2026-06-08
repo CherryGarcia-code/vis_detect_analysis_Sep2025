@@ -111,3 +111,106 @@ def extract_curation_feature(session, ks_unit_id: int, session_name: str,
         isi_hist_curation=cur_h, isi_hist_holdout=hold_h,
         inzone_psths=inzone_psths, n_inzone_trials=len(in_zone_set),
     )
+
+
+from visdetect.analysis.tracking_qc import (
+    badge_waveform, badge_depth, badge_isi_hist_corr, badge_func_resp,
+    FUNC_RESP_MIN_PSTH_STD,
+)
+
+MAX_BRIDGE_GAP = 2
+MIN_INZONE_TRIALS = 20
+MIN_TRUSTED_SPAN = 3
+
+
+@dataclass
+class CurationParams:
+    max_bridge_gap: int = MAX_BRIDGE_GAP
+    min_inzone_trials: int = MIN_INZONE_TRIALS
+    min_trusted_span: int = MIN_TRUSTED_SPAN
+    corroborator_ref: str = "rolling"     # "rolling" | "expert"
+
+
+@dataclass
+class LinkResult:
+    anchor_session: str
+    candidate_session: str
+    gap_sessions: int
+    wave_corr: float
+    depth_jump_um: float
+    isi_shape_corr: float
+    func_corr: float
+    func_evaluable: bool
+    n_inzone_trials: int
+    decision: str           # "KEEP" | "SKIP" | "STOP"
+    review_flag: bool
+    stop_reason: str = ""
+
+
+def _pearson(a: Optional[np.ndarray], b: Optional[np.ndarray]) -> float:
+    if a is None or b is None:
+        return float("nan")
+    a = np.asarray(a, dtype=float); b = np.asarray(b, dtype=float)
+    n = min(a.size, b.size)
+    if n < 2:
+        return float("nan")
+    a, b = a[:n], b[:n]
+    if np.isnan(a).any() or np.isnan(b).any():
+        return float("nan")
+    if np.std(a) < 1e-9 or np.std(b) < 1e-9:
+        return float("nan")
+    return float(np.corrcoef(a, b)[0, 1])
+
+
+def _func_corr(ref: CurationFeature, cand: CurationFeature) -> float:
+    """Median pairwise Pearson r over conditions both have modulated PSTHs for."""
+    rs: List[float] = []
+    for key, ref_psth in ref.inzone_psths.items():
+        cand_psth = cand.inzone_psths.get(key)
+        if ref_psth is None or cand_psth is None:
+            continue
+        if (float(np.std(ref_psth)) < FUNC_RESP_MIN_PSTH_STD
+                or float(np.std(cand_psth)) < FUNC_RESP_MIN_PSTH_STD):
+            continue
+        r = _pearson(ref_psth, cand_psth)
+        if np.isfinite(r):
+            rs.append(r)
+    return float(np.median(rs)) if rs else float("nan")
+
+
+def score_link(anchor: CurationFeature, candidate: CurationFeature,
+               corroborator_ref: CurationFeature, params: CurationParams,
+               gap_sessions: int = 1) -> LinkResult:
+    """Decide one cross-session link: biophysical gate + functional corroborator."""
+    wave_corr = _pearson(anchor.waveform_peak, candidate.waveform_peak)
+    depth_jump = abs(anchor.peak_depth_corrected_um
+                     - candidate.peak_depth_corrected_um)
+    isi_corr = _pearson(anchor.isi_hist_curation, candidate.isi_hist_curation)
+
+    w = badge_waveform(wave_corr)
+    d = badge_depth(depth_jump)
+
+    # Functional corroborator (availability-gated).
+    func_evaluable = candidate.n_inzone_trials >= params.min_inzone_trials
+    func_corr = _func_corr(corroborator_ref, candidate) if func_evaluable else float("nan")
+    if func_evaluable and not np.isfinite(func_corr):
+        func_evaluable = False          # no modulated condition -> not evaluable
+
+    base = dict(
+        anchor_session=anchor.session_name,
+        candidate_session=candidate.session_name,
+        gap_sessions=int(gap_sessions),
+        wave_corr=wave_corr, depth_jump_um=depth_jump, isi_shape_corr=isi_corr,
+        func_corr=func_corr, func_evaluable=func_evaluable,
+        n_inzone_trials=candidate.n_inzone_trials,
+    )
+
+    if w == "fail" and d == "fail":
+        return LinkResult(**base, decision="STOP", review_flag=False,
+                          stop_reason="hard_contradiction")
+    if w == "pass" and d == "pass":
+        review = (badge_isi_hist_corr(isi_corr) != "pass")
+        if func_evaluable and badge_func_resp(func_corr) != "pass":
+            review = True
+        return LinkResult(**base, decision="KEEP", review_flag=review)
+    return LinkResult(**base, decision="SKIP", review_flag=False)
