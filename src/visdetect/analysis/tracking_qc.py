@@ -749,7 +749,8 @@ def _trial_indices_for_sizes(session, sizes: Optional[Set[float]]) -> Optional[L
     return out
 
 
-def extract_unit_psths(session, ks_unit_id: int
+def extract_unit_psths(session, ks_unit_id: int,
+                       restrict_trials: Optional[Set[int]] = None,
                         ) -> Dict[str, Tuple[np.ndarray, np.ndarray, int]]:
     """Build PSTHs for all spec conditions for one (session, unit).
 
@@ -764,6 +765,12 @@ def extract_unit_psths(session, ks_unit_id: int
     out: Dict[str, Tuple[np.ndarray, np.ndarray, int]] = {}
     for key, cfg in PSTH_CONDITIONS.items():
         trial_idx = _trial_indices_for_sizes(session, cfg["sizes"])
+        if restrict_trials is not None:
+            allowed = set(int(t) for t in restrict_trials)
+            if trial_idx is None:
+                trial_idx = sorted(allowed)
+            else:
+                trial_idx = [i for i in trial_idx if i in allowed]
         if trial_idx is not None and len(trial_idx) == 0:
             out[key] = (None, None, 0)
             continue
