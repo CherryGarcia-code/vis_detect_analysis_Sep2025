@@ -20,7 +20,7 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from visdetect.core.session import Session, Cluster
-from scipy.stats import poisson as _poisson, fisher_exact as _fisher_exact
+from scipy.stats import poisson as _poisson, fisher_exact as _fisher_exact  # _poisson: poisson_excess_test (Task 2); _fisher_exact: collision_test (Task 5)
 
 
 # ── Constants ──────────────────────────────────────────────────────────
@@ -89,6 +89,19 @@ def _count_in_window(spikes: np.ndarray, pulses: np.ndarray,
 
 def baseline_rate_hz(spike_times, pulse_times,
                      baseline_window_ms: Tuple[float, float] = BASELINE_WINDOW_MS) -> float:
+    """Mean firing rate (Hz) in the pre-pulse baseline window, pooled over pulses.
+
+    Parameters
+    ----------
+    spike_times : array-like of sorted spike times (seconds).
+    pulse_times : array-like of laser pulse onsets (seconds).
+    baseline_window_ms : (start, end) in ms relative to each pulse (both negative).
+
+    Returns
+    -------
+    float : pooled baseline rate; 0.0 if spikes/pulses are empty or the window has
+            non-positive duration.
+    """
     spikes = np.asarray(spike_times, float).ravel()
     pulses = np.asarray(pulse_times, float).ravel()
     if len(spikes) == 0 or len(pulses) == 0:
@@ -103,6 +116,18 @@ def estimate_response_window(spike_times, pulse_times,
                              bin_ms: float = RESP_PSTH_BIN_MS,
                              baseline_window_ms: Tuple[float, float] = BASELINE_WINDOW_MS,
                              half_width_ms: float = RESP_HALFWIDTH_MS) -> ResponseWindow:
+    """Estimate the antidromic response window from the baseline-subtracted PSTH.
+
+    Builds a fine-binned post-pulse PSTH over ``search_ms``, subtracts the expected
+    baseline counts, takes the peak bin as the response latency, and returns a window
+    of +/- ``half_width_ms`` around it (clipped to ``search_ms``). Always returns a
+    window even for noise units (peak of a near-flat curve) -- downstream significance
+    tests are responsible for rejecting non-responders.
+
+    Returns
+    -------
+    ResponseWindow : peak_latency_ms, window_ms, baseline_rate_hz, n_resp_spikes.
+    """
     spikes = np.asarray(spike_times, float).ravel()
     pulses = np.asarray(pulse_times, float).ravel()
     lam_b = baseline_rate_hz(spikes, pulses, baseline_window_ms)
@@ -118,9 +143,9 @@ def estimate_response_window(spike_times, pulse_times,
     bin_s = (s1 - s0) / n_bins
     expected = lam_b * bin_s * len(pulses)
     peak_bin = int(np.argmax(counts - expected))
-    peak_lat = (edges[peak_bin] + edges[peak_bin + 1]) / 2.0 * 1000.0
-    w0 = max(search_ms[0], peak_lat - half_width_ms)
-    w1 = min(search_ms[1], peak_lat + half_width_ms)
+    peak_lat = float((edges[peak_bin] + edges[peak_bin + 1]) / 2.0 * 1000.0)
+    w0 = float(max(search_ms[0], peak_lat - half_width_ms))
+    w1 = float(min(search_ms[1], peak_lat + half_width_ms))
     n_resp = _count_in_window(spikes, pulses, (w0, w1))
     return ResponseWindow(peak_lat, (w0, w1), lam_b, n_resp)
 
