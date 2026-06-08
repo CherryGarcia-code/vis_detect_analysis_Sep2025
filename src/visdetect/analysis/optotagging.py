@@ -20,12 +20,13 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from visdetect.core.session import Session, Cluster
+from scipy.stats import poisson as _poisson, fisher_exact as _fisher_exact
 
 
 # ── Constants ──────────────────────────────────────────────────────────
 LASER_KEY = "Laser"
 RESPONSE_WINDOW_MS = (0.0, 10.0)   # post-pulse window for spike detection
-BASELINE_WINDOW_MS = (-50.0, 0.0)  # pre-pulse baseline for SALT jittering
+BASELINE_WINDOW_MS = (-50.0, -5.0) # pre-pulse baseline for rate estimation (-5 guard)
 SALT_N_JITTER = 500                # number of jittered baselines for SALT
 SALT_ALPHA = 0.01                  # significance threshold
 SALT_BIN_MS = 0.5                  # histogram bin width for SALT test
@@ -35,6 +36,22 @@ EXPECTED_PULSES_PER_BLOCK = 501
 MAX_LATENCY_MS = 8.0
 MAX_JITTER_MS = 3.5
 MIN_RELIABILITY = 0.1
+
+# ── New constants (antidromic redesign) ────────────────────────────────
+SALT_BASELINE_WINDOW_MS = (-250.0, -5.0)  # canonical-SALT baseline period
+RESPONSE_SEARCH_MS = (1.0, 10.0)          # antidromic latency search range
+RESP_PSTH_BIN_MS = 0.1                    # fine PSTH bin for peak finding
+RESP_HALFWIDTH_MS = 0.75                  # response-window half-width about the peak
+COLLISION_REFRACTORY_MS = 1.0             # added to latency for the collision window
+MIN_COLLISION_EXPECTED = 10               # min collision-eligible pulses to test
+MIN_COLLISION_FREE = 30                   # min collision-free pulses to test
+MAX_SALT_BASELINE_WINDOWS = 50            # cap baseline windows (cost bound)
+# Tier thresholds
+CANDIDATE_SALT_ALPHA = 0.05
+CANDIDATE_POISSON_ALPHA = 0.01
+CANDIDATE_MIN_EXCESS_REL = 0.02
+STRICT_SALT_ALPHA = 0.01
+STRICT_MAX_JITTER_MS = 1.0
 
 
 @dataclass
@@ -49,6 +66,63 @@ class OptoMetrics:
     salt_p: float                # SALT p-value
     n_pulses: int
     first_spike_latencies: np.ndarray = field(repr=False, default_factory=lambda: np.array([]))
+
+
+@dataclass
+class ResponseWindow:
+    peak_latency_ms: float
+    window_ms: Tuple[float, float]
+    baseline_rate_hz: float
+    n_resp_spikes: int
+
+
+def _count_in_window(spikes: np.ndarray, pulses: np.ndarray,
+                     window_ms: Tuple[float, float]) -> int:
+    a, b = window_ms[0] / 1000.0, window_ms[1] / 1000.0
+    tot = 0
+    for p in pulses:
+        i0 = np.searchsorted(spikes, p + a)
+        i1 = np.searchsorted(spikes, p + b)
+        tot += i1 - i0
+    return int(tot)
+
+
+def baseline_rate_hz(spike_times, pulse_times,
+                     baseline_window_ms: Tuple[float, float] = BASELINE_WINDOW_MS) -> float:
+    spikes = np.asarray(spike_times, float).ravel()
+    pulses = np.asarray(pulse_times, float).ravel()
+    if len(spikes) == 0 or len(pulses) == 0:
+        return 0.0
+    dur = (baseline_window_ms[1] - baseline_window_ms[0]) / 1000.0
+    total = _count_in_window(spikes, pulses, baseline_window_ms)
+    return total / (len(pulses) * dur) if dur > 0 else 0.0
+
+
+def estimate_response_window(spike_times, pulse_times,
+                             search_ms: Tuple[float, float] = RESPONSE_SEARCH_MS,
+                             bin_ms: float = RESP_PSTH_BIN_MS,
+                             baseline_window_ms: Tuple[float, float] = BASELINE_WINDOW_MS,
+                             half_width_ms: float = RESP_HALFWIDTH_MS) -> ResponseWindow:
+    spikes = np.asarray(spike_times, float).ravel()
+    pulses = np.asarray(pulse_times, float).ravel()
+    lam_b = baseline_rate_hz(spikes, pulses, baseline_window_ms)
+    s0, s1 = search_ms[0] / 1000.0, search_ms[1] / 1000.0
+    n_bins = max(1, int(round((s1 - s0) * 1000.0 / bin_ms)))
+    edges = np.linspace(s0, s1, n_bins + 1)
+    counts = np.zeros(n_bins)
+    for p in pulses:
+        i0 = np.searchsorted(spikes, p + s0)
+        i1 = np.searchsorted(spikes, p + s1)
+        if i1 > i0:
+            counts += np.histogram(spikes[i0:i1] - p, bins=edges)[0]
+    bin_s = (s1 - s0) / n_bins
+    expected = lam_b * bin_s * len(pulses)
+    peak_bin = int(np.argmax(counts - expected))
+    peak_lat = (edges[peak_bin] + edges[peak_bin + 1]) / 2.0 * 1000.0
+    w0 = max(search_ms[0], peak_lat - half_width_ms)
+    w1 = min(search_ms[1], peak_lat + half_width_ms)
+    n_resp = _count_in_window(spikes, pulses, (w0, w1))
+    return ResponseWindow(peak_lat, (w0, w1), lam_b, n_resp)
 
 
 # ── Helper: split laser blocks ────────────────────────────────────────
