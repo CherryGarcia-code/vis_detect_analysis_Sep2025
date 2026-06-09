@@ -150,6 +150,27 @@ def estimate_response_window(spike_times, pulse_times,
     return ResponseWindow(peak_lat, (w0, w1), lam_b, n_resp)
 
 
+def poisson_excess_test(spike_times, pulse_times,
+                        window_ms: Tuple[float, float],
+                        baseline_rate_hz_val: float) -> float:
+    """Upper-tail Poisson p-value that response-window spikes exceed baseline.
+
+    k_obs = total spikes in ``window_ms`` across pulses; expected count
+    lam = baseline_rate * |window| * n_pulses; returns P(X >= k_obs) under Poisson(lam).
+    Returns 1.0 if no pulses; if lam <= 0, returns 0.0 when k_obs > 0 else 1.0.
+    """
+    spikes = np.asarray(spike_times, float).ravel()
+    pulses = np.asarray(pulse_times, float).ravel()
+    if len(pulses) == 0:
+        return 1.0
+    k_obs = _count_in_window(spikes, pulses, window_ms)
+    win_dur = (window_ms[1] - window_ms[0]) / 1000.0
+    lam = baseline_rate_hz_val * win_dur * len(pulses)
+    if lam <= 0:
+        return 0.0 if k_obs > 0 else 1.0
+    return float(_poisson.sf(k_obs - 1, lam))  # P(X >= k_obs)
+
+
 # ── Helper: split laser blocks ────────────────────────────────────────
 def split_laser_blocks(
     pulse_times: np.ndarray,

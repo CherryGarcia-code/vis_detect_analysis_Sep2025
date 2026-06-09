@@ -52,3 +52,20 @@ def test_estimate_response_window_finds_peak():
     assert abs(rw.peak_latency_ms - 4.0) < 0.6
     assert rw.window_ms[0] < rw.peak_latency_ms < rw.window_ms[1]
     assert 1.0 < rw.baseline_rate_hz < 5.0
+
+
+def test_poisson_excess_test_detects_response():
+    pulses = _pulses(n=300)
+    sp = _antidromic_unit(pulses, latency_ms=4.0, base_rate=3.0,
+                          collision=False, seed=3)
+    rw = ot.estimate_response_window(sp, pulses)
+    p = ot.poisson_excess_test(sp, pulses, rw.window_ms, rw.baseline_rate_hz)
+    assert p < 1e-3
+
+
+def test_poisson_excess_test_null_is_not_significant():
+    pulses = _pulses(n=300)
+    sp = _antidromic_unit(pulses, base_rate=5.0, respond=False, seed=4)
+    rw = ot.estimate_response_window(sp, pulses)
+    p = ot.poisson_excess_test(sp, pulses, rw.window_ms, rw.baseline_rate_hz)
+    assert p > 0.01
