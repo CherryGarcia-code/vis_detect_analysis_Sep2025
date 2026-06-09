@@ -1,0 +1,22 @@
+{
+  "session": "13082025",
+  "schema_version": 2,
+  "frame_rate_fps": 50.05005005126319,
+  "n_trials": 483,
+  "anchors": [
+    {
+      "trial_index": 0,
+      "nidaq_baseline_on_s": 38.032039421515684,
+      "video_frame_idx": 2256,
+      "video_time_s": 45.087605,
+      "clicked_at": "2026-06-09T16:14:14"
+    },
+    {
+      "trial_index": 482,
+      "nidaq_baseline_on_s": 7334.197787259751,
+      "video_frame_idx": 367435,
+      "video_time_s": 7343.611273,
+      "clicked_at": "2026-06-09T16:18:06"
+    }
+  ]
+}
