@@ -9,43 +9,46 @@ Kvitsiani et al. 2013) with Jensen–Shannon divergence.  Additional
 criteria: latency < 8 ms, jitter < 3.5 ms, reliability >= 0.1.
 
 Produces:
-  fig43a_optotagging_overview.png
-    Panel A: Example raster + PSTH for a tagged D1 and D2 unit
-    Panel B: First-spike latency distributions (GPe vs SNr responsive)
-    Panel C: Summary counts per session (stacked bar: tagged / total)
-    Panel D: Tagged fractions by learning stage
+  fig43a_optotagging_distributions.png
+    Histograms of peak latency and excess jitter for candidate/high-confidence
+    tagged units, split by fiber (GPe = D2, SNr = D1).
 
-  Caches: cache/optotagging_results.csv  (one row per unit × fiber)
+  fig43b_yield_by_stage_tier.png
+    Grouped bar chart of D1 / D2 candidate vs high-confidence unit counts
+    per learning stage (Learning / Expert).
+
+  fig43c_old_vs_new_and_sweep.png
+    Left: old-pipeline vs new-candidate vs new-high-confidence yield bars.
+    Right: yield as a function of strict jitter-cap threshold sweep.
+
+  Caches:
+    cache/optotagging_results.csv   (one row per unit × fiber)
+    cache/optotagging_unit_tags.csv (one row per unique unit: pathway + tier)
 """
 
 import argparse
 import os
-import sys
 import gc
 
 
 import numpy as np
 import pandas as pd
-from scipy.stats import fisher_exact
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 
-from visdetect.suite.config import STAGE_ORDER, STAGE_COLORS, CACHE_DIR
+from visdetect.suite.config import STAGE_ORDER, CACHE_DIR
 from visdetect.suite.loader import load_staging_manifest, load_session, load_waveform_labels
 from visdetect.analysis.utils import get_good_cluster_ids
 from visdetect.suite.plotting import setup_style, save_figure
 
 from visdetect.analysis.optotagging import (
     OptoTagger, OptoMetrics,
-    SALT_ALPHA, RESPONSE_WINDOW_MS,
-    MAX_LATENCY_MS, MAX_JITTER_MS, MIN_RELIABILITY,
+    MAX_LATENCY_MS, MAX_JITTER_MS,
     STRICT_SALT_ALPHA, STRICT_MAX_JITTER_MS,
-    _first_spike_latencies,
+    fiber_tier, classify_unit, is_spn_plausible_waveform,
 )
-from visdetect.analysis.align import align_spikes_to_events
 
 setup_style()
 
@@ -104,125 +107,16 @@ def _run_session(sname, stage, salt_n_jitter):
             "n_collision_expected": m.n_collision_expected,
         })
 
-    n_tagged = sum(1 for r in rows if r["salt_p"] < 0.05)
+    n_candidate = sum(1 for r in rows if r["salt_p"] < 0.05)
     del sess
     gc.collect()
-    return sname, stage, rows, f"{len(rows)} units, {n_tagged} tagged"
+    return sname, stage, rows, f"{len(rows)} units, {n_candidate} candidate"
 
 
 def _process_session_worker(args):
     """Module-level worker for ProcessPoolExecutor (must be picklable)."""
     sname, stage, salt_n_jitter = args
     return _run_session(sname, stage, salt_n_jitter)
-
-
-# ── Plotting helpers ──────────────────────────────────────────────────
-def _plot_raster_psth(ax_raster, ax_psth, spike_times, pulse_times, fiber,
-                      window_s=(-0.01, 0.02), bin_ms=0.25):
-    """Draw raster + PSTH for one unit vs one fiber's pulses."""
-    win = window_s
-    bin_s = bin_ms / 1000.0
-
-    # Raster
-    for i, p in enumerate(pulse_times):
-        rel = spike_times - p
-        in_win = rel[(rel >= win[0]) & (rel <= win[1])]
-        ax_raster.vlines(in_win * 1000, i, i + 1, linewidth=0.3, color="k")
-    ax_raster.set_ylabel("Pulse #")
-    ax_raster.set_xlim(win[0] * 1000, win[1] * 1000)
-    ax_raster.set_ylim(0, len(pulse_times))
-    ax_raster.axvline(0, color="deepskyblue", linewidth=1, alpha=0.7, label="Laser")
-    ax_raster.set_title(f"{fiber} stimulation", fontsize=10)
-
-    # PSTH
-    mat, bc = align_spikes_to_events(spike_times, list(pulse_times),
-                                     window=win, bin_size=bin_s)
-    mean_fr = mat.mean(axis=0) if mat.shape[0] > 0 else np.zeros_like(bc)
-    ax_psth.bar(bc * 1000, mean_fr, width=bin_ms, color=FIBER_COLORS[fiber],
-                alpha=0.8, edgecolor="none")
-    ax_psth.axvline(0, color="deepskyblue", linewidth=1, alpha=0.7)
-    ax_psth.set_xlabel("Time from pulse (ms)")
-    ax_psth.set_ylabel("FR (Hz)")
-    ax_psth.set_xlim(win[0] * 1000, win[1] * 1000)
-
-
-def _plot_latency_distributions(ax, df_resp):
-    """Histogram of first-spike latencies for GPe vs SNr responsive units."""
-    bins = np.linspace(0, 10, 41)
-    for fiber, color in FIBER_COLORS.items():
-        sub = df_resp[df_resp["fiber"] == fiber]
-        if sub.empty:
-            continue
-        ax.hist(sub["latency_ms"].dropna(), bins=bins, alpha=0.6,
-                color=color, label=f"{fiber} (n={len(sub)})", edgecolor="white")
-    ax.set_xlabel("First-spike latency (ms)")
-    ax.set_ylabel("Count")
-    ax.legend(fontsize=8)
-    ax.set_title("Latency of tagged units")
-
-
-def _plot_session_counts(ax, df_all, manifest):
-    """Stacked bar: tagged vs untagged units per session."""
-    sessions = manifest["session_name"].astype(int).values
-    has_laser = df_all["session_name"].unique()
-
-    x_labels, n_tagged_gpe, n_tagged_snr, n_total = [], [], [], []
-    for i, sn in enumerate(sessions):
-        sub = df_all[df_all["session_name"] == sn]
-        if sub.empty:
-            continue
-        n_units = sub[sub["fiber"] == "GPe"]["cluster_id"].nunique()
-        if n_units == 0:
-            n_units = sub[sub["fiber"] == "SNr"]["cluster_id"].nunique()
-        n_gpe = sub[(sub["fiber"] == "GPe") & sub["is_responsive"]].shape[0]
-        n_snr = sub[(sub["fiber"] == "SNr") & sub["is_responsive"]].shape[0]
-        x_labels.append(str(sn))
-        n_tagged_gpe.append(n_gpe)
-        n_tagged_snr.append(n_snr)
-        n_total.append(n_units)
-
-    x = np.arange(len(x_labels))
-    n_untagged = [t - g - s for t, g, s in zip(n_total, n_tagged_gpe, n_tagged_snr)]
-    ax.bar(x, n_tagged_gpe, color=FIBER_COLORS["GPe"], label="D2-tagged (GPe)")
-    ax.bar(x, n_tagged_snr, bottom=n_tagged_gpe, color=FIBER_COLORS["SNr"],
-           label="D1-tagged (SNr)")
-    ax.bar(x, n_untagged,
-           bottom=[g + s for g, s in zip(n_tagged_gpe, n_tagged_snr)],
-           color="#cccccc", label="Untagged")
-    ax.set_xticks(x)
-    ax.set_xticklabels(x_labels, rotation=90, fontsize=6)
-    ax.set_ylabel("Units")
-    ax.set_title("Tagged units per session")
-    ax.legend(fontsize=7, loc="upper right")
-
-
-def _plot_stage_fractions(ax, df_all):
-    """Fraction of tagged units by stage for each fiber."""
-    bar_width = 0.35
-    stages_present = [s for s in STAGE_ORDER if s in df_all["stage"].values]
-    x = np.arange(len(stages_present))
-
-    for fi, (fiber, color) in enumerate(FIBER_COLORS.items()):
-        fracs, ns = [], []
-        for stage in stages_present:
-            sub = df_all[(df_all["stage"] == stage) & (df_all["fiber"] == fiber)]
-            n = len(sub)
-            n_resp = sub["is_responsive"].sum()
-            fracs.append(n_resp / n if n > 0 else 0)
-            ns.append(n)
-        offset = (fi - 0.5) * bar_width
-        bars = ax.bar(x + offset, fracs, bar_width, color=color, alpha=0.8,
-                      label=fiber)
-        for xi, (f, n) in enumerate(zip(fracs, ns)):
-            ax.text(xi + offset, f + 0.01, f"{int(f*100)}%\n(n={n})",
-                    ha="center", va="bottom", fontsize=7)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(stages_present)
-    ax.set_ylabel("Fraction tagged")
-    ax.set_title("Optotagging yield by stage")
-    ax.legend(fontsize=8)
-    ax.set_ylim(0, ax.get_ylim()[1] * 1.3)
 
 
 # ── Main ──────────────────────────────────────────────────────────────
@@ -250,6 +144,13 @@ def main():
     if os.path.exists(cache_path) and not args.force:
         print(f"  Loading cached results from {cache_path}")
         df_all = pd.read_csv(cache_path)
+        _required = {"win_lo", "win_hi", "collision_status", "excess_jitter_ms",
+                     "peak_latency_ms", "excess_reliability", "poisson_p"}
+        missing = _required - set(df_all.columns)
+        if missing:
+            raise SystemExit(
+                f"  Cached {cache_path} is from an old schema (missing {sorted(missing)}). "
+                "Re-run with --force to rebuild.")
     else:
         print(f"  Running SALT test (n_jitter={args.n_jitter}) ...")
         tasks = [
@@ -279,10 +180,6 @@ def main():
         df_all = pd.DataFrame(all_rows)
         df_all.to_csv(cache_path, index=False)
         print(f"  Saved {len(df_all)} rows to {cache_path}")
-
-    from visdetect.analysis.optotagging import (
-        OptoMetrics, fiber_tier, classify_unit, is_spn_plausible_waveform,
-    )
 
     # ── waveform labels (optional) ─────────────────────────────────────
     try:
@@ -341,10 +238,7 @@ def main():
     n_untestable = (df_all.collision_status == "untestable").mean()
     print(f"    Collision-untestable fraction (all unit x fiber): {n_untestable:.2f}")
 
-    df_resp = units[units.pathway.notna()]  # for downstream plotting compatibility
-
     print("\n  Generating figures ...")
-    setup_style()
 
     # Panel set 1: latency + excess-jitter distributions for tagged units
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
@@ -384,8 +278,12 @@ def main():
     # Panel set 3: old-vs-new comparison + jitter-threshold sweep
     fig3, axes3 = plt.subplots(1, 2, figsize=(12, 4.5))
     old = {"D2": int(((df_all.fiber == "GPe") & (df_all.salt_p < 0.01)
+                      & (df_all.latency_ms < MAX_LATENCY_MS)
+                      & (df_all.jitter_ms < MAX_JITTER_MS)
                       & (df_all.reliability >= 0.1)).sum()),
            "D1": int(((df_all.fiber == "SNr") & (df_all.salt_p < 0.01)
+                      & (df_all.latency_ms < MAX_LATENCY_MS)
+                      & (df_all.jitter_ms < MAX_JITTER_MS)
                       & (df_all.reliability >= 0.1)).sum())}
     new_cand = {p: int((units.pathway == p).sum()) for p in ["D1", "D2"]}
     new_hc = {p: int(((units.pathway == p) & (units.tier == "high_confidence")).sum())
