@@ -106,8 +106,10 @@ def test_excess_jitter_nan_when_no_response():
 
 def test_collision_test_pass_for_true_antidromic():
     pulses = _pulses(n=501)
+    # base_rate=10 Hz -> ~25 collision-expected pulses (>=2x the MIN floor of 10),
+    # keeping the testability margin safe against fixture/seed changes.
     sp = _antidromic_unit(pulses, latency_ms=4.0, jitter_ms=0.2,
-                          base_rate=5.0, collision=True, seed=9)
+                          base_rate=10.0, collision=True, seed=9)
     rw = ot.estimate_response_window(sp, pulses)
     cr = ot.collision_test(sp, pulses, rw.peak_latency_ms, rw.window_ms)
     assert cr.status == "pass"
@@ -119,10 +121,12 @@ def test_collision_test_pass_for_true_antidromic():
 def test_collision_test_fail_for_synaptic_response():
     pulses = _pulses(n=501)
     sp = _antidromic_unit(pulses, latency_ms=4.0, jitter_ms=0.2,
-                          base_rate=5.0, collision=False, seed=10)
+                          base_rate=10.0, collision=False, seed=10)
     rw = ot.estimate_response_window(sp, pulses)
     cr = ot.collision_test(sp, pulses, rw.peak_latency_ms, rw.window_ms)
     assert cr.status == "fail"
+    # guard against a silent "untestable" masquerading as a genuine fail
+    assert cr.n_expected >= ot.MIN_COLLISION_EXPECTED
 
 
 def test_collision_test_untestable_when_too_few_eligible():

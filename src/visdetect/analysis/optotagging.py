@@ -11,9 +11,15 @@ Kolmogorov–Smirnov-style test on spike-count histograms.
 
 Functions
 ---------
-split_laser_blocks   Separate the two stimulation blocks (GPe, SNr).
-salt_test            Gold-standard SALT significance test.
-OptoTagger           Per-session analysis class.
+split_laser_blocks        Separate the two stimulation blocks (GPe, SNr).
+salt_test                 Gold-standard SALT significance test.
+baseline_rate_hz          Pooled pre-pulse baseline firing rate.
+estimate_response_window  Find the antidromic response latency/window (ResponseWindow).
+excess_reliability        Baseline-corrected response reliability.
+excess_jitter             First-spike-latency jitter (ms) within the response window.
+poisson_excess_test       Upper-tail Poisson p-value for response-window excess.
+collision_test            Offline antidromic confirmation via collision suppression (CollisionResult).
+OptoTagger                Per-session analysis class.
 """
 
 import numpy as np
