@@ -21,6 +21,9 @@ excess_reliability        Baseline-corrected response reliability.
 excess_jitter             First-spike-latency jitter (ms) within the response window.
 poisson_excess_test       Upper-tail Poisson p-value for response-window excess.
 collision_test            Offline antidromic confirmation via collision suppression (CollisionResult).
+is_spn_plausible_waveform Waveform sanity check (flags fast-spiking/narrow units).
+fiber_tier                Classify one (unit, fiber) into none/candidate/high_confidence.
+classify_unit             Combine GPe+SNr fiber tiers into a D1/D2 UnitTag (bridging logic).
 OptoTagger                Per-session analysis class.
 """
 
@@ -473,11 +476,19 @@ def classify_unit(gpe: Optional[OptoMetrics], snr: Optional[OptoMetrics],
     Returns
     -------
     UnitTag
-        Pathway ('D1', 'D2', or None), the best tier, and per-fiber tier strings.
+        Pathway ('D1', 'D2', or None), the tier of the DETERMINING fiber (SNr if D1,
+        GPe if D2 -- not a max across fibers), and both per-fiber tier strings.
+
+    Raises
+    ------
+    ValueError
+        If both ``gpe`` and ``snr`` are None (nothing to classify).
     """
+    if gpe is None and snr is None:
+        raise ValueError("classify_unit: at least one of gpe or snr must be provided")
     gt = fiber_tier(gpe, waveform_ok=waveform_ok, **tier_kwargs) if gpe is not None else "none"
     st = fiber_tier(snr, waveform_ok=waveform_ok, **tier_kwargs) if snr is not None else "none"
-    cid = (gpe or snr).cluster_id
+    cid = (gpe if gpe is not None else snr).cluster_id
     if st != "none":                       # SNr-tagged -> D1 (specific; overrides GPe)
         return UnitTag(cid, "D1", st, gt, st, "SNr")
     if gt != "none":                       # GPe-only -> D2

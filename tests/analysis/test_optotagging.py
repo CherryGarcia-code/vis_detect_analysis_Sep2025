@@ -214,8 +214,14 @@ def test_classify_unit_bridging_logic():
     assert ot.classify_unit(g, None).pathway == "D2"        # GPe only
     assert ot.classify_unit(None, s).pathway == "D1"        # SNr only
     assert ot.classify_unit(g, s).pathway == "D1"           # both -> D1 (bridging)
-    none_m = _metric(salt_p=0.9, poisson_p=0.9)
-    assert ot.classify_unit(none_m, none_m).pathway is None
+    none_g = _metric(salt_p=0.9, poisson_p=0.9, fiber="GPe")
+    none_s = _metric(salt_p=0.9, poisson_p=0.9, fiber="SNr")
+    assert ot.classify_unit(none_g, none_s).pathway is None
+
+
+def test_classify_unit_raises_when_both_none():
+    with pytest.raises(ValueError):
+        ot.classify_unit(None, None)
 
 
 def test_is_spn_plausible_waveform():
