@@ -36,6 +36,55 @@ Among the **186 candidate-or-better** fiber-responses:
 
 **~90% of short-latency, SALT/Poisson-significant responses FAIL the collision test** — i.e. they are **synaptic (orthodromic), not antidromic**. Stimulating D1/D2 terminal fields in GPe/SNr drives mostly *trans-synaptic* striatal activity rather than back-propagating somatic spikes. This is the scientifically correct, conservative result and explains the gap between the permissive count (162) and the gold-standard count (3). It is consistent with the proposal-progress note of "mixed optotagging yield."
 
+## Plain-language primer: antidromic vs synaptic, and the collision test
+
+**The setup.** D1/D2 spiny projection neurons (SPNs) have their cell bodies in the
+striatum (where the probe records) but send their axons far away — D1 → SNr, D2 → GPe. The
+light fiber sits over the *target* (GPe/SNr), and the opsin (ChR2) is present all along the
+membrane, including the axon terminals.
+
+**What we want — an antidromic spike.** Flashing the terminal makes it fire. A spike can
+travel both ways along an axon; the useful direction is *backwards*, up the axon to the soma
+in the striatum. If the probe sees that soma fire right after the flash, it proves the cell's
+axon goes to the stimulated site (e.g. SNr → it's a D1). This is a one-cell event with a
+rock-steady, very short latency.
+
+**The trap — synaptic ("trans-synaptic") responses.** The lit terminals also do their normal
+job: release neurotransmitter onto the local GPe/SNr circuit. The basal ganglia is a tightly
+wired loop and the striatum is densely interconnected, so the flash stirs up the network and
+that activity comes *back* to the striatum through other neurons, a few synapses later. So a
+striatal cell can fire shortly after the flash either (A) because its *own* axon was lit
+(antidromic, a real tag) or (B) because *other* cells poked it (synaptic, a false positive —
+this cell's axon may not even go there). Both look like a short-latency response, so a naive
+test — and even SALT — cannot tell them apart.
+
+**The collision test — single-track-railway logic.** An axon can't carry two spikes through
+each other; if two action potentials travel toward each other they collide and both vanish
+(like two trains on a one-track line). We exploit the neuron's *own* spontaneous spikes
+(which start at the soma and travel down the axon) as the second train:
+
+- On pulses with **no** spontaneous spike just before → the antidromic spike has a clear track
+  home → response **present** (this is the positive control).
+- On pulses **with** a spontaneous spike just before → for a *true antidromic* cell the two
+  collide and the response **disappears**; for a *synaptic* response it shows up anyway
+  (synapses don't care what the cell just did).
+
+We split the pulses into these two groups and test whether the response is *suppressed* when a
+spontaneous spike preceded the flash. **Result: 167 of 186 candidates fired regardless →
+synaptic, not antidromic.** Only a handful show genuine collision suppression.
+
+**Why it needs spontaneous spikes, and the "untestable" bucket.** We don't *send* spontaneous
+spikes — they occur on their own at the cell's baseline firing rate, and we just observe which
+pulses happened to be preceded by one. The test is a *comparison*, so it needs enough pulses
+in **both** groups. A high-firing cell has spontaneous spikes before many pulses (testable); a
+quiet ~1 Hz SPN has them before only ~2–3 of 501 pulses (**too few → "untestable"**, 30% of
+unit×fiber here). That is why the high-confidence tier is biased toward higher-firing cells.
+Collision is still the criterion we rely on because it is the *only* test in this dataset that
+separates antidromic from synaptic — short latency, low jitter, and SALT significance are
+necessary but not sufficient (synaptic responses can have them too). The textbook alternative,
+high-frequency following, needs high-frequency pulse trains, which this single-pulse protocol
+does not have.
+
 ## Why D2 high-confidence = 0 (bridging interaction)
 
 2 GPe fiber-responses reach the strict gate, but `classify_unit` assigns pathway by bridging logic (SNr-tag → D1, overriding GPe, since only D1 projects to SNr) and reports the **determining fiber's** tier. Those 2 units also have an SNr response at *candidate* quality, so they aggregate to **D1/candidate**, not D2/high-confidence. Hence 3 high-confidence units, all D1.
