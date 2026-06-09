@@ -58,6 +58,7 @@ notebooks/png_output/
 notebooks/aggregated/
 notebooks/batch_outputs/
 group_meeting_*/
+figs/
 
 # Runtime artifacts
 .ipynb_checkpoints/
