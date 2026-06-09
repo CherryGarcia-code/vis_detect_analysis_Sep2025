@@ -76,6 +76,17 @@ class ResponseWindow:
     n_resp_spikes: int
 
 
+@dataclass
+class CollisionResult:
+    status: str               # 'pass' | 'fail' | 'untestable'
+    suppression_index: float
+    p_free: float
+    p_expected: float
+    n_free: int
+    n_expected: int
+    fisher_p: float
+
+
 def _count_in_window(spikes: np.ndarray, pulses: np.ndarray,
                      window_ms: Tuple[float, float]) -> int:
     a, b = window_ms[0] / 1000.0, window_ms[1] / 1000.0
@@ -263,6 +274,84 @@ def poisson_excess_test(spike_times, pulse_times,
     if lam <= 0:
         return 0.0 if k_obs > 0 else 1.0
     return float(_poisson.sf(k_obs - 1, lam))  # P(X >= k_obs)
+
+
+def collision_test(spike_times, pulse_times, peak_latency_ms: float,
+                   window_ms: Tuple[float, float],
+                   refractory_ms: float = COLLISION_REFRACTORY_MS,
+                   min_expected: int = MIN_COLLISION_EXPECTED,
+                   min_free: int = MIN_COLLISION_FREE,
+                   alpha: float = 0.05) -> CollisionResult:
+    """Offline collision test for antidromic confirmation.
+
+    Partitions pulses into collision-expected (a spontaneous spike fell within
+    ``peak_latency_ms + refractory_ms`` ms before the pulse) and collision-free,
+    then tests whether the response proportion is significantly higher on
+    collision-free pulses using a one-sided Fisher exact test.
+
+    A true antidromic spike will be annihilated by a spontaneous spike that
+    collides with it head-on, so the response rate should be substantially
+    suppressed on collision-expected pulses.
+
+    Parameters
+    ----------
+    spike_times : array-like
+        Sorted spike times (seconds).
+    pulse_times : array-like
+        Laser pulse onset times (seconds).
+    peak_latency_ms : float
+        Estimated antidromic latency (ms); used to compute the collision window
+        ``(peak_latency_ms + refractory_ms) / 1000`` s before each pulse.
+    window_ms : (start, end)
+        Response window in ms relative to each pulse (from ``estimate_response_window``).
+    refractory_ms : float
+        Refractory period added to the peak latency for the collision window.
+    min_expected : int
+        Minimum collision-expected pulses required; returns ``"untestable"`` if fewer.
+    min_free : int
+        Minimum collision-free pulses required; returns ``"untestable"`` if fewer.
+    alpha : float
+        Significance threshold for the Fisher exact test.
+
+    Returns
+    -------
+    CollisionResult
+        status: ``'pass'`` if collision significantly suppresses the response,
+        ``'fail'`` if not, ``'untestable'`` if too few eligible pulses in either group.
+        suppression_index = (p_free - p_expected) / p_free.
+        p_free / p_expected: response proportions in each group.
+        n_free / n_expected: pulse counts in each group.
+        fisher_p: one-sided Fisher exact p-value (``nan`` when untestable).
+    """
+    spikes = np.asarray(spike_times, float).ravel()
+    pulses = np.asarray(pulse_times, float).ravel()
+    cw = (peak_latency_ms + refractory_ms) / 1000.0
+    a, b = window_ms[0] / 1000.0, window_ms[1] / 1000.0
+    resp_free = n_free = resp_exp = n_exp = 0
+    for p in pulses:
+        j0 = np.searchsorted(spikes, p - cw)
+        j1 = np.searchsorted(spikes, p)
+        has_pre = (j1 - j0) > 0
+        i0 = np.searchsorted(spikes, p + a)
+        i1 = np.searchsorted(spikes, p + b)
+        has_resp = (i1 - i0) > 0
+        if has_pre:
+            n_exp += 1
+            resp_exp += int(has_resp)
+        else:
+            n_free += 1
+            resp_free += int(has_resp)
+    p_free = resp_free / n_free if n_free > 0 else float("nan")
+    p_exp = resp_exp / n_exp if n_exp > 0 else float("nan")
+    supp = ((p_free - p_exp) / p_free
+            if (n_free > 0 and n_exp > 0 and p_free > 0) else float("nan"))
+    if n_exp < min_expected or n_free < min_free:
+        return CollisionResult("untestable", supp, p_free, p_exp,
+                               n_free, n_exp, float("nan"))
+    table = [[resp_free, n_free - resp_free], [resp_exp, n_exp - resp_exp]]
+    _, fp = _fisher_exact(table, alternative="greater")
+    status = "pass" if (fp < alpha and p_free > p_exp) else "fail"
+    return CollisionResult(status, supp, p_free, p_exp, n_free, n_exp, float(fp))
 
 
 # ── Helper: split laser blocks ────────────────────────────────────────
