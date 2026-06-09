@@ -42,6 +42,7 @@ from visdetect.analysis.optotagging import (
     OptoTagger, OptoMetrics,
     SALT_ALPHA, RESPONSE_WINDOW_MS,
     MAX_LATENCY_MS, MAX_JITTER_MS, MIN_RELIABILITY,
+    STRICT_SALT_ALPHA, STRICT_MAX_JITTER_MS,
     _first_spike_latencies,
 )
 from visdetect.analysis.align import align_spikes_to_events
@@ -85,19 +86,25 @@ def _run_session(sname, stage, salt_n_jitter):
     rows = []
     for m in results:
         rows.append({
-            "session_name": int(sname),
-            "stage": stage,
-            "cluster_id": m.cluster_id,
-            "fiber": m.fiber,
-            "is_responsive": m.is_responsive,
-            "latency_ms": m.latency_ms,
-            "jitter_ms": m.jitter_ms,
-            "reliability": m.reliability,
-            "salt_p": m.salt_p,
-            "n_pulses": m.n_pulses,
+            "session_name": int(sname), "stage": stage,
+            "cluster_id": m.cluster_id, "fiber": m.fiber, "n_pulses": m.n_pulses,
+            # legacy raw
+            "latency_ms": m.latency_ms, "jitter_ms": m.jitter_ms,
+            "reliability": m.reliability, "salt_p": m.salt_p,
+            # enriched
+            "baseline_rate_hz": m.baseline_rate_hz,
+            "win_lo": m.response_window_ms[0], "win_hi": m.response_window_ms[1],
+            "peak_latency_ms": m.peak_latency_ms,
+            "excess_reliability": m.excess_reliability,
+            "excess_jitter_ms": m.excess_jitter_ms,
+            "poisson_p": m.poisson_p,
+            "collision_status": m.collision_status,
+            "collision_suppression_index": m.collision_suppression_index,
+            "n_collision_free": m.n_collision_free,
+            "n_collision_expected": m.n_collision_expected,
         })
 
-    n_tagged = sum(1 for r in rows if r["is_responsive"])
+    n_tagged = sum(1 for r in rows if r["salt_p"] < 0.05)
     del sess
     gc.collect()
     return sname, stage, rows, f"{len(rows)} units, {n_tagged} tagged"
@@ -273,133 +280,134 @@ def main():
         df_all.to_csv(cache_path, index=False)
         print(f"  Saved {len(df_all)} rows to {cache_path}")
 
-    # ── Re-derive is_responsive from current thresholds ────────────────
-    df_all["is_responsive"] = (
-        (df_all["salt_p"] < SALT_ALPHA)
-        & (df_all["latency_ms"] < MAX_LATENCY_MS)
-        & (df_all["jitter_ms"] < MAX_JITTER_MS)
-        & (df_all["reliability"] >= MIN_RELIABILITY)
+    from visdetect.analysis.optotagging import (
+        OptoMetrics, fiber_tier, classify_unit, is_spn_plausible_waveform,
     )
-    print(f"  Applied thresholds: SALT<{SALT_ALPHA}, lat<{MAX_LATENCY_MS}ms, "
-          f"jitter<{MAX_JITTER_MS}ms, rel>={MIN_RELIABILITY}")
 
-    # ── Flag units tagged by both fibers ───────────────────────────────
-    tagged_keys = df_all.loc[df_all["is_responsive"], ["session_name", "cluster_id"]]
-    dual_counts = tagged_keys.groupby(["session_name", "cluster_id"]).size()
-    dual_ids = set(dual_counts[dual_counts > 1].index)
-    df_all["dual_fiber"] = df_all.apply(
-        lambda r: (r["session_name"], r["cluster_id"]) in dual_ids, axis=1
-    )
-    n_dual = len(dual_ids)
-    if n_dual > 0:
-        print(f"  WARNING: {n_dual} units tagged by BOTH GPe and SNr (flagged in dual_fiber column)")
+    # ── waveform labels (optional) ─────────────────────────────────────
+    try:
+        wf = load_waveform_labels()
+        wf_map = {(int(r.session_name), int(r.cluster_id)): r.cell_type
+                  for r in wf.itertuples()}
+    except FileNotFoundError:
+        print("  Waveform labels not found - skipping FSI cross-check (annotation only).")
+        wf_map = {}
 
-    # ── Summary stats ─────────────────────────────────────────────────
-    n_units = df_all.groupby("fiber")["cluster_id"].nunique()
-    n_resp = df_all[df_all["is_responsive"]].groupby("fiber")["cluster_id"].nunique()
-    print("\n  === Optotagging Summary ===")
-    for fiber in ["GPe", "SNr"]:
-        total = n_units.get(fiber, 0)
-        tagged = n_resp.get(fiber, 0)
-        pct = 100 * tagged / total if total > 0 else 0
-        pathway = "D2" if fiber == "GPe" else "D1"
-        print(f"    {fiber} ({pathway}): {tagged}/{total} tagged ({pct:.1f}%)")
+    def _metrics_from_row(r):
+        return OptoMetrics(
+            cluster_id=int(r.cluster_id), fiber=r.fiber, is_responsive=False,
+            latency_ms=r.latency_ms, jitter_ms=r.jitter_ms, reliability=r.reliability,
+            salt_p=r.salt_p, n_pulses=int(r.n_pulses),
+            baseline_rate_hz=r.baseline_rate_hz, response_window_ms=(r.win_lo, r.win_hi),
+            peak_latency_ms=r.peak_latency_ms, excess_reliability=r.excess_reliability,
+            excess_jitter_ms=r.excess_jitter_ms, poisson_p=r.poisson_p,
+            collision_status=r.collision_status,
+            collision_suppression_index=r.collision_suppression_index,
+            n_collision_free=int(r.n_collision_free),
+            n_collision_expected=int(r.n_collision_expected))
 
-    n_sessions_with_data = df_all["session_name"].nunique()
-    print(f"    Sessions with laser data: {n_sessions_with_data}")
+    # per-fiber tier (waveform applied per unit below)
+    df_all["fiber_tier"] = [fiber_tier(_metrics_from_row(r)) for r in df_all.itertuples()]
 
-    df_resp = df_all[df_all["is_responsive"]]
+    # ── unit-level classification (bridging logic + waveform gate) ─────
+    unit_rows = []
+    for (sn, cid), grp in df_all.groupby(["session_name", "cluster_id"]):
+        g = grp[grp.fiber == "GPe"]
+        s = grp[grp.fiber == "SNr"]
+        gm = _metrics_from_row(next(g.itertuples())) if len(g) else None
+        sm = _metrics_from_row(next(s.itertuples())) if len(s) else None
+        cell_type = wf_map.get((int(sn), int(cid)))
+        wf_ok = is_spn_plausible_waveform(cell_type)
+        tag = classify_unit(gm, sm, waveform_ok=wf_ok)
+        unit_rows.append({
+            "session_name": int(sn), "cluster_id": int(cid),
+            "stage": grp.iloc[0]["stage"], "pathway": tag.pathway, "tier": tag.tier,
+            "gpe_tier": tag.gpe_tier, "snr_tier": tag.snr_tier,
+            "contributing_fiber": tag.contributing_fiber,
+            "cell_type": cell_type, "waveform_ok": wf_ok,
+        })
+    units = pd.DataFrame(unit_rows)
+    units_path = os.path.join(CACHE_DIR, "optotagging_unit_tags.csv")
+    units.to_csv(units_path, index=False)
+    print(f"  Saved unit tags to {units_path}")
 
-    # ── Figure ────────────────────────────────────────────────────────
-    print("\n  Generating figure ...")
+    # ── two-tier yield summary ─────────────────────────────────────────
+    print("\n  === Yield by tier x pathway (unique units) ===")
+    for pathway in ["D1", "D2"]:
+        sub = units[units.pathway == pathway]
+        n_cand = (sub.tier.isin(["candidate", "high_confidence"])).sum()
+        n_hc = (sub.tier == "high_confidence").sum()
+        print(f"    {pathway}: candidate={n_cand}  high_confidence={n_hc}")
+    n_untestable = (df_all.collision_status == "untestable").mean()
+    print(f"    Collision-untestable fraction (all unit x fiber): {n_untestable:.2f}")
 
-    fig = plt.figure(figsize=(16, 12))
-    gs_top = gridspec.GridSpec(2, 2, figure=fig, top=0.95, bottom=0.55,
-                               hspace=0.5, wspace=0.3)
-    gs_bot = gridspec.GridSpec(1, 2, figure=fig, top=0.45, bottom=0.05,
-                               wspace=0.35)
+    df_resp = units[units.pathway.notna()]  # for downstream plotting compatibility
 
-    # Panel A: example raster + PSTH (pick best tagged unit per fiber)
-    # Find example units with lowest SALT p-value for each fiber
-    for fi, fiber in enumerate(["GPe", "SNr"]):
-        sub = df_resp[df_resp["fiber"] == fiber].copy()
-        if sub.empty:
-            ax_r = fig.add_subplot(gs_top[0, fi])
-            ax_p = fig.add_subplot(gs_top[1, fi])
-            ax_r.text(0.5, 0.5, f"No {fiber}-tagged units", transform=ax_r.transAxes,
-                      ha="center", va="center", fontsize=12, color="gray")
-            ax_p.set_visible(False)
-            continue
+    print("\n  Generating figures ...")
+    setup_style()
 
-        best = sub.sort_values("salt_p").iloc[0]
-        sname = int(best["session_name"])
-        cid = int(best["cluster_id"])
+    # Panel set 1: latency + excess-jitter distributions for tagged units
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+    tagged_fibers = df_all[df_all.fiber_tier.isin(["candidate", "high_confidence"])]
+    for fiber, color in FIBER_COLORS.items():
+        sub = tagged_fibers[tagged_fibers.fiber == fiber]
+        axes[0].hist(sub.peak_latency_ms.dropna(), bins=np.linspace(0, 10, 41),
+                     alpha=0.6, color=color, label=f"{fiber} (n={len(sub)})")
+        axes[1].hist(sub.excess_jitter_ms.dropna(), bins=np.linspace(0, 3, 31),
+                     alpha=0.6, color=color, label=fiber)
+    axes[0].set(xlabel="Peak latency (ms)", ylabel="Count", title="Tagged-unit latency")
+    axes[1].axvline(STRICT_MAX_JITTER_MS, color="k", ls="--", lw=1, label="strict cap")
+    axes[1].set(xlabel="Excess jitter (ms)", ylabel="Count", title="Tagged-unit jitter")
+    axes[0].legend(fontsize=8); axes[1].legend(fontsize=8)
+    save_figure(fig, "fig43a_optotagging_distributions", MODULE_NAME)
 
-        # Reload session to get spike times and pulse times for plotting
-        try:
-            sess = load_session(sname)
-            tagger = OptoTagger(sess)
-            pulses = tagger.gpe_pulses if fiber == "GPe" else tagger.snr_pulses
-            cluster = next((c for c in sess.clusters if c.cluster_id == cid), None)
+    # Panel set 2: yield by stage x tier x pathway
+    fig2, axes2 = plt.subplots(1, 2, figsize=(12, 4.5), sharey=True)
+    stages = [s for s in STAGE_ORDER if s in units.stage.values]
+    x = np.arange(len(stages)); bw = 0.35
+    for ax, pathway in zip(axes2, ["D1", "D2"]):
+        for k, (tier, alpha) in enumerate([("candidate", 0.5), ("high_confidence", 1.0)]):
+            if tier == "high_confidence":
+                counts = [((units.stage == st) & (units.pathway == pathway)
+                           & (units.tier == "high_confidence")).sum() for st in stages]
+            else:
+                counts = [((units.stage == st) & (units.pathway == pathway)
+                           & (units.tier.isin(["candidate", "high_confidence"]))).sum()
+                          for st in stages]
+            ax.bar(x + (k - 0.5) * bw, counts, bw, alpha=alpha,
+                   color=FIBER_COLORS["SNr" if pathway == "D1" else "GPe"], label=tier)
+        ax.set(xticks=x, title=f"{pathway} yield by stage", xlabel="Stage")
+        ax.set_xticklabels(stages); ax.legend(fontsize=8)
+    axes2[0].set_ylabel("Tagged units")
+    save_figure(fig2, "fig43b_yield_by_stage_tier", MODULE_NAME)
 
-            if cluster is not None and pulses is not None:
-                ax_r = fig.add_subplot(gs_top[0, fi])
-                ax_p = fig.add_subplot(gs_top[1, fi])
-                _plot_raster_psth(ax_r, ax_p, cluster.spike_times, pulses, fiber)
-                pathway = "D2" if fiber == "GPe" else "D1"
-                ax_r.set_title(
-                    f"{fiber} → {pathway}  |  unit {cid}  |  "
-                    f"p={best['salt_p']:.4f}  lat={best['latency_ms']:.1f}ms",
-                    fontsize=9,
-                )
-            del sess
-            gc.collect()
-        except Exception as exc:
-            print(f"    Warning: could not plot example for {fiber}: {exc}")
+    # Panel set 3: old-vs-new comparison + jitter-threshold sweep
+    fig3, axes3 = plt.subplots(1, 2, figsize=(12, 4.5))
+    old = {"D2": int(((df_all.fiber == "GPe") & (df_all.salt_p < 0.01)
+                      & (df_all.reliability >= 0.1)).sum()),
+           "D1": int(((df_all.fiber == "SNr") & (df_all.salt_p < 0.01)
+                      & (df_all.reliability >= 0.1)).sum())}
+    new_cand = {p: int((units.pathway == p).sum()) for p in ["D1", "D2"]}
+    new_hc = {p: int(((units.pathway == p) & (units.tier == "high_confidence")).sum())
+              for p in ["D1", "D2"]}
+    xp = np.arange(2)
+    axes3[0].bar(xp - 0.25, [old["D1"], old["D2"]], 0.25, label="old pipeline", color="#888")
+    axes3[0].bar(xp, [new_cand["D1"], new_cand["D2"]], 0.25, label="new candidate", color="#5dade2")
+    axes3[0].bar(xp + 0.25, [new_hc["D1"], new_hc["D2"]], 0.25, label="new high-conf", color="#1f618d")
+    axes3[0].set(xticks=xp, title="Old vs new yield", ylabel="Units")
+    axes3[0].set_xticklabels(["D1", "D2"]); axes3[0].legend(fontsize=8)
 
-    # Panel B: latency distributions
-    ax_lat = fig.add_subplot(gs_bot[0, 0])
-    _plot_latency_distributions(ax_lat, df_resp)
-
-    # Panel C: stage fractions
-    ax_stage = fig.add_subplot(gs_bot[0, 1])
-    _plot_stage_fractions(ax_stage, df_all)
-
-    fig.suptitle("Optotagging: Antidromic D1/D2 SPN Identification (SALT test)",
-                 fontsize=14, fontweight="bold", y=0.99)
-
-    save_figure(fig, "fig43a_optotagging_overview", MODULE_NAME)
-    print(f"  Saved fig33a_optotagging_overview.png")
-
-    # ── Second figure: per-session counts ─────────────────────────────
-    fig2, ax2 = plt.subplots(figsize=(14, 5))
-    _plot_session_counts(ax2, df_all, manifest)
-    save_figure(fig2, "fig43b_optotagging_session_counts", MODULE_NAME)
-    print(f"  Saved fig33b_optotagging_session_counts.png")
-
-    # ── Save stats summary ────────────────────────────────────────────
-    stats_rows = []
-    for fiber in ["GPe", "SNr"]:
-        for stage in STAGE_ORDER:
-            sub = df_all[(df_all["fiber"] == fiber) & (df_all["stage"] == stage)]
-            n = len(sub)
-            n_resp_s = int(sub["is_responsive"].sum())
-            stats_rows.append({
-                "fiber": fiber,
-                "stage": stage,
-                "n_units": n,
-                "n_tagged": n_resp_s,
-                "fraction": n_resp_s / n if n > 0 else np.nan,
-                "mean_latency_ms": sub.loc[sub["is_responsive"], "latency_ms"].mean(),
-                "mean_jitter_ms": sub.loc[sub["is_responsive"], "jitter_ms"].mean(),
-                "mean_reliability": sub.loc[sub["is_responsive"], "reliability"].mean(),
-            })
-
-    stats_df = pd.DataFrame(stats_rows)
-    stats_path = os.path.join(CACHE_DIR, "optotagging_stats.csv")
-    stats_df.to_csv(stats_path, index=False)
-    print(f"  Saved stats to {stats_path}")
-    print(stats_df.to_string(index=False))
+    jit_grid = np.linspace(0.25, 3.0, 12)
+    for pathway, fiber in [("D1", "SNr"), ("D2", "GPe")]:
+        fib = df_all[df_all.fiber == fiber]
+        ys = [int(((fib.salt_p < STRICT_SALT_ALPHA) & (fib.collision_status == "pass")
+                   & (fib.excess_jitter_ms < j) & (fib.excess_reliability > 0.02)).sum())
+              for j in jit_grid]
+        axes3[1].plot(jit_grid, ys, "-o", color=FIBER_COLORS[fiber], label=pathway)
+    axes3[1].axvline(STRICT_MAX_JITTER_MS, color="k", ls="--", lw=1)
+    axes3[1].set(xlabel="Strict jitter cap (ms)", ylabel="High-conf units",
+                 title="Yield vs jitter threshold"); axes3[1].legend(fontsize=8)
+    save_figure(fig3, "fig43c_old_vs_new_and_sweep", MODULE_NAME)
 
     print("\n[09a] Done.")
 
