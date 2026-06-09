@@ -74,6 +74,17 @@ class OptoMetrics:
     salt_p: float                # SALT p-value
     n_pulses: int
     first_spike_latencies: np.ndarray = field(repr=False, default_factory=lambda: np.array([]))
+    # Enriched fields (Task 7 — antidromic redesign)
+    baseline_rate_hz: float = float("nan")
+    response_window_ms: Tuple[float, float] = (float("nan"), float("nan"))
+    peak_latency_ms: float = float("nan")
+    excess_reliability: float = float("nan")
+    excess_jitter_ms: float = float("nan")
+    poisson_p: float = 1.0
+    collision_status: str = "untestable"
+    collision_suppression_index: float = float("nan")
+    n_collision_free: int = 0
+    n_collision_expected: int = 0
 
 
 @dataclass
@@ -643,57 +654,47 @@ class OptoTagger:
     def analyze_unit(
         self, cluster: Cluster, pulse_times: np.ndarray, fiber: str
     ) -> OptoMetrics:
-        """Analyse one unit against one block of laser pulses."""
+        """Analyse one unit against one block of laser pulses.
+
+        Computes all enriched antidromic metrics (Task 7): estimates the
+        response window, then populates excess_reliability, excess_jitter_ms,
+        poisson_p, salt_p (using the estimated narrow window), and
+        collision_status. Legacy latency/jitter/reliability fields are retained
+        for continuity/diagnostics. Unit-level tier classification (is_responsive)
+        is handled in Task 8 and is left False here.
+        """
         spikes = np.asarray(cluster.spike_times, dtype=float).ravel()
         n_pulses = len(pulse_times)
-
         if len(spikes) == 0 or n_pulses == 0:
-            return OptoMetrics(
-                cluster_id=cluster.cluster_id, fiber=fiber,
-                is_responsive=False, latency_ms=np.nan,
-                jitter_ms=np.nan, reliability=0.0, salt_p=1.0,
-                n_pulses=n_pulses,
-            )
+            return OptoMetrics(cluster_id=cluster.cluster_id, fiber=fiber,
+                               is_responsive=False, latency_ms=np.nan, jitter_ms=np.nan,
+                               reliability=0.0, salt_p=1.0, n_pulses=n_pulses)
 
+        rw = estimate_response_window(spikes, pulse_times)
+        W, lam_b = rw.window_ms, rw.baseline_rate_hz
+        exc_rel = excess_reliability(spikes, pulse_times, W, lam_b)
+        exc_jit = excess_jitter(spikes, pulse_times, W)
+        pois_p = poisson_excess_test(spikes, pulse_times, W, lam_b)
+        salt_p = salt_test(spikes, pulse_times, response_window_ms=W,
+                           baseline_window_ms=SALT_BASELINE_WINDOW_MS)
+        coll = collision_test(spikes, pulse_times, rw.peak_latency_ms, W)
+
+        # legacy raw metrics (continuity / diagnostics)
         latencies, hit_count, reliability = _first_spike_latencies(
-            spikes, pulse_times, self.response_window_ms
-        )
-
-        if hit_count == 0:
-            return OptoMetrics(
-                cluster_id=cluster.cluster_id, fiber=fiber,
-                is_responsive=False, latency_ms=np.nan,
-                jitter_ms=np.nan, reliability=reliability, salt_p=1.0,
-                n_pulses=n_pulses,
-            )
-
-        latency_mean = float(np.mean(latencies))
-        jitter = float(np.std(latencies))
-
-        # SALT test. Use the long SALT baseline so the canonical (window-tiling) SALT
-        # has enough baseline windows for adequate p-value resolution; self.baseline_window_ms
-        # is the short *rate* baseline and would yield too few windows.
-        # NOTE: Task 7 rewrites analyze_unit to pass the estimated narrow response window.
-        p_val = salt_test(
-            spikes, pulse_times,
-            response_window_ms=self.response_window_ms,
-            baseline_window_ms=SALT_BASELINE_WINDOW_MS,
-            n_jitter=self.salt_n_jitter,
-        )
-
-        is_responsive = (
-            p_val < self.salt_alpha
-            and latency_mean < MAX_LATENCY_MS
-            and jitter < MAX_JITTER_MS
-            and reliability >= MIN_RELIABILITY
-        )
+            spikes, pulse_times, self.response_window_ms)
+        latency_mean = float(np.mean(latencies)) if hit_count > 0 else float("nan")
+        jitter = float(np.std(latencies)) if hit_count > 0 else float("nan")
 
         return OptoMetrics(
-            cluster_id=cluster.cluster_id, fiber=fiber,
-            is_responsive=is_responsive, latency_ms=latency_mean,
-            jitter_ms=jitter, reliability=reliability, salt_p=p_val,
-            n_pulses=n_pulses, first_spike_latencies=latencies,
-        )
+            cluster_id=cluster.cluster_id, fiber=fiber, is_responsive=False,
+            latency_ms=latency_mean, jitter_ms=jitter, reliability=reliability,
+            salt_p=salt_p, n_pulses=n_pulses, first_spike_latencies=latencies,
+            baseline_rate_hz=lam_b, response_window_ms=W,
+            peak_latency_ms=rw.peak_latency_ms, excess_reliability=exc_rel,
+            excess_jitter_ms=exc_jit, poisson_p=pois_p,
+            collision_status=coll.status,
+            collision_suppression_index=coll.suppression_index,
+            n_collision_free=coll.n_free, n_collision_expected=coll.n_expected)
 
     # ── Analyze all units for both fibers ─────────────────────────────
     def analyze_all(

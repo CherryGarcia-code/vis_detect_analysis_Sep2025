@@ -163,3 +163,22 @@ def test_salt_is_deterministic():
     p1 = ot.salt_test(sp, pulses, response_window_ms=rw.window_ms)
     p2 = ot.salt_test(sp, pulses, response_window_ms=rw.window_ms)
     assert p1 == p2
+
+
+def test_analyze_unit_populates_enriched_fields():
+    pulses = _pulses(n=501)
+    sp = _antidromic_unit(pulses, latency_ms=4.0, jitter_ms=0.2,
+                          base_rate=5.0, collision=True, seed=15)
+    sess = Session(trials=[], clusters=[Cluster(0, sp, "good")],
+                   subject="SYN", session_name="SIM",
+                   good_cluster_ids=[0], good_and_stable_ids=None,
+                   ni_events={"Laser": pulses})
+    tagger = ot.OptoTagger(sess)
+    m = tagger.analyze_unit(sess.clusters[0], pulses, "GPe")
+    assert m.excess_reliability > 0.8
+    assert m.excess_jitter_ms < 1.0
+    assert m.poisson_p < 1e-3
+    assert m.salt_p < 0.01
+    assert m.collision_status == "pass"
+    assert 1.0 < m.peak_latency_ms < 10.0
+    assert m.baseline_rate_hz > 0
