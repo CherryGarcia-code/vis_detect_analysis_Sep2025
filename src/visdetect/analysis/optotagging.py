@@ -621,6 +621,8 @@ class OptoTagger:
         self.response_window_ms = response_window_ms
         self.baseline_window_ms = baseline_window_ms
         self.salt_alpha = salt_alpha
+        # Retained for back-compat (Fig43 passes it); ignored by analyze_unit because
+        # the canonical SALT is deterministic (no jitter resampling).
         self.salt_n_jitter = salt_n_jitter
 
         # Resolve laser key

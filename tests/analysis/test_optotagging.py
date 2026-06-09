@@ -182,3 +182,4 @@ def test_analyze_unit_populates_enriched_fields():
     assert m.collision_status == "pass"
     assert 1.0 < m.peak_latency_ms < 10.0
     assert m.baseline_rate_hz > 0
+    assert m.is_responsive is False  # tier classification deferred to Task 8
