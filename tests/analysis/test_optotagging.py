@@ -183,3 +183,44 @@ def test_analyze_unit_populates_enriched_fields():
     assert 1.0 < m.peak_latency_ms < 10.0
     assert m.baseline_rate_hz > 0
     assert m.is_responsive is False  # tier classification deferred to Task 8
+
+
+# ── Task 8: tier classifier + bridging D1/D2 + waveform check ────────
+
+def _metric(salt_p=0.001, poisson_p=0.001, peak=4.0, exc_rel=0.5,
+            exc_jit=0.3, collision="pass", fiber="GPe", cid=0):
+    return ot.OptoMetrics(cluster_id=cid, fiber=fiber, is_responsive=False,
+        latency_ms=peak, jitter_ms=exc_jit, reliability=0.5, salt_p=salt_p,
+        n_pulses=501, baseline_rate_hz=5.0, response_window_ms=(peak-0.75, peak+0.75),
+        peak_latency_ms=peak, excess_reliability=exc_rel, excess_jitter_ms=exc_jit,
+        poisson_p=poisson_p, collision_status=collision)
+
+
+def test_fiber_tier_levels():
+    assert ot.fiber_tier(_metric()) == "high_confidence"
+    assert ot.fiber_tier(_metric(collision="untestable")) == "candidate"
+    assert ot.fiber_tier(_metric(exc_jit=2.0)) == "candidate"          # too jittery for strict
+    assert ot.fiber_tier(_metric(salt_p=0.5, poisson_p=0.5)) == "none" # not significant
+    assert ot.fiber_tier(_metric(exc_rel=0.0)) == "none"               # below excess-rel floor
+
+
+def test_fiber_tier_waveform_blocks_strict():
+    assert ot.fiber_tier(_metric(), waveform_ok=False) == "candidate"
+
+
+def test_classify_unit_bridging_logic():
+    g = _metric(fiber="GPe")
+    s = _metric(fiber="SNr")
+    assert ot.classify_unit(g, None).pathway == "D2"        # GPe only
+    assert ot.classify_unit(None, s).pathway == "D1"        # SNr only
+    assert ot.classify_unit(g, s).pathway == "D1"           # both -> D1 (bridging)
+    none_m = _metric(salt_p=0.9, poisson_p=0.9)
+    assert ot.classify_unit(none_m, none_m).pathway is None
+
+
+def test_is_spn_plausible_waveform():
+    assert ot.is_spn_plausible_waveform("SPN") is True
+    assert ot.is_spn_plausible_waveform(None) is True
+    assert ot.is_spn_plausible_waveform(float("nan")) is True
+    assert ot.is_spn_plausible_waveform("FSI") is False
+    assert ot.is_spn_plausible_waveform("fast-spiking") is False

@@ -373,6 +373,118 @@ def collision_test(spike_times, pulse_times, peak_latency_ms: float,
     return CollisionResult(status, supp, p_free, p_exp, n_free, n_exp, float(fp))
 
 
+# ── Task 8: waveform check, tier classifier, bridging assignment ───────
+
+def is_spn_plausible_waveform(cell_type) -> bool:
+    """True unless the label clearly indicates a fast-spiking / narrow interneuron.
+
+    Unknown / NaN / None are treated as plausible (don't hard-exclude unlabeled units).
+
+    Parameters
+    ----------
+    cell_type : str, float, or None
+        Waveform cell-type label (e.g. 'SPN', 'FSI', 'fast-spiking', None).
+
+    Returns
+    -------
+    bool
+        False only when the label is an unambiguous narrow/fast-spiking interneuron
+        keyword; True for all unknown / unlabeled values.
+    """
+    if cell_type is None:
+        return True
+    if isinstance(cell_type, float) and np.isnan(cell_type):
+        return True
+    ct = str(cell_type).strip().lower()
+    if ct in ("", "nan", "unknown", "unlabeled"):
+        return True
+    narrow = ("fsi", "fast", "narrow", "pv", "interneuron")
+    return not any(m in ct for m in narrow)
+
+
+def fiber_tier(m: OptoMetrics,
+               cand_salt: float = CANDIDATE_SALT_ALPHA,
+               cand_pois: float = CANDIDATE_POISSON_ALPHA,
+               cand_excrel: float = CANDIDATE_MIN_EXCESS_REL,
+               strict_salt: float = STRICT_SALT_ALPHA,
+               strict_jit: float = STRICT_MAX_JITTER_MS,
+               search_ms: Tuple[float, float] = RESPONSE_SEARCH_MS,
+               waveform_ok: bool = True) -> str:
+    """Classify one (unit, fiber) OptoMetrics into 'none' / 'candidate' / 'high_confidence'.
+
+    Candidate gate: (salt_p < cand_salt OR poisson_p < cand_pois) AND peak latency in
+    search_ms AND excess_reliability > cand_excrel. High-confidence additionally requires
+    salt_p < strict_salt, excess_jitter < strict_jit, collision_status == 'pass', and
+    waveform_ok.
+
+    Parameters
+    ----------
+    m : OptoMetrics
+        Enriched metrics for a single (unit, fiber) pair.
+    waveform_ok : bool
+        Pre-computed waveform plausibility flag (from ``is_spn_plausible_waveform``).
+        If False, the unit can reach at most 'candidate'.
+
+    Returns
+    -------
+    str
+        'none' | 'candidate' | 'high_confidence'
+    """
+    sig = (m.salt_p < cand_salt) or (m.poisson_p < cand_pois)
+    lat_ok = search_ms[0] <= m.peak_latency_ms <= search_ms[1]
+    rel_ok = m.excess_reliability > cand_excrel
+    if not (sig and lat_ok and rel_ok):
+        return "none"
+    jit_ok = (not np.isnan(m.excess_jitter_ms)) and (m.excess_jitter_ms < strict_jit)
+    strict = ((m.salt_p < strict_salt) and jit_ok
+              and (m.collision_status == "pass") and waveform_ok)
+    return "high_confidence" if strict else "candidate"
+
+
+@dataclass
+class UnitTag:
+    """Pathway assignment for a single unit, combining GPe and SNr fiber tiers."""
+    cluster_id: int
+    pathway: Optional[str]          # 'D1' | 'D2' | None
+    tier: str                       # 'high_confidence' | 'candidate' | 'none'
+    gpe_tier: str
+    snr_tier: str
+    contributing_fiber: Optional[str]
+
+
+def classify_unit(gpe: Optional[OptoMetrics], snr: Optional[OptoMetrics],
+                  waveform_ok: bool = True, **tier_kwargs) -> UnitTag:
+    """Combine a unit's GPe and SNr fiber metrics into a pathway tag (bridging logic).
+
+    SNr-tagged -> D1 (specific; overrides GPe); GPe-only -> D2; both -> D1 (the GPe
+    response is a bridging collateral); neither -> None.
+
+    Parameters
+    ----------
+    gpe : OptoMetrics or None
+        Metrics for the GPe fiber; None if no GPe pulses were delivered.
+    snr : OptoMetrics or None
+        Metrics for the SNr fiber; None if no SNr pulses were delivered.
+    waveform_ok : bool
+        Passed to ``fiber_tier`` for both fibers.
+    **tier_kwargs
+        Additional keyword arguments forwarded to ``fiber_tier``.
+
+    Returns
+    -------
+    UnitTag
+        Pathway ('D1', 'D2', or None), the best tier, and per-fiber tier strings.
+    """
+    gt = fiber_tier(gpe, waveform_ok=waveform_ok, **tier_kwargs) if gpe is not None else "none"
+    st = fiber_tier(snr, waveform_ok=waveform_ok, **tier_kwargs) if snr is not None else "none"
+    cid = (gpe or snr).cluster_id
+    if st != "none":                       # SNr-tagged -> D1 (specific; overrides GPe)
+        return UnitTag(cid, "D1", st, gt, st, "SNr")
+    if gt != "none":                       # GPe-only -> D2
+        return UnitTag(cid, "D2", gt, gt, st, "GPe")
+    return UnitTag(cid, None, "none", gt, st, None)
+
+
 # ── Helper: split laser blocks ────────────────────────────────────────
 def split_laser_blocks(
     pulse_times: np.ndarray,
