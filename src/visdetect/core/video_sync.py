@@ -698,6 +698,83 @@ def load_camera_metadata(csv_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndar
     return ts, acq, saved
 
 
+# =====================================================================
+# Camera-metadata reconstruction (header-only / empty timestamp logs)
+# =====================================================================
+
+
+def build_reconstructed_timestamps(frame_count: int, fps: float) -> np.ndarray:
+    """Reconstruct steady-fps per-frame timestamps (ms) for a header-only session.
+
+    Returns ``ts[i] = i * (1000 / fps)`` for ``i`` in ``0 .. frame_count - 1``.
+
+    Use when a session's camera metadata CSV was saved header-only, so the
+    per-frame timestamps were never written. Valid only when the camera ran at a
+    steady fps with negligible frame drops (true of the BG_046 eye/front cameras:
+    metronomic ~50 fps, zero drops in reference sessions). ``fit_sync`` fits a
+    slope mapping NI-DAQ time to video time, so a constant fps error is absorbed;
+    accuracy therefore depends on *linearity*, not on the exact fps value.
+    """
+    if frame_count <= 0:
+        raise ValueError(f"frame_count must be positive, got {frame_count}")
+    if fps <= 0:
+        raise ValueError(f"fps must be positive, got {fps}")
+    dt_ms = 1000.0 / float(fps)
+    return np.arange(frame_count, dtype=np.float64) * dt_ms
+
+
+def metadata_is_header_only(csv_path: str) -> bool:
+    """True if a camera metadata CSV has no usable per-frame timestamps.
+
+    Header-only/empty files (and degenerate single-row files) return True; a
+    normal multi-row log returns False. Delegates to :func:`load_camera_metadata`
+    so the terminal zero-row convention is handled exactly as elsewhere.
+    """
+    ts, _, _ = load_camera_metadata(csv_path)
+    return len(ts) <= 1
+
+
+def backup_header_only_metadata(csv_path: str) -> str:
+    """Move a header-only metadata CSV aside to ``*_metadata.header_only.bak``.
+
+    Returns the backup path. If a backup already exists it is preserved (assumed
+    to be the first/true original) and the current file is left in place for the
+    caller to overwrite — so re-runs never clobber the genuine original with a
+    previously-reconstructed file.
+    """
+    suffix = "_metadata.csv"
+    if csv_path.endswith(suffix):
+        bak_path = csv_path[: -len(suffix)] + "_metadata.header_only.bak"
+    else:
+        bak_path = csv_path + ".header_only.bak"
+    if os.path.exists(bak_path):
+        return bak_path
+    os.rename(csv_path, bak_path)
+    return bak_path
+
+
+def write_reconstructed_metadata(csv_path: str, frame_count: int, fps: float) -> None:
+    """Write a reconstructed camera metadata CSV with steady-fps timestamps.
+
+    Columns match the acquisition format (``Timestamp (ms), Acquired frames,
+    Saved frames``) so :func:`load_camera_metadata` and :func:`find_camera_files`
+    consume it unchanged. ``Acquired``/``Saved`` carry the 1-based frame index
+    (the sync only uses the timestamp column).
+    """
+    import pandas as pd
+
+    ts = build_reconstructed_timestamps(frame_count, fps)
+    idx = np.arange(1, frame_count + 1, dtype=np.int64)
+    df = pd.DataFrame(
+        {
+            "Timestamp (ms)": ts,
+            "Acquired frames": idx,
+            "Saved frames": idx,
+        }
+    )
+    df.to_csv(csv_path, index=False)
+
+
 def camera_dir_to_session(dirname: str, subject: str = "BG_046") -> str:
     """Convert camera directory name ``BG_046_DDMMYY`` -> session ``DDMMYYYY``."""
     parts = dirname.split("_")
