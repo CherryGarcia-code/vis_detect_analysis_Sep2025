@@ -155,9 +155,25 @@ def poisson_excess_test(spike_times, pulse_times,
                         baseline_rate_hz_val: float) -> float:
     """Upper-tail Poisson p-value that response-window spikes exceed baseline.
 
-    k_obs = total spikes in ``window_ms`` across pulses; expected count
-    lam = baseline_rate * |window| * n_pulses; returns P(X >= k_obs) under Poisson(lam).
-    Returns 1.0 if no pulses; if lam <= 0, returns 0.0 when k_obs > 0 else 1.0.
+    Parameters
+    ----------
+    spike_times : array-like
+        Sorted spike times (seconds).
+    pulse_times : array-like
+        Laser pulse onset times (seconds).
+    window_ms : (start, end)
+        Response window in ms relative to each pulse.
+    baseline_rate_hz_val : float
+        Pre-pulse baseline firing rate (Hz).
+
+    Returns
+    -------
+    float
+        P(X >= k_obs) under Poisson(lam), where k_obs is the pooled spike count in
+        ``window_ms`` across all pulses and lam = baseline_rate_hz_val * |window| *
+        n_pulses. Returns 1.0 if no pulses; if lam <= 0, returns 0.0 when k_obs > 0
+        else 1.0. Note: because the window is chosen post-hoc (peak bin), this test is
+        the sensitive leg of the candidate tier, not a strict gate.
     """
     spikes = np.asarray(spike_times, float).ravel()
     pulses = np.asarray(pulse_times, float).ravel()
