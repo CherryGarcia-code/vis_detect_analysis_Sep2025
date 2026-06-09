@@ -4,9 +4,13 @@ Protocol per session (post-task):
   Block 1 → 501 laser pulses to GPe  → D2-SPN tagging (indirect pathway)
   Block 2 → 501 laser pulses to SNr  → D1-SPN tagging (direct pathway)
 
-Statistical method: SALT test (Stimulus-Associated spike Latency Test,
-Kvitsiani et al. 2013) with Jensen–Shannon divergence.  Additional
-criteria: latency < 8 ms, jitter < 3.5 ms, reliability >= 0.1.
+Method: two-tier antidromic classification (see optotagging.py). Per (unit, fiber)
+metrics — baseline-corrected excess reliability/jitter, canonical SALT, Poisson
+excess test, and an offline collision test — feed `fiber_tier` (none / candidate /
+high_confidence); `classify_unit` then combines GPe+SNr into a D1/D2 `UnitTag` via
+bridging-collateral logic. The candidate tier is sensitive; the high-confidence tier
+is collision-confirmed antidromic. (The legacy latency<8 / jitter<3.5 / reliability>=0.1
+thresholds survive only to reconstruct the "old pipeline" comparison bar in fig43c.)
 
 Produces:
   fig43a_optotagging_distributions.png
@@ -45,8 +49,8 @@ from visdetect.suite.plotting import setup_style, save_figure
 
 from visdetect.analysis.optotagging import (
     OptoTagger, OptoMetrics,
-    MAX_LATENCY_MS, MAX_JITTER_MS,
-    STRICT_SALT_ALPHA, STRICT_MAX_JITTER_MS,
+    SALT_ALPHA, MIN_RELIABILITY, MAX_LATENCY_MS, MAX_JITTER_MS,
+    STRICT_SALT_ALPHA, STRICT_MAX_JITTER_MS, CANDIDATE_MIN_EXCESS_REL,
     fiber_tier, classify_unit, is_spn_plausible_waveform,
 )
 
@@ -277,14 +281,14 @@ def main():
 
     # Panel set 3: old-vs-new comparison + jitter-threshold sweep
     fig3, axes3 = plt.subplots(1, 2, figsize=(12, 4.5))
-    old = {"D2": int(((df_all.fiber == "GPe") & (df_all.salt_p < 0.01)
+    old = {"D2": int(((df_all.fiber == "GPe") & (df_all.salt_p < SALT_ALPHA)
                       & (df_all.latency_ms < MAX_LATENCY_MS)
                       & (df_all.jitter_ms < MAX_JITTER_MS)
-                      & (df_all.reliability >= 0.1)).sum()),
-           "D1": int(((df_all.fiber == "SNr") & (df_all.salt_p < 0.01)
+                      & (df_all.reliability >= MIN_RELIABILITY)).sum()),
+           "D1": int(((df_all.fiber == "SNr") & (df_all.salt_p < SALT_ALPHA)
                       & (df_all.latency_ms < MAX_LATENCY_MS)
                       & (df_all.jitter_ms < MAX_JITTER_MS)
-                      & (df_all.reliability >= 0.1)).sum())}
+                      & (df_all.reliability >= MIN_RELIABILITY)).sum())}
     new_cand = {p: int((units.pathway == p).sum()) for p in ["D1", "D2"]}
     new_hc = {p: int(((units.pathway == p) & (units.tier == "high_confidence")).sum())
               for p in ["D1", "D2"]}
@@ -299,7 +303,7 @@ def main():
     for pathway, fiber in [("D1", "SNr"), ("D2", "GPe")]:
         fib = df_all[df_all.fiber == fiber]
         ys = [int(((fib.salt_p < STRICT_SALT_ALPHA) & (fib.collision_status == "pass")
-                   & (fib.excess_jitter_ms < j) & (fib.excess_reliability > 0.02)).sum())
+                   & (fib.excess_jitter_ms < j) & (fib.excess_reliability > CANDIDATE_MIN_EXCESS_REL)).sum())
               for j in jit_grid]
         axes3[1].plot(jit_grid, ys, "-o", color=FIBER_COLORS[fiber], label=pathway)
     axes3[1].axvline(STRICT_MAX_JITTER_MS, color="k", ls="--", lw=1)
