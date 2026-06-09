@@ -150,6 +150,47 @@ def estimate_response_window(spike_times, pulse_times,
     return ResponseWindow(peak_lat, (w0, w1), lam_b, n_resp)
 
 
+def excess_reliability(spike_times, pulse_times,
+                       window_ms: Tuple[float, float],
+                       baseline_rate_hz_val: float) -> float:
+    """Baseline-corrected fraction of pulses with a response-window spike.
+
+    Parameters
+    ----------
+    spike_times : array-like
+        Sorted spike times (seconds).
+    pulse_times : array-like
+        Laser pulse onset times (seconds).
+    window_ms : (start, end)
+        Response window in ms relative to each pulse.
+    baseline_rate_hz_val : float
+        Pre-pulse baseline firing rate (Hz); used to estimate the fraction of
+        pulses that would contain >=1 spike by chance.
+
+    Returns
+    -------
+    float
+        max(0, p_resp - p_base), where p_resp = fraction of pulses with >=1
+        spike in the window and p_base = 1 - exp(-baseline_rate * |window|) is
+        the baseline-expected hit rate. Returns 0.0 if no pulses.
+    """
+    spikes = np.asarray(spike_times, float).ravel()
+    pulses = np.asarray(pulse_times, float).ravel()
+    if len(pulses) == 0:
+        return 0.0
+    a, b = window_ms[0] / 1000.0, window_ms[1] / 1000.0
+    hits = 0
+    for p in pulses:
+        i0 = np.searchsorted(spikes, p + a)
+        i1 = np.searchsorted(spikes, p + b)
+        if i1 > i0:
+            hits += 1
+    p_resp = hits / len(pulses)
+    win_dur = b - a
+    p_base = 1.0 - np.exp(-baseline_rate_hz_val * win_dur)
+    return float(max(0.0, p_resp - p_base))
+
+
 def poisson_excess_test(spike_times, pulse_times,
                         window_ms: Tuple[float, float],
                         baseline_rate_hz_val: float) -> float:

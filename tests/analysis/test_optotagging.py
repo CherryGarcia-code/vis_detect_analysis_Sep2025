@@ -69,3 +69,20 @@ def test_poisson_excess_test_null_is_not_significant():
     rw = ot.estimate_response_window(sp, pulses)
     p = ot.poisson_excess_test(sp, pulses, rw.window_ms, rw.baseline_rate_hz)
     assert p > 0.01
+
+
+def test_excess_reliability_zero_for_pure_baseline():
+    pulses = _pulses(n=300)
+    sp = _antidromic_unit(pulses, base_rate=6.0, respond=False, seed=5)
+    rw = ot.estimate_response_window(sp, pulses)
+    er = ot.excess_reliability(sp, pulses, rw.window_ms, rw.baseline_rate_hz)
+    assert er < 0.05
+
+
+def test_excess_reliability_high_for_locked_response():
+    pulses = _pulses(n=300)
+    sp = _antidromic_unit(pulses, latency_ms=4.0, jitter_ms=0.1,
+                          base_rate=2.0, collision=False, seed=6)
+    rw = ot.estimate_response_window(sp, pulses)
+    er = ot.excess_reliability(sp, pulses, rw.window_ms, rw.baseline_rate_hz)
+    assert er > 0.8
