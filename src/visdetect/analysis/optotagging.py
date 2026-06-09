@@ -191,6 +191,43 @@ def excess_reliability(spike_times, pulse_times,
     return float(max(0.0, p_resp - p_base))
 
 
+def excess_jitter(spike_times, pulse_times,
+                  window_ms: Tuple[float, float]) -> float:
+    """Std of first-spike latencies (ms) within the window, over responding pulses.
+
+    For each pulse, takes the first spike found inside ``window_ms`` (if any),
+    computes its latency in milliseconds, and returns the standard deviation
+    across all pulses that had at least one spike there.
+
+    Parameters
+    ----------
+    spike_times : array-like
+        Sorted spike times (seconds).
+    pulse_times : array-like
+        Laser pulse onset times (seconds).
+    window_ms : (start, end)
+        Response window in ms relative to each pulse.
+
+    Returns
+    -------
+    float
+        Std (ms) of first-spike latencies across responding pulses; returns
+        ``nan`` if fewer than 2 pulses produced a spike in the window.
+    """
+    spikes = np.asarray(spike_times, float).ravel()
+    pulses = np.asarray(pulse_times, float).ravel()
+    a, b = window_ms[0] / 1000.0, window_ms[1] / 1000.0
+    lat = []
+    for p in pulses:
+        i0 = np.searchsorted(spikes, p + a)
+        i1 = np.searchsorted(spikes, p + b)
+        if i1 > i0:
+            lat.append((spikes[i0] - p) * 1000.0)
+    if len(lat) < 2:
+        return float("nan")
+    return float(np.std(lat))
+
+
 def poisson_excess_test(spike_times, pulse_times,
                         window_ms: Tuple[float, float],
                         baseline_rate_hz_val: float) -> float:

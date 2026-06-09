@@ -86,3 +86,19 @@ def test_excess_reliability_high_for_locked_response():
     rw = ot.estimate_response_window(sp, pulses)
     er = ot.excess_reliability(sp, pulses, rw.window_ms, rw.baseline_rate_hz)
     assert er > 0.8
+
+
+def test_excess_jitter_recovers_injected_sigma():
+    pulses = _pulses(n=400)
+    sp = _antidromic_unit(pulses, latency_ms=4.0, jitter_ms=0.3,
+                          base_rate=1.0, collision=False, seed=7)
+    rw = ot.estimate_response_window(sp, pulses)
+    j = ot.excess_jitter(sp, pulses, rw.window_ms)
+    assert 0.1 < j < 0.6   # ~0.3 ms, window-clipped
+
+
+def test_excess_jitter_nan_when_no_response():
+    pulses = _pulses(n=50)
+    sp = _antidromic_unit(pulses, base_rate=0.05, respond=False, seed=8)
+    j = ot.excess_jitter(sp, pulses, (3.0, 5.0))
+    assert np.isnan(j)
