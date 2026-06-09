@@ -20,7 +20,7 @@ so a fresh chat can boot a single question in isolation.
 
 | ID | Question (short) | Tier | Status | Spec | Plan |
 |----|------------------|------|--------|------|------|
-| **B2** ⭐ | Does striatal sensory responsiveness *lead* the behavioral learning curve? | T1 | spec-approved | [design](../superpowers/specs/2026-06-08-B2-responsiveness-leads-learning-design.md) | — |
+| **B2** ⭐ | Does striatal sensory responsiveness *lead* the behavioral learning curve? | T1 | plan-draft | [design](../superpowers/specs/2026-06-08-B2-responsiveness-leads-learning-design.md) | [plan](../superpowers/plans/2026-06-08-B2-responsiveness-leads-learning-plan.md) |
 | B0 ⭐ | Which DDM knob does learning turn (drift vs threshold vs starting-point)? | T1 | not-started | — | — |
 | B1 ⭐ | Is the evidence-integration timescale a *learned* quantity? | T1 | not-started | — | — |
 | A1 ⭐ | Is the lick-locked population ramp the commitment/bound signal? | T1→T2 | not-started | — | — |
