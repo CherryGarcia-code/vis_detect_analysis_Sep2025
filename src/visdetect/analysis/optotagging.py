@@ -5,9 +5,11 @@ Protocol: Post-session, 501 laser pulses to GPe (D2 tagging) followed by
 501 pulses to SNr (D1 tagging), separated by a pause (>5 s).
 
 Statistical test: SALT (Stimulus-Associated spike Latency Test,
-Kvitsiani et al. 2013). Compares the distribution of first-spike latencies
-after real pulses vs a jittered baseline using a two-sample
-Kolmogorov–Smirnov-style test on spike-count histograms.
+Kvitsiani et al. 2013). Builds first-spike latency distributions (with a
+no-spike category) for the test window and many equal-width baseline windows;
+the null is the distribution of baseline-vs-baseline JS divergences and the
+test is deterministic. (The legacy RNG-based JSD-to-uniform variant is retained
+as ``_salt_test_jsd_uniform``.)
 
 Functions
 ---------
@@ -497,7 +499,7 @@ def _salt_test_jsd_uniform(
     return max(p_value, 1.0 / (n_jitter + 1))
 
 
-def salt_test(spike_times, pulse_times,
+def salt_test(spike_times: np.ndarray, pulse_times: np.ndarray,
               response_window_ms: Tuple[float, float] = RESPONSE_WINDOW_MS,
               baseline_window_ms: Tuple[float, float] = SALT_BASELINE_WINDOW_MS,
               n_jitter: int = SALT_N_JITTER,   # accepted for back-compat; ignored
@@ -668,11 +670,14 @@ class OptoTagger:
         latency_mean = float(np.mean(latencies))
         jitter = float(np.std(latencies))
 
-        # SALT test
+        # SALT test. Use the long SALT baseline so the canonical (window-tiling) SALT
+        # has enough baseline windows for adequate p-value resolution; self.baseline_window_ms
+        # is the short *rate* baseline and would yield too few windows.
+        # NOTE: Task 7 rewrites analyze_unit to pass the estimated narrow response window.
         p_val = salt_test(
             spikes, pulse_times,
             response_window_ms=self.response_window_ms,
-            baseline_window_ms=self.baseline_window_ms,
+            baseline_window_ms=SALT_BASELINE_WINDOW_MS,
             n_jitter=self.salt_n_jitter,
         )
 
