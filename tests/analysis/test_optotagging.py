@@ -136,3 +136,30 @@ def test_collision_test_untestable_when_too_few_eligible():
     rw = ot.estimate_response_window(sp, pulses)
     cr = ot.collision_test(sp, pulses, rw.peak_latency_ms, rw.window_ms)
     assert cr.status == "untestable"
+
+
+def test_salt_small_p_for_locked_response():
+    pulses = _pulses(n=300)
+    sp = _antidromic_unit(pulses, latency_ms=4.0, jitter_ms=0.1,
+                          base_rate=4.0, collision=False, seed=12)
+    rw = ot.estimate_response_window(sp, pulses)
+    p = ot.salt_test(sp, pulses, response_window_ms=rw.window_ms)
+    assert p < 0.01
+
+
+def test_salt_not_significant_for_flat_unit():
+    pulses = _pulses(n=300)
+    sp = _antidromic_unit(pulses, base_rate=6.0, respond=False, seed=13)
+    rw = ot.estimate_response_window(sp, pulses)
+    p = ot.salt_test(sp, pulses, response_window_ms=rw.window_ms)
+    assert p > 0.05
+
+
+def test_salt_is_deterministic():
+    pulses = _pulses(n=200)
+    sp = _antidromic_unit(pulses, latency_ms=4.0, base_rate=3.0,
+                          collision=False, seed=14)
+    rw = ot.estimate_response_window(sp, pulses)
+    p1 = ot.salt_test(sp, pulses, response_window_ms=rw.window_ms)
+    p2 = ot.salt_test(sp, pulses, response_window_ms=rw.window_ms)
+    assert p1 == p2

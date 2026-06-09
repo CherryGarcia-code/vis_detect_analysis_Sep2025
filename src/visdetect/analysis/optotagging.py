@@ -402,7 +402,7 @@ def split_laser_blocks(
 
 
 # ── SALT test ──────────────────────────────────────────────────────────
-def salt_test(
+def _salt_test_jsd_uniform(
     spike_times: np.ndarray,
     pulse_times: np.ndarray,
     response_window_ms: Tuple[float, float] = RESPONSE_WINDOW_MS,
@@ -410,7 +410,7 @@ def salt_test(
     n_jitter: int = SALT_N_JITTER,
     bin_ms: float = SALT_BIN_MS,
 ) -> float:
-    """Stimulus-Associated spike Latency Test (SALT).
+    """Original SALT implementation retained for reference (JSD-to-uniform null, RNG-based).
 
     For each laser pulse, build a histogram of spike times in the response
     window (fine bins of *bin_ms*).  Then build *n_jitter* baseline
@@ -495,6 +495,63 @@ def salt_test(
 
     p_value = float(n_exceed) / n_jitter
     return max(p_value, 1.0 / (n_jitter + 1))
+
+
+def salt_test(spike_times, pulse_times,
+              response_window_ms: Tuple[float, float] = RESPONSE_WINDOW_MS,
+              baseline_window_ms: Tuple[float, float] = SALT_BASELINE_WINDOW_MS,
+              n_jitter: int = SALT_N_JITTER,   # accepted for back-compat; ignored
+              bin_ms: float = SALT_BIN_MS,
+              max_windows: int = MAX_SALT_BASELINE_WINDOWS) -> float:
+    """Canonical SALT (Kvitsiani et al. 2013).
+
+    Latency distributions (with a 'no-spike' category) are built for the test window
+    and for many equal-width baseline windows. The null is the distribution of
+    baseline-vs-baseline JS divergences; the statistic is the mean test-vs-baseline
+    JS divergence; p = (1 + #{null >= stat}) / (1 + n_null). Deterministic.
+    ``n_jitter`` is accepted for backward compatibility but ignored.
+    """
+    spikes = np.asarray(spike_times, float).ravel()
+    pulses = np.asarray(pulse_times, float).ravel()
+    if len(spikes) == 0 or len(pulses) == 0:
+        return 1.0
+    win_dur = (response_window_ms[1] - response_window_ms[0]) / 1000.0
+    test_off = response_window_ms[0] / 1000.0
+    b0, b1 = baseline_window_ms[0] / 1000.0, baseline_window_ms[1] / 1000.0
+    if win_dur <= 0:
+        return 1.0
+    n_base_full = int((b1 - b0) // win_dur)
+    if n_base_full < 2:
+        return 1.0
+    offsets = b0 + np.arange(n_base_full) * win_dur
+    if n_base_full > max_windows:
+        offsets = offsets[np.linspace(0, n_base_full - 1, max_windows).astype(int)]
+    n_bins = max(1, int(round(win_dur * 1000.0 / bin_ms)))
+
+    def _dist(offset: float) -> np.ndarray:
+        hist = np.zeros(n_bins + 1)  # last entry = 'no spike'
+        for p in pulses:
+            t0 = p + offset
+            i0 = np.searchsorted(spikes, t0)
+            i1 = np.searchsorted(spikes, t0 + win_dur)
+            if i1 > i0:
+                rel = spikes[i0] - t0
+                bi = min(int(rel / win_dur * n_bins), n_bins - 1)
+                hist[bi] += 1
+            else:
+                hist[-1] += 1
+        s = hist.sum()
+        return hist / s if s > 0 else hist
+
+    test_d = _dist(test_off)
+    base_d = [_dist(o) for o in offsets]
+    null = [_jensen_shannon(base_d[i], base_d[j])
+            for i in range(len(base_d)) for j in range(i + 1, len(base_d))]
+    if not null:
+        return 1.0
+    stat = float(np.mean([_jensen_shannon(test_d, bd) for bd in base_d]))
+    null = np.asarray(null)
+    return float((1 + np.sum(null >= stat)) / (1 + len(null)))
 
 
 def _jensen_shannon(p: np.ndarray, q: np.ndarray) -> float:
