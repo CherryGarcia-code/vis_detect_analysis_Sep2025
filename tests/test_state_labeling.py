@@ -15,3 +15,22 @@ def test_state_constants_exist():
 def test_lick_valence_colors():
     for k in ["appropriate_lick", "inappropriate_lick", "nolick", "abort", "ref"]:
         assert k in CFG.LICK_VALENCE_COLORS
+
+
+import pytest
+from visdetect.analysis.state_labeling import classify_lick_valence
+
+
+@pytest.mark.parametrize("outcome,is_go,is_catch,expected", [
+    ("hit",  True,  False, "appropriate_lick"),    # go hit
+    ("Hit",  True,  False, "appropriate_lick"),    # case-insensitive
+    ("hit",  False, True,  "inappropriate_lick"),  # catch SDT false alarm
+    ("miss", True,  False, "nolick"),              # go miss
+    ("miss", False, True,  "nolick"),              # correct rejection
+    ("fa",   True,  False, "inappropriate_lick"),  # early lick on go
+    ("fa",   False, True,  "inappropriate_lick"),  # early lick on catch
+    ("abort", True, False, "abort"),
+    ("ref",  True,  False, "ref"),
+])
+def test_classify_lick_valence(outcome, is_go, is_catch, expected):
+    assert classify_lick_valence(outcome, is_go, is_catch) == expected
