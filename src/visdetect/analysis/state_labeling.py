@@ -38,3 +38,67 @@ def classify_lick_valence(outcome: str, is_go: bool, is_catch: bool) -> str:
     if o == "miss":
         return "nolick"
     return "ref"  # unknown -> excluded from fractions
+
+
+@dataclass
+class StateEpisode:
+    """A contiguous span of trials the experimenter is confident about."""
+    session_name: str
+    start_trial: int          # inclusive index into the trial DataFrame
+    end_trial: int            # inclusive
+    state_label: str
+    labeler: str
+    timestamp: str
+    notes: str = ""
+
+
+_EPISODE_COLUMNS = [
+    "session_name", "start_trial", "end_trial", "state_label", "labeler", "timestamp", "notes",
+]
+
+
+def save_episode(episode: StateEpisode, path) -> None:
+    """Append one episode to the labels CSV (creates the file with a header)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = pd.DataFrame([asdict(episode)])[_EPISODE_COLUMNS]
+    header = not path.exists()
+    row.to_csv(path, mode="a", header=header, index=False)
+
+
+def load_episodes(path) -> List[StateEpisode]:
+    """Load all episodes from the labels CSV."""
+    path = Path(path)
+    if not path.exists():
+        return []
+    df = pd.read_csv(path, dtype={"session_name": str, "notes": str})
+    df["notes"] = df["notes"].fillna("")
+    return [
+        StateEpisode(
+            session_name=str(r.session_name),
+            start_trial=int(r.start_trial),
+            end_trial=int(r.end_trial),
+            state_label=str(r.state_label),
+            labeler=str(r.labeler),
+            timestamp=str(r.timestamp),
+            notes=str(r.notes),
+        )
+        for r in df.itertuples(index=False)
+    ]
+
+
+def episodes_to_trial_labels(
+    episodes: List[StateEpisode], session_name: str, n_trials: int
+) -> np.ndarray:
+    """Expand sparse episodes for one session to a per-trial label array.
+
+    Unlabeled trials are ``None``.
+    """
+    labels = np.array([None] * n_trials, dtype=object)
+    for ep in episodes:
+        if str(ep.session_name) != str(session_name):
+            continue
+        lo = max(0, int(ep.start_trial))
+        hi = min(n_trials - 1, int(ep.end_trial))
+        labels[lo:hi + 1] = ep.state_label
+    return labels

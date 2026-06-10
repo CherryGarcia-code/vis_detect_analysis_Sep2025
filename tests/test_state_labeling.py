@@ -34,3 +34,37 @@ from visdetect.analysis.state_labeling import classify_lick_valence
 ])
 def test_classify_lick_valence(outcome, is_go, is_catch, expected):
     assert classify_lick_valence(outcome, is_go, is_catch) == expected
+
+
+import numpy as np
+from visdetect.analysis.state_labeling import (
+    StateEpisode, save_episode, load_episodes, episodes_to_trial_labels,
+)
+
+
+def test_episode_save_load_roundtrip(tmp_path):
+    path = tmp_path / "episodes.csv"
+    e1 = StateEpisode("07072025", 10, 25, "Impulsive", "ben", "2026-06-10T00:00:00")
+    e2 = StateEpisode("07072025", 40, 55, "Disengaged", "ben", "2026-06-10T00:01:00", notes="zoned out")
+    save_episode(e1, path)
+    save_episode(e2, path)
+    loaded = load_episodes(path)
+    assert len(loaded) == 2
+    assert loaded[0].session_name == "07072025"
+    assert loaded[0].start_trial == 10 and loaded[0].end_trial == 25
+    assert loaded[1].state_label == "Disengaged"
+    assert loaded[1].notes == "zoned out"
+
+
+def test_episodes_to_trial_labels():
+    eps = [
+        StateEpisode("S1", 2, 4, "Impulsive", "ben", "t"),
+        StateEpisode("S1", 7, 8, "Disengaged", "ben", "t"),
+        StateEpisode("S2", 0, 1, "StimSens", "ben", "t"),  # different session ignored
+    ]
+    labels = episodes_to_trial_labels(eps, "S1", n_trials=10)
+    assert labels[0] is None and labels[1] is None
+    assert list(labels[2:5]) == ["Impulsive", "Impulsive", "Impulsive"]
+    assert labels[5] is None and labels[6] is None
+    assert list(labels[7:9]) == ["Disengaged", "Disengaged"]
+    assert labels[9] is None
