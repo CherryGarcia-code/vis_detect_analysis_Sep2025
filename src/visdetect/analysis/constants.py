@@ -21,7 +21,7 @@ Usage
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 # =====================================================================
 # Event responsiveness windows
@@ -244,11 +244,11 @@ PUPIL_BLINK_MAX_GAP_MS: float = 500.0     # Max NaN gap to interpolate (blinks)
 # =====================================================================
 # Behavioral state labeler (user-defined states)
 # =====================================================================
-STATE_LABELS = ["Impulsive", "StimSens", "Disengaged"]
-STATE_EASY_CHANGE_THRESH = 2.0          # change_size >= this is an "easy"/obvious change
-STATE_CONFIDENCE_THRESHOLD = 0.8        # gate trials below this tagger confidence
-STATE_LABEL_W_GRID = [11, 15, 21, 31, 41, 51, 61]   # candidate window widths (trials)
-STATE_LABEL_W_DEFAULT = 31
-STATE_FEATURE_COLS = [
+STATE_LABELS: List[str] = ["Impulsive", "StimSens", "Disengaged"]
+STATE_EASY_CHANGE_THRESH: float = 2.0   # change_size >= this is an "easy"/obvious change
+STATE_CONFIDENCE_THRESHOLD: float = 0.8  # gate trials below this tagger confidence
+STATE_LABEL_W_GRID: List[int] = [11, 15, 21, 31, 41, 51, 61]  # candidate window widths (trials)
+STATE_LABEL_W_DEFAULT: int = 31
+STATE_FEATURE_COLS: List[str] = [
     "f_applick", "f_inapplick", "f_nolick", "f_abort", "f_miss_easy", "f_hit_hard",
 ]

@@ -213,6 +213,17 @@ FA_SUBTYPE_COLORS: Dict[str, str] = {
 }
 
 # =====================================================================
+# Lick-valence colors (behavioral state labeler raster)
+# =====================================================================
+LICK_VALENCE_COLORS: Dict[str, str] = {
+    "appropriate_lick":   "#2e8b57",   # green  — hit on a real change
+    "inappropriate_lick": "#d6453a",   # red    — early lick or catch SDT-FA
+    "nolick":             "#7b5cb8",   # purple — miss or correct rejection
+    "abort":              "#9aa0a6",   # grey
+    "ref":                "#d9c7a0",   # muted  — reflex lick (excluded from fractions)
+}
+
+# =====================================================================
 # Change-size groupings (derived from constants)
 # =====================================================================
 CHANGE_SIZES: List[float]  = sorted(ALL_GO_CHANGE_SIZES)   # [1.25, 1.35, 1.5, 2.0, 4.0]
@@ -318,18 +329,6 @@ def load_staging_manifest(
 
     manifest["session_idx"] = range(len(manifest))
     return manifest
-
-
-# =====================================================================
-# Lick-valence colors (behavioral state labeler raster)
-# =====================================================================
-LICK_VALENCE_COLORS: Dict[str, str] = {
-    "appropriate_lick":   "#2e8b57",   # green  — hit on a real change
-    "inappropriate_lick": "#d6453a",   # red    — early lick or catch SDT-FA
-    "nolick":             "#7b5cb8",   # purple — miss or correct rejection
-    "abort":              "#9aa0a6",   # grey
-    "ref":                "#d9c7a0",   # muted  — reflex lick (excluded from fractions)
-}
 
 
 def load_valid_sessions() -> set:
