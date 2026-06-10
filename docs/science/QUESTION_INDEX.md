@@ -22,7 +22,7 @@ so a fresh chat can boot a single question in isolation.
 |----|------------------|------|--------|------|------|
 | **B2** ⭐ | Does striatal sensory responsiveness *lead* the behavioral learning curve? | T1 | plan-draft | [design](../superpowers/specs/2026-06-08-B2-responsiveness-leads-learning-design.md) | [plan](../superpowers/plans/2026-06-08-B2-responsiveness-leads-learning-plan.md) |
 | B0 ⭐ | Which DDM knob does learning turn (drift vs threshold vs starting-point)? | T1 | plan-draft | [design](../superpowers/specs/2026-06-10-B0-ddm-learning-knob-design.md) | [plan](../superpowers/plans/2026-06-10-B0-ddm-learning-knob-plan.md) |
-| B1 ⭐ | Is the evidence-integration timescale a *learned* quantity? | T1 | not-started | — | — |
+| B1 ⭐ | Is the evidence-integration timescale a *learned* quantity? | T1 | spec-approved | [design](../superpowers/specs/2026-06-10-B1-integration-timescale-learned-design.md) | — |
 | A1 ⭐ | Is the lick-locked population ramp the commitment/bound signal? | T1→T2 | not-started | — | — |
 | A2 | Single-trial drift-to-fixed-bound on the population evidence axis | T1 | not-started | — | — |
 | A3 | D1 vs D2 asymmetric commitment / pre-response balance shift | T2/T3 | not-started | — | — |
