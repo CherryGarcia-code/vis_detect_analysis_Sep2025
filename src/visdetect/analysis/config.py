@@ -320,6 +320,18 @@ def load_staging_manifest(
     return manifest
 
 
+# =====================================================================
+# Lick-valence colors (behavioral state labeler raster)
+# =====================================================================
+LICK_VALENCE_COLORS: Dict[str, str] = {
+    "appropriate_lick":   "#2e8b57",   # green  — hit on a real change
+    "inappropriate_lick": "#d6453a",   # red    — early lick or catch SDT-FA
+    "nolick":             "#7b5cb8",   # purple — miss or correct rejection
+    "abort":              "#9aa0a6",   # grey
+    "ref":                "#d9c7a0",   # muted  — reflex lick (excluded from fractions)
+}
+
+
 def load_valid_sessions() -> set:
     """Return set of session-name ints for all filtered valid sessions."""
     manifest = load_staging_manifest(qc_only=True, apply_filter=True)

@@ -240,3 +240,15 @@ PUPIL_MIN_AREA: int = 200                 # Min pupil contour area (px^2)
 PUPIL_MAX_AREA: int = 15000               # Max pupil contour area (px^2)
 PUPIL_MIN_ROUNDNESS: float = 0.3          # min(minor/major) axis ratio
 PUPIL_BLINK_MAX_GAP_MS: float = 500.0     # Max NaN gap to interpolate (blinks)
+
+# =====================================================================
+# Behavioral state labeler (user-defined states)
+# =====================================================================
+STATE_LABELS = ["Impulsive", "StimSens", "Disengaged"]
+STATE_EASY_CHANGE_THRESH = 2.0          # change_size >= this is an "easy"/obvious change
+STATE_CONFIDENCE_THRESHOLD = 0.8        # gate trials below this tagger confidence
+STATE_LABEL_W_GRID = [11, 15, 21, 31, 41, 51, 61]   # candidate window widths (trials)
+STATE_LABEL_W_DEFAULT = 31
+STATE_FEATURE_COLS = [
+    "f_applick", "f_inapplick", "f_nolick", "f_abort", "f_miss_easy", "f_hit_hard",
+]
