@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>User-Defined Behavioral State Labeler — Design Mockups</title>
+<style>
+  :root{ --ink:#1f2430; --muted:#6b7280; --line:#e5e7eb; --bg:#ffffff; }
+  *{ box-sizing:border-box; }
+  body{ font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:var(--ink); background:#f6f7f9; margin:0; line-height:1.5; }
+  .wrap{ max-width:980px; margin:0 auto; padding:32px 28px 80px; }
+  header{ border-bottom:2px solid var(--ink); padding-bottom:16px; margin-bottom:28px; }
+  h1{ font-size:26px; margin:0 0 4px; }
+  h2{ font-size:19px; margin:38px 0 6px; border-left:4px solid var(--ink); padding-left:10px; }
+  h3{ font-size:15px; margin:18px 0 4px; }
+  .date{ color:var(--muted); font-size:13px; }
+  p{ font-size:14px; }
+  .subtitle{ color:var(--muted); font-size:13px; margin-top:2px; }
+  .card{ background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin:14px 0; box-shadow:0 1px 2px rgba(0,0,0,0.04); }
+  .chosen{ border:2px solid #2ca02c; }
+  .badge{ display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:10px; background:#2ca02c; color:#fff; margin-left:8px; vertical-align:middle; }
+  .legend{ font-size:12px; color:#555; }
+  .legend b{ font-weight:600; }
+  .mhead{ font-size:12px; color:var(--muted); margin-bottom:6px; }
+  .note{ font-size:13px; color:#555; background:#f0f3f8; border-radius:8px; padding:10px 12px; margin-top:8px; }
+  .grid3{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .btn{ font:inherit; font-size:13px; padding:7px 12px; border:1px solid #cbd2dc; border-radius:7px; background:#fff; cursor:pointer; }
+  .swatch{ display:inline-block; width:46px; text-align:center; margin-right:6px; font-size:11px; color:#555; }
+  ul{ font-size:14px; }
+  @media print{ body{ background:#fff; } .card{ box-shadow:none; } .wrap{ max-width:none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>User-Defined Behavioral State Labeler — Design Mockups</h1>
+  <div class="date">visdetect / BG_046 · design session 2026-06-10</div>
+</header>
+
+<p><b>The problem.</b> The GLM-HMM (Ashwood) infers <i>latent</i> states by fitting GLM weights that maximize trial-by-trial lick likelihood. Its boundaries land wherever the likelihood surface puts them — there is no place for the experimenter's judgment about where a state begins or ends. So the states often don't match where one would draw them by eye.</p>
+
+<p><b>The plan (human-in-the-loop, data-driven).</b></p>
+<ol style="font-size:14px">
+  <li><b>Label.</b> Read the trial-by-trial <i>outcome raster</i> and paint only the episodes you're confident about (sparse). Start with <b>Expert</b> sessions where states are clearest, then work backward toward Naive.</li>
+  <li><b>Calibrate.</b> Turn those labels into an <b>interpretable threshold rule</b> on local outcome composition (FA / miss / hit fractions, difficulty-aware), and <i>fit the window width</i> to match your eye. (A soft probabilistic classifier is kept as a documented future comparison.)</li>
+  <li><b>Tag.</b> Apply the rule to every session, with a per-trial <b>confidence</b> so ambiguous trials can be gated out. Calibrate on BG_046; test transfer to other subjects (features are subject-agnostic proportions).</li>
+</ol>
+
+<h2>0 · System architecture &amp; data flow</h2>
+<p class="subtitle">Amber = your steps (human-in-the-loop). Blue = automated. Green = validation. Dashed amber = the refinement loop (relabel where the tagger disagrees with your eye).</p>
+<div class="card"><svg id="archd" width="760" height="700"></svg></div>
+
+<!-- ================= SECTION 1 ================= -->
+<h2>1 · What you commit to when you label</h2>
+<p class="subtitle">Top: the raster you read (one tick per trial, colored by outcome). Below: three data-model options for painting states. <span class="legend"><span style="color:#2e8b57">■ hit</span> <span style="color:#7b5cb8">■ miss</span> <span style="color:#d6453a">■ FA/early-lick</span> <span style="color:#9aa0a6">■ abort</span> · tints: green=StimSens, violet=disengaged, red=impulsive</span></p>
+
+<div class="card">
+  <div class="mhead">The raster — synthetic ~240-trial session: engaged → disengaged → impulsive burst → engaged → disengaged</div>
+  <svg id="s1_main" width="760" height="86"></svg>
+</div>
+
+<div class="grid3">
+  <div class="card"><h3>A — Contiguous segmentation</h3><p class="subtitle">Partition the whole session into back-to-back labeled blocks. Every trial gets a state.</p><svg id="s1_a" width="280" height="64"></svg></div>
+  <div class="card chosen"><h3>B — Sparse episodes<span class="badge">CHOSEN</span></h3><p class="subtitle">Paint only confident stretches; leave ambiguous trials blank. Calibration learns from clean exemplars.</p><svg id="s1_b" width="280" height="64"></svg></div>
+  <div class="card"><h3>C — Hybrid + "uncertain"</h3><p class="subtitle">Contiguous, but with a hatched uncertain band between confident blocks.</p><svg id="s1_c" width="280" height="64"></svg></div>
+</div>
+
+<!-- ================= SECTION 2 ================= -->
+<h2>2 · The labeling tool — go vs catch</h2>
+<p class="subtitle">Same session and same painted episodes; only the raster encoding differs. Rolling-rate curves are kept <b>OFF</b> during labeling so labels stay independent of the fractions we fit (avoids circularity).</p>
+<div class="note"><b>Color = the lick decision's valence</b> (the ▾ notch separately marks catch trials): 🟩 green = appropriate lick (hit on a real change) → <b>StimSens</b> · 🟥 red = inappropriate lick — early lick (FA) <i>or</i> lick on a catch trial (SDT false alarm) → <b>Impulsive</b> · 🟪 purple = no lick — missed a real change <i>or</i> correct rejection → <b>Disengaged</b> · ⬜ grey = abort. This maps colors directly onto the three states and prevents catch licks from masquerading as hits.</div>
+<div class="grid2">
+  <div class="card"><h3>A — Outcome only</h3><p class="subtitle">Catch correct-rejections look identical to go-trial misses → can read as "disengaged".</p><svg id="s2_only" width="360" height="78"></svg></div>
+  <div class="card chosen"><h3>B — Go vs catch distinguished<span class="badge">CHOSEN</span></h3><p class="subtitle">Catch trials get an outline + ▾ notch → withheld catch trials are distinct from go-trial misses.</p><svg id="s2_gc" width="360" height="78"></svg></div>
+</div>
+<div class="note"><b>Interaction:</b> drag to paint an episode · keys 1=engaged 2=disengaged 3=impulsive · n=new label · backspace=erase · only painted trials saved · ←/→ navigate sessions (Expert→Naive) · r=toggle rolling overlay (default off).</div>
+
+<!-- ================= SECTION 3 ================= -->
+<h2>3 · Optional toggle — shade hits & misses by change size</h2>
+<p class="subtitle">Go-trial hits become 5 greens and genuine (go-trial) misses become 5 purples by change size; darker = bigger/more obvious change. Difficulty changes how diagnostic an outcome is.</p>
+<div class="card">
+  <button class="btn" onclick="window.__deck_cs()">Toggle change-size shading (currently: <span id="s3_state">ON</span>)</button>
+  <div class="mhead" style="margin-top:10px">BG_046 · 14082025 (Expert)</div>
+  <svg id="s3_ras" width="760" height="74"></svg>
+  <div class="grid2" style="margin-top:10px">
+    <div><span class="legend"><b>Hit shades (go trials)</b></span><div id="s3_leg_hit" style="margin-top:6px"></div></div>
+    <div><span class="legend"><b>Miss shades (genuine misses)</b></span><div id="s3_leg_miss" style="margin-top:6px"></div></div>
+  </div>
+  <div class="note"><b>How to read it:</b> a dark-purple tick = missed an <i>obvious</i> change → strong disengagement signal; a light-green tick = caught a <i>hard</i> change → strong sensitivity signal. Implication: the calibration features become difficulty-aware (miss-fraction split by easy/hard) so the fitted rule can reproduce a difficulty-weighted eye.</div>
+</div>
+
+<h2>Decisions locked this session</h2>
+<ul>
+  <li><b>Signal:</b> trial-by-trial outcome raster (local composition), not smoothed curves.</li>
+  <li><b>Vocabulary:</b> draft set (StimSens / Disengaged / Impulsive), refined while labeling.</li>
+  <li><b>Window W:</b> single fitted value (detection resolution, not a cap on state duration); validation re-fits W per stage to test whether the optimal timescale grows Naive→Expert.</li>
+  <li><b>Data model:</b> sparse confident episodes; unlabeled allowed.</li>
+  <li><b>Calibration:</b> explicit interpretable thresholds + confidence; fitted window; soft classifier deferred for comparison.</li>
+  <li><b>Cross-subject:</b> calibrate on BG_046, test transfer; pool only if transfer fails.</li>
+  <li><b>Order:</b> Expert sessions first, then backward to Naive.</li>
+  <li><b>Display:</b> go/catch distinguished; rolling curves off by default; optional change-size shading toggle.</li>
+  <li><b>Color = lick valence:</b> appropriate lick=green, inappropriate lick (early lick + catch SDT-FA)=red, no lick (miss + correct rejection)=purple, abort=grey — so catch licks read as impulsive, not as hits.</li>
+</ul>
+
+</div>
+
+<script>
+(function(){
+  var ns='http://www.w3.org/2000/svg';
+  var oc={hit:'#2e8b57',miss:'#7b5cb8',fa:'#d6453a',abort:'#9aa0a6'};
+  var sc={engaged:'rgba(44,160,44,0.18)',disengaged:'rgba(123,92,184,0.20)',impulsive:'rgba(214,39,40,0.18)'};
+  function rect(svg,x,y,w,h,fill,stroke,dash){var r=document.createElementNS(ns,'rect');r.setAttribute('x',x);r.setAttribute('y',y);r.setAttribute('width',w);r.setAttribute('height',h);r.setAttribute('fill',fill==null?'none':fill);if(stroke){r.setAttribute('stroke',stroke);r.setAttribute('stroke-width','0.8');}if(dash){r.setAttribute('stroke-dasharray','3,3');}svg.appendChild(r);}
+  function txt(svg,x,y,s,size,fill,anchor){var t=document.createElementNS(ns,'text');t.setAttribute('x',x);t.setAttribute('y',y);t.setAttribute('font-size',size);t.setAttribute('fill',fill);if(anchor)t.setAttribute('text-anchor',anchor);t.textContent=s;svg.appendChild(t);}
+
+  // ---------- Section 1 ----------
+  (function(){
+    var N=240,W=760,px=W/N,seed=7;var rnd=function(){seed=(seed*1103515245+12345)&0x7fffffff;return seed/0x7fffffff;};
+    function pick(p){var r=rnd(),c=0;for(var k in p){c+=p[k];if(r<c)return k;}return 'hit';}
+    var outc=[];for(var i=0;i<N;i++){var s=i<60?{hit:0.78,miss:0.12,fa:0.05,abort:0.05}:i<108?{hit:0.18,miss:0.62,fa:0.06,abort:0.14}:i<140?{hit:0.20,miss:0.10,fa:0.66,abort:0.04}:i<196?{hit:0.80,miss:0.12,fa:0.04,abort:0.04}:{hit:0.22,miss:0.60,fa:0.08,abort:0.10};outc.push(pick(s));}
+    function ticks(svg,y0,h){var p=W/N;for(var i=0;i<N;i++)rect(svg,(i*p).toFixed(2),y0,Math.max(p-0.4,1).toFixed(2),h,oc[outc[i]]);}
+    var main=document.getElementById('s1_main');ticks(main,28,40);rect(main,0,72,W,0.6,'#bbb');txt(main,W/2,84,'trial index →',11,'#999','middle');
+    var p2=280/N;
+    function ticks2(svg,y0,h){for(var i=0;i<N;i++)rect(svg,(i*p2).toFixed(2),y0,Math.max(p2-0.3,0.8).toFixed(2),h,oc[outc[i]]);}
+    function sp(svg,a,b,f,hatch){rect(svg,(a*p2).toFixed(2),4,((b-a)*p2).toFixed(2),52,hatch?'rgba(120,120,120,0.12)':f,hatch?'#888':null,hatch);}
+    var A=document.getElementById('s1_a');sp(A,0,60,sc.engaged);sp(A,60,108,sc.disengaged);sp(A,108,140,sc.impulsive);sp(A,140,196,sc.engaged);sp(A,196,240,sc.disengaged);ticks2(A,18,26);
+    var B=document.getElementById('s1_b');sp(B,8,52,sc.engaged);sp(B,70,100,sc.disengaged);sp(B,112,136,sc.impulsive);sp(B,150,188,sc.engaged);ticks2(B,18,26);
+    var C=document.getElementById('s1_c');sp(C,0,54,sc.engaged);sp(C,54,64,null,true);sp(C,64,104,sc.disengaged);sp(C,104,112,null,true);sp(C,112,138,sc.impulsive);sp(C,138,146,null,true);sp(C,146,194,sc.engaged);sp(C,194,202,null,true);sp(C,202,240,sc.disengaged);ticks2(C,18,26);
+  })();
+
+  // ---------- Section 2 ----------
+  (function(){
+    var N=110,W=360,px=W/N,seed=11;var rnd=function(){seed=(seed*1103515245+12345)&0x7fffffff;return seed/0x7fffffff;};
+    function pick(p){var r=rnd(),c=0;for(var k in p){c+=p[k];if(r<c)return k;}return 'hit';}
+    var outc=[],ca=[];for(var i=0;i<N;i++){var isC=rnd()<0.16;ca.push(isC);var reg=i<28?'eng':i<52?'dis':i<68?'imp':'eng';if(isC){var pFA=reg==='imp'?0.75:reg==='dis'?0.25:0.12;outc.push(rnd()<pFA?'hit':'miss');}else{var d=reg==='eng'?{hit:0.80,miss:0.12,fa:0.04,abort:0.04}:reg==='dis'?{hit:0.18,miss:0.62,fa:0.06,abort:0.14}:{hit:0.18,miss:0.08,fa:0.70,abort:0.04};outc.push(pick(d));}}
+    function colS2(i){var o=outc[i];if(o==='abort')return oc.abort;if(o==='fa')return oc.fa;if(ca[i]&&o==='hit')return oc.fa;if(ca[i]&&o==='miss')return oc.miss;return oc[o];}
+    function draw(id,dist){var svg=document.getElementById(id);rect(svg,(4*px),4,(20*px),58,sc.engaged);rect(svg,(32*px),4,(18*px),58,sc.disengaged);rect(svg,(54*px),4,(12*px),58,sc.impulsive);for(var i=0;i<N;i++){rect(svg,(i*px).toFixed(2),18,Math.max(px-0.4,1.2).toFixed(2),30,colS2(i),(dist&&ca[i])?'#111':null);if(dist&&ca[i])txt(svg,(i*px+px/2).toFixed(2),58,'▾',8,'#111','middle');}rect(svg,0,64,W,0.6,'#ccc');txt(svg,W/2,76,'trial index →',10,'#999','middle');}
+    draw('s2_only',false);draw('s2_gc',true);
+  })();
+
+  // ---------- Section 3 ----------
+  (function(){
+    var CS=[1.25,1.35,1.5,2.0,4.0],op={1.25:0.30,1.35:0.45,1.5:0.60,2.0:0.80,4.0:1.0};
+    var gR='46,139,87',pR='123,92,184',fa='#d6453a',abort='#9aa0a6';
+    var N=160,W=760,px=W/N,seed=23;var rnd=function(){seed=(seed*1103515245+12345)&0x7fffffff;return seed/0x7fffffff;};
+    function pick(p){var r=rnd(),c=0;for(var k in p){c+=p[k];if(r<c)return k;}return 'hit';}
+    var tr=[];for(var i=0;i<N;i++){var isC=rnd()<0.16;var reg=i<40?'eng':i<78?'dis':i<100?'imp':'eng';var cs=CS[Math.floor(rnd()*5)];var o;if(isC){var pFA=reg==='imp'?0.75:reg==='dis'?0.25:0.12;o=rnd()<pFA?'hit':'miss';cs=1.0;}else{var d=reg==='eng'?{hit:0.80,miss:0.12,fa:0.04,abort:0.04}:reg==='dis'?{hit:0.18,miss:0.62,fa:0.06,abort:0.14}:{hit:0.18,miss:0.08,fa:0.70,abort:0.04};o=pick(d);}tr.push({o:o,cs:cs,isC:isC});}
+    var graded=true;
+    function col(t){if(t.o==='fa')return fa;if(t.o==='abort')return abort;if(t.isC)return t.o==='hit'?fa:'rgba('+pR+',0.85)';if(t.o==='hit')return graded?'rgba('+gR+','+op[t.cs]+')':'rgb('+gR+')';if(t.o==='miss')return graded?'rgba('+pR+','+op[t.cs]+')':'rgb('+pR+')';return '#999';}
+    function render(){var svg=document.getElementById('s3_ras');svg.innerHTML='';for(var i=0;i<N;i++){var t=tr[i];rect(svg,(i*px).toFixed(2),16,Math.max(px-0.4,1.4).toFixed(2),34,col(t),t.isC?'#111':null);if(t.isC)txt(svg,(i*px+px/2).toFixed(2),60,'▾',8,'#111','middle');}rect(svg,0,66,W,0.6,'#ccc');}
+    function leg(id,rgb){var el=document.getElementById(id);el.innerHTML='';CS.forEach(function(cs){var d=document.createElement('span');d.className='swatch';d.innerHTML='<span style="display:block;height:18px;background:rgba('+rgb+','+op[cs]+');border:0.5px solid #ddd;border-radius:2px"></span>'+cs+'×';el.appendChild(d);});}
+    window.__deck_cs=function(){graded=!graded;document.getElementById('s3_state').textContent=graded?'ON':'OFF';render();};
+    render();leg('s3_leg_hit',gR);leg('s3_leg_miss',pR);
+  })();
+})();
+</script>
+<script>
+(function(){
+  var ns='http://www.w3.org/2000/svg';
+  var svg=document.getElementById('archd');
+  var defs=document.createElementNS(ns,'defs');
+  defs.innerHTML='<marker id="ahd" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 z" fill="#5a6473"/></marker>';
+  svg.appendChild(defs);
+  function box(x,y,w,h,title,sub,kind){
+    var fill=kind==='human'?'#fdf0d5':kind==='data'?'#eef2f7':kind==='auto'?'#e3edfb':'#e9f7ef';
+    var stroke=kind==='human'?'#e0a32e':kind==='data'?'#9aa5b1':kind==='auto'?'#3b82c4':'#2ca02c';
+    var r=document.createElementNS(ns,'rect');r.setAttribute('x',x);r.setAttribute('y',y);r.setAttribute('width',w);r.setAttribute('height',h);r.setAttribute('rx',9);r.setAttribute('fill',fill);r.setAttribute('stroke',stroke);r.setAttribute('stroke-width','1.4');svg.appendChild(r);
+    var t=document.createElementNS(ns,'text');t.setAttribute('x',x+w/2);t.setAttribute('y',y+(sub?20:h/2+4));t.setAttribute('text-anchor','middle');t.setAttribute('font-size','13');t.setAttribute('font-weight','700');t.setAttribute('fill','#1f2430');t.textContent=title;svg.appendChild(t);
+    if(sub){sub.split('\n').forEach(function(ln,i){var s=document.createElementNS(ns,'text');s.setAttribute('x',x+w/2);s.setAttribute('y',y+38+i*14);s.setAttribute('text-anchor','middle');s.setAttribute('font-size','11');s.setAttribute('fill','#5a6473');s.textContent=ln;svg.appendChild(s);});}
+  }
+  function arrow(x1,y1,x2,y2){var l=document.createElementNS(ns,'line');l.setAttribute('x1',x1);l.setAttribute('y1',y1);l.setAttribute('x2',x2);l.setAttribute('y2',y2);l.setAttribute('stroke','#5a6473');l.setAttribute('stroke-width','1.6');l.setAttribute('marker-end','url(#ahd)');svg.appendChild(l);}
+  function pathArrow(d,color){var p=document.createElementNS(ns,'path');p.setAttribute('d',d);p.setAttribute('fill','none');p.setAttribute('stroke',color||'#5a6473');p.setAttribute('stroke-width','1.6');p.setAttribute('marker-end','url(#ahd)');svg.appendChild(p);}
+  function lab(x,y,s,col){var t=document.createElementNS(ns,'text');t.setAttribute('x',x);t.setAttribute('y',y);t.setAttribute('font-size','10');t.setAttribute('fill',col||'#8a93a0');t.textContent=s;svg.appendChild(t);}
+  box(280,12,200,46,'Sessions (.pkl)','Expert → Naive order','data');
+  box(70,96,260,58,'1 · Labeling GUI  (you)','paint sparse confident episodes\non the outcome raster','human');
+  box(470,96,250,58,'2 · Feature extractor','local-window fractions: lick-valence\n+ difficulty, window W','auto');
+  box(70,196,260,46,'StateEpisodes.csv','(session, trial-span, state)','data');
+  box(250,300,300,62,'3 · Calibration','shallow decision tree + fit window W\nby cross-validated agreement','auto');
+  box(250,404,300,46,'Rule: thresholds + model','human-readable cutoffs + confidence','data');
+  box(250,492,300,60,'4 · Tagger','per-trial state + confidence\n(decode_session-compatible columns)','auto');
+  box(60,596,330,56,'5 · Validation  (you + stats)','κ / confusion vs your labels · re-shade review\n· vs GLM-HMM · cross-subject transfer','green');
+  box(430,596,300,56,'Downstream neural analyses','consume state column,\ngated by confidence','data');
+  arrow(350,58,212,94); arrow(410,58,584,94);
+  arrow(200,154,200,194);
+  arrow(560,154,478,298); arrow(330,219,360,298);
+  arrow(400,362,400,402); arrow(400,450,400,490);
+  pathArrow('M660,154 L660,522 L552,522'); lab(606,356,'all-trial'); lab(606,369,'features');
+  arrow(388,552,236,594); arrow(432,552,556,594);
+  pathArrow('M60,624 C16,624 16,118 70,123','#e0a32e');
+  lab(64,684,'↺ relabel where the tagger disagrees with your eye','#c08a1e');
+})();
+</script>
+</body>
+</html>
