@@ -62,7 +62,10 @@ def save_episode(episode: StateEpisode, path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     row = pd.DataFrame([asdict(episode)])[_EPISODE_COLUMNS]
-    header = not path.exists()
+    # Write a header for a missing OR zero-byte file (a crash mid-write can leave an
+    # empty file; without this guard the first append would be headerless and
+    # load_episodes would misparse the data row as column names).
+    header = not path.exists() or path.stat().st_size == 0
     row.to_csv(path, mode="a", header=header, index=False)
 
 

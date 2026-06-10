@@ -56,6 +56,19 @@ def test_episode_save_load_roundtrip(tmp_path):
     assert loaded[1].notes == "zoned out"
 
 
+def test_save_episode_writes_header_into_empty_file(tmp_path):
+    # A zero-byte file (e.g. left by a crash mid-write) must still get a header,
+    # otherwise the first appended row would be misparsed as column names.
+    path = tmp_path / "episodes.csv"
+    path.touch()
+    save_episode(StateEpisode("07072025", 3, 9, "StimSens", "ben", "t"), path)
+    loaded = load_episodes(path)
+    assert len(loaded) == 1
+    assert loaded[0].session_name == "07072025"
+    assert loaded[0].start_trial == 3 and loaded[0].end_trial == 9
+    assert loaded[0].state_label == "StimSens"
+
+
 def test_episodes_to_trial_labels():
     eps = [
         StateEpisode("S1", 2, 4, "Impulsive", "ben", "t"),
