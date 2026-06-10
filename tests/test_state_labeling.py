@@ -81,3 +81,40 @@ def test_episodes_to_trial_labels():
     assert labels[5] is None and labels[6] is None
     assert list(labels[7:9]) == ["Disengaged", "Disengaged"]
     assert labels[9] is None
+
+
+from visdetect.core.session import Session, Trial
+from visdetect.analysis.state_labeling import build_outcome_raster
+
+
+def _trial(outcome, change_size):
+    return Trial(
+        trialoutcome=outcome, reactiontimes={}, change_size=change_size,
+        orientation=None, ITI=1.0, change_time=2.0, baseline_values=np.zeros(5),
+    )
+
+
+def _session(trials):
+    return Session(
+        trials=trials, clusters=[], subject="T", session_name="T1",
+        good_cluster_ids=[], ni_events={},
+    )
+
+
+def test_build_outcome_raster_lick_valence():
+    trials = [
+        _trial("Hit", 2.0),    # go hit          -> appropriate_lick
+        _trial("Hit", 1.0),    # catch SDT FA    -> inappropriate_lick
+        _trial("Miss", 4.0),   # go miss         -> nolick
+        _trial("Miss", 1.0),   # correct reject  -> nolick
+        _trial("FA", 1.5),     # early lick      -> inappropriate_lick
+        _trial("abort", 1.5),  # abort           -> abort
+    ]
+    raster = build_outcome_raster(_session(trials))
+    assert list(raster["lick_valence"]) == [
+        "appropriate_lick", "inappropriate_lick", "nolick",
+        "nolick", "inappropriate_lick", "abort",
+    ]
+    # color column is populated from LICK_VALENCE_COLORS
+    assert raster.loc[0, "color"] == "#2e8b57"
+    assert set(["trial_idx", "is_go", "is_catch", "change_size"]).issubset(raster.columns)

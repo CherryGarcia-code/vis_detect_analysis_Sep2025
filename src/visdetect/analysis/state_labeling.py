@@ -105,3 +105,23 @@ def episodes_to_trial_labels(
         hi = min(n_trials - 1, int(ep.end_trial))
         labels[lo:hi + 1] = ep.state_label
     return labels
+
+
+def build_outcome_raster(session) -> pd.DataFrame:
+    """Per-trial raster frame: outcome, trial type, change size, lick-valence + color."""
+    df = get_trial_dataframe(session)
+    if df.empty:
+        return df
+    out = pd.DataFrame({
+        "trial_idx": df["trial_idx"].astype(int),
+        "outcome": df["outcome"],
+        "is_go": df["is_go"].astype(bool),
+        "is_catch": df["is_catch"].astype(bool),
+        "change_size": df["change_size"].astype(float),
+    })
+    out["lick_valence"] = [
+        classify_lick_valence(o, g, c)
+        for o, g, c in zip(out["outcome"], out["is_go"], out["is_catch"])
+    ]
+    out["color"] = out["lick_valence"].map(LICK_VALENCE_COLORS)
+    return out
