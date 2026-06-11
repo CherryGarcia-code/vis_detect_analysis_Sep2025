@@ -129,3 +129,24 @@ def build_outcome_raster(session) -> pd.DataFrame:
     ]
     out["color"] = out["lick_valence"].map(LICK_VALENCE_COLORS)
     return out
+
+
+def get_labeling_queue(manifest: Optional[pd.DataFrame] = None) -> List[str]:
+    """Return session names ordered Expert -> Naive (stage priority, then most-recent first).
+
+    If ``manifest`` is None, loads the QC-filtered staging manifest.
+    """
+    if manifest is None:
+        from visdetect.analysis.config import load_staging_manifest
+        manifest = load_staging_manifest(qc_only=True)
+
+    stage_priority = {s: i for i, s in enumerate(reversed(STAGE_ORDER))}  # Expert -> 0
+    fallback = len(STAGE_ORDER)
+    rows = []
+    for _, r in manifest.iterrows():
+        sn = str(r["session_name"])
+        rank = stage_priority.get(str(r.get("stage", "")), fallback)
+        ymd = parse_session_date(int(sn))                 # (yyyy, mm, dd)
+        rows.append((rank, tuple(-x for x in ymd), sn))   # negate for most-recent-first
+    rows.sort(key=lambda t: (t[0], t[1]))
+    return [sn for _, _, sn in rows]

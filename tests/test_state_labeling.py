@@ -126,3 +126,17 @@ def test_build_outcome_raster_empty_session_keeps_schema():
     # an empty session still returns the raster schema (not get_trial_dataframe's columns)
     assert set(["trial_idx", "outcome", "is_go", "is_catch",
                 "change_size", "lick_valence", "color"]).issubset(raster.columns)
+
+
+import pandas as pd
+from visdetect.analysis.state_labeling import get_labeling_queue
+
+
+def test_get_labeling_queue_expert_first_then_recent():
+    manifest = pd.DataFrame({
+        "session_name": ["01012025", "01032025", "01062025", "15062025"],
+        "stage": ["Learning", "Learning", "Expert", "Expert"],
+    })
+    queue = get_labeling_queue(manifest=manifest)
+    # Expert sessions first (most-recent first), then Learning (most-recent first)
+    assert queue == ["15062025", "01062025", "01032025", "01012025"]
