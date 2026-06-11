@@ -29,7 +29,8 @@ def main():
 
     from visdetect.suite.loader import load_session
     from visdetect.analysis.state_labeling import (
-        get_labeling_queue, build_outcome_raster, render_raster, save_episode, StateEpisode,
+        get_labeling_queue, build_outcome_raster, render_raster, save_episode,
+        load_episodes, StateEpisode,
     )
 
     queue = get_labeling_queue()
@@ -46,7 +47,9 @@ def main():
         sn = queue[state["i"]]
         sess = load_session(sn)
         raster = build_outcome_raster(sess)
-        render_raster(ax, raster, change_size_shading=state["cs_shade"])
+        # show previously-saved spans for this session so revisits are iterative
+        prior = [e for e in load_episodes(args.labels) if str(e.session_name) == str(sn)]
+        render_raster(ax, raster, change_size_shading=state["cs_shade"], episodes=prior)
         ax.set_title(f"{sn}  [{state['i']+1}/{len(queue)}]  active label: {state['label']}")
         fig.canvas.draw_idle()
         state["raster_len"] = len(raster)

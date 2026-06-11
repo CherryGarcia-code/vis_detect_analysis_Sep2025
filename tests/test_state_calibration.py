@@ -212,6 +212,26 @@ def test_tag_features_emits_hmm_downstream_aliases():
     assert list(tagged["hmm_state_gated"]) == list(tagged["state_gated"])
 
 
+def test_decode_session_states_is_drop_in_for_hmm_downstream():
+    # Headline contract: tagger output feeds hmm_downstream's metrics unchanged.
+    # This is the integration check that the per-column unit tests can't cover.
+    from visdetect.utils.synthetic import make_synthetic_session
+    from visdetect.analysis.hmm_downstream import compute_state_behavioral_metrics
+    df = _separable_training_frame()
+    tree = fit_state_tree(df, seed=42)
+    result = CalibrationResult(tree, 5, list(tree.classes_), list(df.columns[:-1]), 1.0, "")
+    sess = make_synthetic_session(n_trials=40, n_clusters=2, seed=3)
+    tagged = decode_session_states(result, sess)
+    # every column hmm_downstream.compute_state_behavioral_metrics needs is present
+    for col in ["hmm_state", "is_hit", "is_fa", "is_miss", "is_go", "is_catch",
+                "outcome", "session_name"]:
+        assert col in tagged.columns, col
+    n_states = len(result.state_labels)
+    metrics = compute_state_behavioral_metrics(tagged, result.state_labels, n_states)
+    assert len(metrics) == n_states
+    assert {"hit_rate_go", "early_lick_rate", "dprime", "criterion"}.issubset(metrics.columns)
+
+
 def test_calibrate_cli_help():
     r = subprocess.run([sys.executable, os.path.join(_SCRIPTS, "calibrate_states.py"), "--help"],
                        capture_output=True, text=True)

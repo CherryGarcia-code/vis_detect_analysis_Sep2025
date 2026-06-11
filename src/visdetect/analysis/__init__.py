@@ -3,6 +3,8 @@ from . import behavior
 from . import hmm
 from . import lick
 from . import optotagging
+from . import state_calibration
+from . import state_labeling
 from . import su_analysis
 from . import tf_pulse
 from . import unit_selection

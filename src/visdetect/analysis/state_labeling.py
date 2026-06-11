@@ -57,7 +57,8 @@ _EPISODE_COLUMNS = [
 ]
 
 _RASTER_COLUMNS = [
-    "trial_idx", "outcome", "is_go", "is_catch", "change_size", "lick_valence", "color",
+    "trial_idx", "outcome", "is_go", "is_catch", "change_size",
+    "is_hit", "is_fa", "is_miss", "lick_valence", "color",
 ]
 
 
@@ -122,6 +123,11 @@ def build_outcome_raster(session) -> pd.DataFrame:
         "is_go": df["is_go"].astype(bool),
         "is_catch": df["is_catch"].astype(bool),
         "change_size": df["change_size"].astype(float),
+        # SDT behavioral-label booleans, carried through so the tagged frame is
+        # drop-in for hmm_downstream (compute_state_behavioral_metrics reads these).
+        "is_hit": df["is_hit"].astype(bool),
+        "is_fa": df["is_fa"].astype(bool),
+        "is_miss": df["is_miss"].astype(bool),
     })
     out["lick_valence"] = [
         classify_lick_valence(o, g, c)

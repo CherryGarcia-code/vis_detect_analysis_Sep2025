@@ -173,6 +173,11 @@ def tag_features(tree, features_df: pd.DataFrame,
     a genuine drop-in for ``hmm_downstream`` (which reads ``hmm_state``); the
     unprefixed names mirror ``hmm.decode_session``'s non-prefixed ``p_state_{k}``
     and give this parallel state system its own readable column set.
+
+    Note: ``p_state_{k}`` is keyed to ``tree.classes_[k]`` (alphabetical class
+    order), which is NOT the HMM's Viterbi-state numbering. Use the string
+    ``state_label`` / ``hmm_state_label`` columns as the stable interface; treat
+    the numeric ``p_state_{k}`` ordering as tree-specific.
     """
     from visdetect.analysis.hmm import assign_states_with_confidence
     probs = tree.predict_proba(features_df[STATE_FEATURE_COLS].values)
@@ -202,4 +207,7 @@ def decode_session_states(result: CalibrationResult, session,
     if raster.empty:
         return raster
     feats = extract_state_features(raster, result.window)
-    return tag_features(result.tree, feats, confidence_threshold=confidence_threshold)
+    tagged = tag_features(result.tree, feats, confidence_threshold=confidence_threshold)
+    # session_name lets hmm_downstream group/pool a concatenation of per-session tags.
+    tagged["session_name"] = session.session_name
+    return tagged

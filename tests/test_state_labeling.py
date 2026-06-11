@@ -122,6 +122,11 @@ def test_build_outcome_raster_lick_valence():
     # color column is populated from LICK_VALENCE_COLORS
     assert raster.loc[0, "color"] == "#2e8b57"
     assert set(["trial_idx", "is_go", "is_catch", "change_size"]).issubset(raster.columns)
+    # SDT behavioral-label booleans are carried for hmm_downstream drop-in
+    assert set(["is_hit", "is_fa", "is_miss"]).issubset(raster.columns)
+    assert bool(raster.loc[0, "is_hit"]) is True          # go hit
+    assert bool(raster.loc[4, "is_fa"]) is True           # early lick
+    assert bool(raster.loc[2, "is_miss"]) is True         # go miss
 
 
 def test_build_outcome_raster_empty_session_keeps_schema():
