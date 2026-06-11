@@ -157,3 +157,36 @@ def test_calibrate_states_single_session_warns_nan_kappa_but_fits():
     assert isinstance(result, CalibrationResult)
     assert np.isnan(result.loso_kappa)
     assert set(result.state_labels) == {"Impulsive", "StimSens", "Disengaged"}
+
+
+from visdetect.analysis.state_calibration import tag_features, decode_session_states
+
+
+def test_tag_features_columns_and_confidence_gating():
+    df = _separable_training_frame()
+    tree = fit_state_tree(df, seed=42)
+    from visdetect.analysis.constants import STATE_FEATURE_COLS
+    feats = df[STATE_FEATURE_COLS].copy()
+    feats["trial_idx"] = range(len(feats))
+
+    tagged = tag_features(tree, feats, confidence_threshold=0.8)
+    K = len(tree.classes_)
+    for k in range(K):
+        assert f"p_state_{k}" in tagged.columns
+    assert {"state", "state_label", "state_confidence", "state_gated"}.issubset(tagged.columns)
+    # separable data -> pure leaves -> confidence 1.0 -> nothing gated at 0.8
+    assert (tagged["state_gated"] == -1).sum() == 0
+    # threshold above the max confidence gates everything
+    tagged_hi = tag_features(tree, feats, confidence_threshold=1.0)
+    assert (tagged_hi["state_gated"] == -1).all()
+
+
+def test_decode_session_states_runs_on_synthetic_session():
+    from visdetect.utils.synthetic import make_synthetic_session
+    df = _separable_training_frame()
+    tree = fit_state_tree(df, seed=42)
+    result = CalibrationResult(tree, 5, list(tree.classes_), list(df.columns[:-1]), 1.0, "")
+    sess = make_synthetic_session(n_trials=30, n_clusters=2, seed=1)
+    tagged = decode_session_states(result, sess)
+    assert len(tagged) == 30
+    assert {"state", "state_label", "state_confidence", "state_gated"}.issubset(tagged.columns)

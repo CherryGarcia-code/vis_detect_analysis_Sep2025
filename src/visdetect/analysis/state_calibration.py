@@ -161,3 +161,31 @@ def calibrate_states(rasters, episodes, w_grid=None, seed: int = 42) -> Calibrat
         tree=tree, window=W, state_labels=list(tree.classes_),
         feature_cols=list(STATE_FEATURE_COLS), loso_kappa=kappa, rules_text=rules,
     )
+
+
+def tag_features(tree, features_df: pd.DataFrame,
+                 confidence_threshold: float = STATE_CONFIDENCE_THRESHOLD) -> pd.DataFrame:
+    """Tag each row with a state + confidence, mirroring hmm.decode_session columns."""
+    from visdetect.analysis.hmm import assign_states_with_confidence
+    probs = tree.predict_proba(features_df[STATE_FEATURE_COLS].values)
+    classes = list(tree.classes_)
+    out = features_df.copy()
+    for k in range(len(classes)):
+        out[f"p_state_{k}"] = probs[:, k]
+    idx = probs.argmax(axis=1)
+    out["state"] = idx.astype(int)
+    out["state_label"] = [classes[i] for i in idx]
+    out["state_confidence"] = probs.max(axis=1)
+    out["state_gated"] = assign_states_with_confidence(probs, threshold=confidence_threshold)
+    return out
+
+
+def decode_session_states(result: CalibrationResult, session,
+                          confidence_threshold: float = STATE_CONFIDENCE_THRESHOLD) -> pd.DataFrame:
+    """Decode one session to per-trial states (mirrors hmm.decode_session)."""
+    from visdetect.analysis.state_labeling import build_outcome_raster
+    raster = build_outcome_raster(session)
+    if raster.empty:
+        return raster
+    feats = extract_state_features(raster, result.window)
+    return tag_features(result.tree, feats, confidence_threshold=confidence_threshold)
