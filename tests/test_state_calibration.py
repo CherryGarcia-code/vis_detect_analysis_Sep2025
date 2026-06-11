@@ -141,3 +141,19 @@ def test_calibration_result_save_load(tmp_path):
     loaded = CalibrationResult.load(p)
     assert loaded.window == result.window
     assert loaded.state_labels == result.state_labels
+
+
+def test_calibrate_states_single_session_warns_nan_kappa_but_fits():
+    # With only one labeled session every LOSO fold is degenerate: the model must
+    # still fit (on that session) but report loso_kappa=NaN and warn — never crash.
+    rasters = {"A": _planted_raster("A")}
+    eps = [
+        StateEpisode("A", 2, 7, "Impulsive", "ben", "t"),
+        StateEpisode("A", 12, 17, "StimSens", "ben", "t"),
+        StateEpisode("A", 22, 27, "Disengaged", "ben", "t"),
+    ]
+    with pytest.warns(UserWarning, match="degenerate"):
+        result = calibrate_states(rasters, eps, w_grid=[3, 5], seed=42)
+    assert isinstance(result, CalibrationResult)
+    assert np.isnan(result.loso_kappa)
+    assert set(result.state_labels) == {"Impulsive", "StimSens", "Disengaged"}

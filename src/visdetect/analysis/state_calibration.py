@@ -91,6 +91,8 @@ class CalibrationResult:
     rules_text: str
 
     def save(self, path) -> None:
+        # Note: the pickled sklearn tree is version-coupled; regenerate via
+        # calibrate_states if scikit-learn is upgraded.
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:
@@ -130,18 +132,29 @@ def calibrate_states(rasters, episodes, w_grid=None, seed: int = 42) -> Calibrat
         for hold in sessions:
             tr = pooled[pooled["__session"] != hold]
             te = pooled[pooled["__session"] == hold]
-            if te.empty or tr["state"].nunique() < 2:
+            # Skip degenerate folds: nothing to test on, or training has <2 classes
+            # (the single-labeled-session case leaves tr empty -> 0 classes -> skipped).
+            if te.empty or tr.empty or tr["state"].nunique() < 2:
                 continue
             m = fit_state_tree(tr, seed=seed)
             pred = m.predict(te[STATE_FEATURE_COLS].values)
             kappas.append(cohen_kappa_score(te["state"].astype(str).values, pred))
         mean_k = float(np.mean(kappas)) if kappas else float("nan")
+        # Prefer any real (non-NaN) kappa over NaN; among real kappas prefer the higher.
         if best is None or (not np.isnan(mean_k) and (np.isnan(best[1]) or mean_k > best[1])):
             best = (W, mean_k, pooled)
 
     if best is None:
         raise ValueError("No labeled trials found for any window in w_grid.")
     W, kappa, pooled = best
+    if np.isnan(kappa):
+        import warnings
+        warnings.warn(
+            "calibrate_states: every LOSO fold was degenerate (e.g. only one labeled "
+            "session), so loso_kappa is NaN and the rule is unvalidated. Label more "
+            "sessions before trusting this model.",
+            UserWarning, stacklevel=2,
+        )
     tree = fit_state_tree(pooled, seed=seed)
     rules = export_text(tree, feature_names=list(STATE_FEATURE_COLS))
     return CalibrationResult(
