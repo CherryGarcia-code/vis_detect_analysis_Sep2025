@@ -1,5 +1,23 @@
-from visdetect.analysis import constants as C
+import matplotlib
+matplotlib.use("Agg")  # headless backend; must precede the pyplot import
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import pytest
+
 from visdetect.analysis import config as CFG
+from visdetect.analysis import constants as C
+from visdetect.core.session import Session, Trial
+from visdetect.analysis.state_labeling import (
+    build_outcome_raster,
+    classify_lick_valence,
+    episodes_to_trial_labels,
+    get_labeling_queue,
+    load_episodes,
+    render_raster,
+    save_episode,
+    StateEpisode,
+)
 
 
 def test_state_constants_exist():
@@ -17,10 +35,6 @@ def test_lick_valence_colors():
         assert k in CFG.LICK_VALENCE_COLORS
 
 
-import pytest
-from visdetect.analysis.state_labeling import classify_lick_valence
-
-
 @pytest.mark.parametrize("outcome,is_go,is_catch,expected", [
     ("hit",  True,  False, "appropriate_lick"),    # go hit
     ("Hit",  True,  False, "appropriate_lick"),    # case-insensitive
@@ -34,12 +48,6 @@ from visdetect.analysis.state_labeling import classify_lick_valence
 ])
 def test_classify_lick_valence(outcome, is_go, is_catch, expected):
     assert classify_lick_valence(outcome, is_go, is_catch) == expected
-
-
-import numpy as np
-from visdetect.analysis.state_labeling import (
-    StateEpisode, save_episode, load_episodes, episodes_to_trial_labels,
-)
 
 
 def test_episode_save_load_roundtrip(tmp_path):
@@ -83,10 +91,6 @@ def test_episodes_to_trial_labels():
     assert labels[9] is None
 
 
-from visdetect.core.session import Session, Trial
-from visdetect.analysis.state_labeling import build_outcome_raster
-
-
 def _trial(outcome, change_size):
     return Trial(
         trialoutcome=outcome, reactiontimes={}, change_size=change_size,
@@ -128,10 +132,6 @@ def test_build_outcome_raster_empty_session_keeps_schema():
                 "change_size", "lick_valence", "color"]).issubset(raster.columns)
 
 
-import pandas as pd
-from visdetect.analysis.state_labeling import get_labeling_queue
-
-
 def test_get_labeling_queue_expert_first_then_recent():
     manifest = pd.DataFrame({
         "session_name": ["01012025", "01032025", "01062025", "15062025"],
@@ -140,12 +140,6 @@ def test_get_labeling_queue_expert_first_then_recent():
     queue = get_labeling_queue(manifest=manifest)
     # Expert sessions first (most-recent first), then Learning (most-recent first)
     assert queue == ["15062025", "01062025", "01032025", "01012025"]
-
-
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from visdetect.analysis.state_labeling import render_raster
 
 
 def test_render_raster_draws_one_patch_per_trial():

@@ -1,8 +1,23 @@
+import os
+import subprocess
+import sys
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from visdetect.analysis.state_calibration import extract_state_features
+from visdetect.analysis.state_labeling import StateEpisode
+from visdetect.analysis.state_calibration import (
+    CalibrationResult,
+    attach_episode_labels,
+    calibrate_states,
+    decode_session_states,
+    extract_state_features,
+    fit_state_tree,
+    tag_features,
+)
+
+_SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts", "state_labeling")
 
 
 def _raster(lick_valences, is_go=None, change_size=None):
@@ -54,10 +69,6 @@ def test_features_all_ref_window_is_zero_not_nan():
     assert (feats[cols].fillna(-1).values == 0.0).all()
 
 
-from visdetect.analysis.state_labeling import StateEpisode
-from visdetect.analysis.state_calibration import attach_episode_labels, fit_state_tree
-
-
 def test_attach_episode_labels_by_trial_idx():
     feats = extract_state_features(_raster(["nolick"] * 6), W=3)
     eps = [StateEpisode("S1", 1, 3, "Disengaged", "ben", "t")]
@@ -93,9 +104,6 @@ def test_fit_state_tree_raises_on_no_labeled_rows():
     feats["state"] = None   # nothing labeled
     with pytest.raises(ValueError, match="no labeled rows"):
         fit_state_tree(feats, seed=42)
-
-
-from visdetect.analysis.state_calibration import calibrate_states, CalibrationResult
 
 
 def _planted_raster(session_name):
@@ -159,9 +167,6 @@ def test_calibrate_states_single_session_warns_nan_kappa_but_fits():
     assert set(result.state_labels) == {"Impulsive", "StimSens", "Disengaged"}
 
 
-from visdetect.analysis.state_calibration import tag_features, decode_session_states
-
-
 def test_tag_features_columns_and_confidence_gating():
     df = _separable_training_frame()
     tree = fit_state_tree(df, seed=42)
@@ -205,11 +210,6 @@ def test_tag_features_emits_hmm_downstream_aliases():
     assert list(tagged["hmm_state"]) == list(tagged["state"])
     assert list(tagged["hmm_state_label"]) == list(tagged["state_label"])
     assert list(tagged["hmm_state_gated"]) == list(tagged["state_gated"])
-
-
-import subprocess, sys, os
-
-_SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts", "state_labeling")
 
 
 def test_calibrate_cli_help():
