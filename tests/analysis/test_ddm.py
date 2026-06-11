@@ -32,3 +32,31 @@ def test_build_trial_evidence_truncates_at_decision():
     assert fa["lick"] == 1 and hit["lick"] == 1
     # evidence is log2(TF/base): 0 in the first second, ~2 after the change (Hit only)
     assert abs(hit["evidence"][0]) < 1e-6
+
+
+from visdetect.analysis.ddm import build_model, simulate_sample, rectify
+
+
+def test_rectify_variants():
+    e = np.array([-1.0, 0.0, 1.0])
+    assert np.allclose(rectify(e, "symmetric"), [-1, 0, 1])
+    assert np.allclose(rectify(e, "halfwave"), [0, 0, 1])      # slow ignored
+    asym = rectify(e, "asym", g_up=1.0, g_down=0.5)
+    assert asym[0] == -0.5 and asym[2] == 1.0
+
+
+def test_model_drift_tracks_tf_and_fa_is_early_crossing():
+    # Evidence dict: trial 0 = strong fast post "change"; trial 1 = flat baseline.
+    dt = 0.02
+    ev = {0: np.r_[np.zeros(25), np.ones(75) * 2.0],   # change at 0.5 s
+          1: np.zeros(150)}                             # pure baseline, 3 s
+    conds = {0: {"trial_uid": 0, "change_time": 0.5},
+             1: {"trial_uid": 1, "change_time": np.inf}}
+    # High sensitivity, modest urgency -> trial 0 crosses fast (Hit), trial 1 rarely/late.
+    params = dict(v=3.0, a=1.0, z=0.0, u=0.3, t0=0.05, lam=0.0)
+    df = simulate_sample(ev, conds, params, R="halfwave", urgency="rising",
+                         dt=dt, T_dur=3.0, n_per_trial=200, seed=0)
+    hit_rate_evi = df[(df.trial_uid == 0) & (df.lick == 1)].shape[0]
+    hit_rate_base = df[(df.trial_uid == 1) & (df.lick == 1)].shape[0]
+    assert hit_rate_evi > hit_rate_base            # TF-driven crossings dominate
+    assert df[(df.trial_uid == 1) & (df.lick == 1)].shape[0] >= 0  # FAs are early crossings

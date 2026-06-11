@@ -109,3 +109,78 @@ def build_trial_evidence(session, tf_base: float = None, dt: float = DT) -> pd.D
                      "change_time": ct, "decision_time": dec_t, "lick": int(lick),
                      "censored": bool(censored), "evidence": e})
     return pd.DataFrame(rows)
+
+
+import warnings
+
+import pyddm
+from pyddm import (Model, Drift, NoiseConstant, BoundConstant, ICPoint,
+                   OverlayNonDecision, Sample)
+
+CHOICE_NAMES = ("lick", "nolick")   # value 1 -> upper(lick), 0 -> lower(nolick)
+
+
+def rectify(e, kind: str, g_up: float = 1.0, g_down: float = 1.0):
+    """Rectification nonlinearity R(.) applied to instantaneous TF evidence e(t)."""
+    e = np.asarray(e, dtype=float)
+    if kind == "symmetric":
+        return e
+    if kind == "halfwave":
+        return np.clip(e, 0.0, None)                       # slow pulses ignored
+    if kind == "asym":
+        return np.where(e >= 0, g_up * e, g_down * e)
+    raise ValueError(kind)
+
+
+class DriftTwoRoute(Drift):
+    """drift(t) = v*R(e(t)) - lam*x + u*h(t); e(t) looked up per trial via trial_uid.
+
+    Route 1 (sensory) = v * R(evidence); route 2 (impulsivity) = u * h(t), with
+    h(t)=t for rising urgency or h(t)=1 for constant. lam is the leak on x.
+    """
+    name = "two_route"
+    required_parameters = ["v", "u", "lam", "R_kind", "urgency_kind", "dt", "evmap"]
+    required_conditions = ["trial_uid"]
+
+    def get_drift(self, t, x, conditions, **kwargs):
+        ev = self.evmap.get(conditions["trial_uid"])
+        i = int(round(t / self.dt))
+        e_t = ev[i] if (ev is not None and 0 <= i < len(ev)) else 0.0
+        sensory = self.v * rectify(np.array([e_t]), self.R_kind)[0]
+        urge = self.u * t if self.urgency_kind == "rising" else self.u
+        return sensory - self.lam * x + urge
+
+
+def build_model(params: dict, evmap: dict, R: str = "halfwave",
+                urgency: str = "rising", dt: float = DT, T_dur: float = 3.5) -> Model:
+    """Assemble the two-route pyddm Model. params values may be floats or pyddm
+    Fittable objects (for the free parameters during fitting)."""
+    return Model(
+        name="B0_two_route",
+        drift=DriftTwoRoute(v=params["v"], u=params["u"], lam=params.get("lam", 0.0),
+                            R_kind=R, urgency_kind=urgency, dt=dt, evmap=evmap),
+        noise=NoiseConstant(noise=1.0),
+        bound=BoundConstant(B=params["a"]),
+        IC=ICPoint(x0=params.get("z", 0.0)),
+        overlay=OverlayNonDecision(nondectime=params.get("t0", 0.0)),
+        dx=0.01, dt=dt, T_dur=T_dur, choice_names=CHOICE_NAMES,
+    )
+
+
+def simulate_sample(evmap, conds, params, R="halfwave", urgency="rising",
+                    dt=DT, T_dur=3.5, n_per_trial=200, seed=0) -> pd.DataFrame:
+    """Simulate n_per_trial draws per trial condition; return a tidy DataFrame with
+    columns (trial_uid, RT, lick). lick=1 = upper-bound (lick) crossing, lick=0 =
+    lower-bound crossing. Undecided draws (no crossing within T_dur) are omitted."""
+    model = build_model(params, evmap, R=R, urgency=urgency, dt=dt, T_dur=T_dur)
+    rows = []
+    for offset, uid in enumerate(conds):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")           # silence "dt is large"
+            sol = model.solve(conditions={"trial_uid": uid})
+            rs = sol.resample(n_per_trial, seed=seed + offset)
+        for rt in np.asarray(rs.choice_upper):
+            rows.append({"trial_uid": uid, "RT": float(rt), "lick": 1})
+        for rt in np.asarray(rs.choice_lower):
+            rows.append({"trial_uid": uid, "RT": float(rt), "lick": 0})
+    return pd.DataFrame(rows)
