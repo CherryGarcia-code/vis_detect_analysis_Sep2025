@@ -54,3 +54,26 @@ def extract_state_features(raster_df: pd.DataFrame, W: int) -> pd.DataFrame:
     df["f_miss_easy"] = (roll(miss_easy) / denom).fillna(0.0)
     df["f_hit_hard"]  = (roll(hit_hard) / denom).fillna(0.0)
     return df
+
+
+def attach_episode_labels(features_df: pd.DataFrame, episodes, session_name: str) -> pd.DataFrame:
+    """Add a 'state' column from episodes (None where unlabeled), keyed by trial_idx."""
+    from visdetect.analysis.state_labeling import episodes_to_trial_labels
+    df = features_df.copy()
+    n = int(df["trial_idx"].max()) + 1 if len(df) else 0
+    lab = episodes_to_trial_labels(episodes, session_name, n)
+    df["state"] = [lab[int(i)] for i in df["trial_idx"]]
+    return df
+
+
+def fit_state_tree(features_df: pd.DataFrame, seed: int = 42):
+    """Fit a shallow, readable decision tree on labeled rows (the 'state' column)."""
+    from sklearn.tree import DecisionTreeClassifier
+    train = features_df[features_df["state"].notna()]
+    X = train[STATE_FEATURE_COLS].values
+    y = train["state"].astype(str).values
+    tree = DecisionTreeClassifier(
+        max_depth=3, min_samples_leaf=5, class_weight="balanced", random_state=seed,
+    )
+    tree.fit(X, y)
+    return tree

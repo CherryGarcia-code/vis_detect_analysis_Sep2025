@@ -52,3 +52,37 @@ def test_features_all_ref_window_is_zero_not_nan():
     feats = extract_state_features(_raster(["ref", "ref", "ref"]), W=3)
     cols = ["f_applick", "f_inapplick", "f_nolick", "f_abort", "f_miss_easy", "f_hit_hard"]
     assert (feats[cols].fillna(-1).values == 0.0).all()
+
+
+from visdetect.analysis.state_labeling import StateEpisode
+from visdetect.analysis.state_calibration import attach_episode_labels, fit_state_tree
+
+
+def test_attach_episode_labels_by_trial_idx():
+    feats = extract_state_features(_raster(["nolick"] * 6), W=3)
+    eps = [StateEpisode("S1", 1, 3, "Disengaged", "ben", "t")]
+    labeled = attach_episode_labels(feats, eps, "S1")
+    assert labeled.loc[0, "state"] is None
+    assert list(labeled.loc[1:3, "state"]) == ["Disengaged"] * 3
+    assert labeled.loc[4, "state"] is None
+
+
+def _separable_training_frame():
+    # clean, linearly separable 3-class table over the feature columns
+    from visdetect.analysis.constants import STATE_FEATURE_COLS
+    data = []
+    for _ in range(8):
+        data.append({**{c: 0.0 for c in STATE_FEATURE_COLS}, "f_inapplick": 0.9, "state": "Impulsive"})
+        data.append({**{c: 0.0 for c in STATE_FEATURE_COLS}, "f_nolick": 0.9, "state": "Disengaged"})
+        data.append({**{c: 0.0 for c in STATE_FEATURE_COLS}, "f_applick": 0.9, "state": "StimSens"})
+    return pd.DataFrame(data)
+
+
+def test_fit_state_tree_separates_classes_and_is_deterministic():
+    df = _separable_training_frame()
+    t1 = fit_state_tree(df, seed=42)
+    t2 = fit_state_tree(df, seed=42)
+    from visdetect.analysis.constants import STATE_FEATURE_COLS
+    pred = t1.predict(df[STATE_FEATURE_COLS].values)
+    assert (pred == df["state"].values).mean() == 1.0           # separable -> perfect train fit
+    assert list(t1.feature_importances_) == list(t2.feature_importances_)  # deterministic
