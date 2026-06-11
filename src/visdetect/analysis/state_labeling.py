@@ -150,3 +150,49 @@ def get_labeling_queue(manifest: Optional[pd.DataFrame] = None) -> List[str]:
         rows.append((rank, tuple(-x for x in ymd), sn))   # negate for most-recent-first
     rows.sort(key=lambda t: (t[0], t[1]))
     return [sn for _, _, sn in rows]
+
+
+# change_size -> opacity for the optional difficulty shading (bigger = more opaque)
+_CS_OPACITY = {1.25: 0.30, 1.35: 0.45, 1.5: 0.60, 2.0: 0.80, 4.0: 1.0}
+
+
+def _hex_to_rgb01(h: str):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+
+
+def render_raster(ax, raster_df, change_size_shading: bool = False, episodes=None):
+    """Draw the outcome raster on ``ax``: one colored bar per trial.
+
+    Catch trials get a black outline. With ``change_size_shading``, go-trial hits
+    and genuine (go-trial) misses are shaded by change size. ``episodes`` (list of
+    StateEpisode) are drawn as translucent state spans behind the ticks.
+    """
+    import matplotlib.patches as mpatches
+    from visdetect.analysis.config import LICK_VALENCE_COLORS
+
+    n = len(raster_df)
+    if episodes:
+        state_tints = {"Impulsive": (0.84, 0.15, 0.16), "StimSens": (0.17, 0.63, 0.17),
+                       "Disengaged": (0.48, 0.36, 0.72)}
+        for ep in episodes:
+            rgb = state_tints.get(ep.state_label, (0.5, 0.5, 0.5))
+            ax.axvspan(ep.start_trial - 0.5, ep.end_trial + 0.5, color=rgb, alpha=0.18, lw=0)
+
+    for i, row in enumerate(raster_df.itertuples(index=False)):
+        lv = row.lick_valence
+        base = LICK_VALENCE_COLORS.get(lv, "#999999")
+        if change_size_shading and row.is_go and lv in ("appropriate_lick", "nolick"):
+            rgb = _hex_to_rgb01(base)
+            alpha = _CS_OPACITY.get(round(float(row.change_size), 2), 1.0)
+            color = (rgb[0], rgb[1], rgb[2], alpha)
+        else:
+            color = base
+        edge = "#111111" if row.is_catch else "none"
+        ax.add_patch(mpatches.Rectangle((i - 0.5, 0), 1.0, 1.0, facecolor=color,
+                                        edgecolor=edge, linewidth=0.6))
+    ax.set_xlim(-0.5, max(n - 0.5, 0.5))
+    ax.set_ylim(0, 1)
+    ax.set_yticks([])
+    ax.set_xlabel("trial index")
+    return ax

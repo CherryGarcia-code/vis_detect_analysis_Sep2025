@@ -140,3 +140,28 @@ def test_get_labeling_queue_expert_first_then_recent():
     queue = get_labeling_queue(manifest=manifest)
     # Expert sessions first (most-recent first), then Learning (most-recent first)
     assert queue == ["15062025", "01062025", "01032025", "01012025"]
+
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from visdetect.analysis.state_labeling import render_raster
+
+
+def test_render_raster_draws_one_patch_per_trial():
+    raster = build_outcome_raster(_session([
+        _trial("Hit", 2.0), _trial("Miss", 1.0), _trial("FA", 1.5),
+    ]))
+    fig, ax = plt.subplots()
+    render_raster(ax, raster)
+    # one colored bar per trial
+    assert len(ax.patches) >= 3
+    plt.close(fig)
+
+
+def test_render_raster_change_size_shading_runs():
+    raster = build_outcome_raster(_session([_trial("Hit", 1.25), _trial("Hit", 4.0)]))
+    fig, ax = plt.subplots()
+    render_raster(ax, raster, change_size_shading=True)
+    assert len(ax.patches) >= 2
+    plt.close(fig)
