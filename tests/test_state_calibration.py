@@ -224,3 +224,10 @@ def test_tag_cli_help():
                        capture_output=True, text=True)
     assert r.returncode == 0
     assert "usage" in (r.stdout + r.stderr).lower()
+
+
+def test_validate_cli_help():
+    r = subprocess.run([sys.executable, os.path.join(_SCRIPTS, "validate_states.py"), "--help"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0
+    assert "usage" in (r.stdout + r.stderr).lower()
