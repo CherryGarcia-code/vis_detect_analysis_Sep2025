@@ -1,6 +1,7 @@
 """CLI: validate the state rule vs the experimenter's labels (kappa, confusion) and
 produce a re-shade figure per labeled session."""
 import argparse
+import gc
 import os
 import sys
 
@@ -50,6 +51,7 @@ def main():
         fig.savefig(os.path.join(args.fig_dir, f"reshade_{sn}.png"), dpi=120, bbox_inches="tight")
         plt.close(fig)
         del sess
+        gc.collect()
 
     from sklearn.metrics import cohen_kappa_score, confusion_matrix
     if y_true:
