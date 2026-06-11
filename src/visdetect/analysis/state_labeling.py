@@ -202,3 +202,37 @@ def render_raster(ax, raster_df, change_size_shading: bool = False, episodes=Non
     ax.set_yticks([])
     ax.set_xlabel("trial index")
     return ax
+
+
+def render_state_strip(ax, labels, colors=None, gated=None, ylabel=None):
+    """Draw a per-trial state strip: one solid full-height cell per labeled trial.
+
+    A dedicated strip (not a background tint), so it is never occluded by the
+    raster bars — used for the validation figure's "your labels" and "tagger" tracks
+    and for showing saved spans in the GUI.
+
+    labels : sequence length n of state-label strings; ``None`` -> blank (unlabeled).
+    colors : label -> hex (defaults to config.STATE_LABEL_COLORS).
+    gated  : optional sequence length n; where ``gated[i] == -1`` the cell is drawn
+             dimmed (alpha 0.30) to flag a low-confidence prediction.
+    ylabel : optional left-hand row label.
+    """
+    import matplotlib.patches as mpatches  # deferred so the library imports without matplotlib
+    if colors is None:
+        from visdetect.analysis.config import STATE_LABEL_COLORS
+        colors = STATE_LABEL_COLORS
+
+    n = len(labels)
+    for i, lab in enumerate(labels):
+        if lab is None or (isinstance(lab, float) and np.isnan(lab)):
+            continue
+        alpha = 0.30 if (gated is not None and gated[i] == -1) else 1.0
+        ax.add_patch(mpatches.Rectangle((i - 0.5, 0), 1.0, 1.0,
+                                        facecolor=colors.get(lab, "#999999"),
+                                        edgecolor="none", alpha=alpha))
+    ax.set_xlim(-0.5, max(n - 0.5, 0.5))
+    ax.set_ylim(0, 1)
+    ax.set_yticks([])
+    if ylabel:
+        ax.set_ylabel(ylabel, rotation=0, ha="right", va="center", fontsize=9)
+    return ax

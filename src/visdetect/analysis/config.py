@@ -224,6 +224,17 @@ LICK_VALENCE_COLORS: Dict[str, str] = {
 }
 
 # =====================================================================
+# Behavioral-state colors (labeler state strips) — reuse the HMM-state palette
+# so state shading is consistent project-wide AND distinct from the lick-valence
+# raster colors above. StimSens = the stimulus-sensitive "engaged" regime.
+# =====================================================================
+STATE_LABEL_COLORS: Dict[str, str] = {
+    "Impulsive":  "#fb6a4a",   # orange-red (HMM Impulsive)
+    "StimSens":   "#6baed6",   # blue       (HMM Engaged)
+    "Disengaged": "#bdbdbd",   # grey       (HMM Disengaged)
+}
+
+# =====================================================================
 # Change-size groupings (derived from constants)
 # =====================================================================
 CHANGE_SIZES: List[float]  = sorted(ALL_GO_CHANGE_SIZES)   # [1.25, 1.35, 1.5, 2.0, 4.0]

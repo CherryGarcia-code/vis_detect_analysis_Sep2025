@@ -15,6 +15,7 @@ from visdetect.analysis.state_labeling import (
     get_labeling_queue,
     load_episodes,
     render_raster,
+    render_state_strip,
     save_episode,
     StateEpisode,
 )
@@ -187,3 +188,18 @@ def test_render_raster_episode_spans_add_patches():
     render_raster(ax2, raster, episodes=[StateEpisode("T1", 0, 1, "Impulsive", "ben", "t")])
     assert len(ax2.patches) == base + 1   # one extra span patch behind the trial bars
     plt.close(fig2)
+
+
+def test_render_state_strip_one_cell_per_labeled_trial():
+    fig, ax = plt.subplots()
+    render_state_strip(ax, ["Impulsive", None, "StimSens", "Disengaged", None])
+    assert len(ax.patches) == 3   # the two None (unlabeled) trials are blank
+    plt.close(fig)
+
+
+def test_render_state_strip_gated_cells_are_dimmed():
+    fig, ax = plt.subplots()
+    render_state_strip(ax, ["Impulsive", "StimSens"], gated=[-1, 0])  # first low-confidence
+    alphas = sorted((p.get_alpha() if p.get_alpha() is not None else 1.0) for p in ax.patches)
+    assert alphas[0] < 1.0 and alphas[-1] == 1.0
+    plt.close(fig)
