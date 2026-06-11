@@ -1,12 +1,15 @@
 """Interactive matplotlib GUI to sparsely label behavioral-state episodes on the
 outcome raster. Mirrors scripts/tf_labeling/run_labeling_gui.py.
 
-Keys: 1=Impulsive 2=StimSens 3=Disengaged  | drag=paint span  | backspace=erase span
-      r=toggle rolling overlay (off)  c=toggle change-size shading (off)
-      left/right=prev/next session (Expert->Naive)  s=save  q=quit
+Keys: 1=Impulsive 2=StimSens 3=Disengaged  | drag=paint span (saved immediately)
+      c=toggle change-size shading  | left/right=prev/next session (Expert->Naive)  q=quit
+
+Each painted span is appended to the labels CSV on release (no explicit save needed).
+To correct a mislabel, edit the labels CSV directly or paint over the region.
 """
 import argparse
 import datetime as dt
+import gc
 import os
 import sys
 
@@ -20,7 +23,7 @@ def main():
     args = ap.parse_args()
 
     import matplotlib
-    matplotlib.use("TkAgg")
+    matplotlib.use("TkAgg", force=True)  # assert interactive backend even if a lib set Agg
     import matplotlib.pyplot as plt
     from matplotlib.widgets import SpanSelector
 
@@ -30,6 +33,9 @@ def main():
     )
 
     queue = get_labeling_queue()
+    if not queue:
+        print("No sessions in the labeling queue — check the QC-filtered staging manifest.")
+        return
     state = {"i": 0, "label": "Impulsive", "cs_shade": False}
     keymap = {"1": "Impulsive", "2": "StimSens", "3": "Disengaged"}
 
@@ -45,6 +51,8 @@ def main():
         fig.canvas.draw_idle()
         state["raster_len"] = len(raster)
         state["session_name"] = sn
+        del sess
+        gc.collect()
 
     def on_span(xmin, xmax):
         lo, hi = int(round(xmin)), int(round(xmax))
@@ -65,6 +73,7 @@ def main():
             state["cs_shade"] = not state["cs_shade"]; draw()
         elif event.key == "q":
             plt.close(fig)
+            return  # figure is gone; don't touch its title/canvas afterwards
         ax.set_title(ax.get_title().rsplit("active label:", 1)[0] + f"active label: {state['label']}")
         fig.canvas.draw_idle()
 
