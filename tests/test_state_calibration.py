@@ -167,7 +167,27 @@ def test_calibrate_states_single_session_warns_nan_kappa_but_fits():
     assert set(result.state_labels) == {"Impulsive", "StimSens", "Disengaged"}
 
 
-def test_tag_features_columns_and_confidence_gating():
+def test_calibrate_states_single_state_session_does_not_poison_kappa():
+    # A single-state session held out yields a 0/0 (NaN) cohen-kappa fold. It must be
+    # SKIPPED, not averaged in, so the multi-state sessions still produce a finite,
+    # un-warned LOSO kappa. (Regression: np.mean once propagated the NaN across all folds.)
+    rasters = {"A": _planted_raster("A"), "B": _planted_raster("B"),
+               "C": _planted_raster("C")}
+    eps = []
+    for s in ("A", "B"):
+        eps += [
+            StateEpisode(s, 2, 7, "Impulsive", "ben", "t"),
+            StateEpisode(s, 12, 17, "StimSens", "ben", "t"),
+            StateEpisode(s, 22, 27, "Disengaged", "ben", "t"),
+        ]
+    eps.append(StateEpisode("C", 2, 9, "Impulsive", "ben", "t"))  # single-state session
+    import warnings
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = calibrate_states(rasters, eps, w_grid=[3, 5], seed=42)
+    assert not any("degenerate" in str(w.message) for w in caught), "kappa was NaN-poisoned"
+    assert not np.isnan(result.loso_kappa)
+    assert result.loso_kappa > 0.5
     df = _separable_training_frame()
     tree = fit_state_tree(df, seed=42)
     from visdetect.analysis.constants import STATE_FEATURE_COLS

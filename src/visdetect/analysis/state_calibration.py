@@ -132,14 +132,18 @@ def calibrate_states(rasters, episodes, w_grid=None, seed: int = 42) -> Calibrat
         for hold in sessions:
             tr = pooled[pooled["__session"] != hold]
             te = pooled[pooled["__session"] == hold]
-            # Skip degenerate folds: nothing to test on, or training has <2 classes
-            # (the single-labeled-session case leaves tr empty -> 0 classes -> skipped).
-            if te.empty or tr.empty or tr["state"].nunique() < 2:
+            # Skip un-scoreable folds: nothing to train on, training has <2 classes,
+            # or the held-out session has <2 true classes. A single-class held-out
+            # fold makes cohen_kappa_score do 0/0 -> NaN, which would poison the mean
+            # across ALL sessions; such a session simply can't be validated against
+            # (its labels still train the model in every other fold).
+            if te.empty or tr.empty or tr["state"].nunique() < 2 or te["state"].nunique() < 2:
                 continue
             m = fit_state_tree(tr, seed=seed)
             pred = m.predict(te[STATE_FEATURE_COLS].values)
             kappas.append(cohen_kappa_score(te["state"].astype(str).values, pred))
-        mean_k = float(np.mean(kappas)) if kappas else float("nan")
+        # nanmean as a backstop in case any fold still yields NaN.
+        mean_k = float(np.nanmean(kappas)) if kappas else float("nan")
         # Prefer any real (non-NaN) kappa over NaN; among real kappas prefer the higher.
         if best is None or (not np.isnan(mean_k) and (np.isnan(best[1]) or mean_k > best[1])):
             best = (W, mean_k, pooled)
