@@ -23,7 +23,6 @@ def main():
     args = ap.parse_args()
 
     import matplotlib
-    matplotlib.use("TkAgg", force=True)  # assert interactive backend even if a lib set Agg
     import matplotlib.pyplot as plt
     from matplotlib.widgets import SpanSelector
 
@@ -32,6 +31,17 @@ def main():
         get_labeling_queue, build_outcome_raster, render_raster, save_episode,
         load_episodes, StateEpisode,
     )
+
+    # The visdetect imports above (qc.py, tf_pulse.py, unit_selection.py,
+    # suite/plotting.py) call matplotlib.use("Agg") at module level, which clobbers
+    # any backend we set earlier. Assert the interactive backend AFTER them.
+    matplotlib.use("TkAgg", force=True)
+    plt.switch_backend("TkAgg")
+    if matplotlib.get_backend().lower() == "agg":
+        raise SystemExit(
+            "Could not activate an interactive matplotlib backend (still 'Agg'). "
+            "This needs a desktop session with tkinter — don't run it headless/over SSH."
+        )
 
     queue = get_labeling_queue()
     if not queue:
