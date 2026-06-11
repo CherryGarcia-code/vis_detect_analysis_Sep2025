@@ -103,6 +103,14 @@ Raw agreement 87.6% (5313/6063); κ = 0.775 corrects for chance.
   boundary split at `f_inapplick ≈ 0.44`; both are "engaged" regimes differing in early-lick rate.
 - **Impulsive↔Disengaged** barely confuse (16 / 13) — cleanly separated.
 
+### Re-shade figures (`figures/state_labeler/reshade_{session}.png`)
+Each session gets a **3-track** figure: the outcome raster, a **your-labels** strip, and a
+**tagger** strip (low-confidence/`state_gated` cells dimmed), vertically aligned so a
+tagger–label disagreement appears as a colour mismatch and you can see the tagger fill your
+unlabeled gaps. State colours reuse the HMM palette (Impulsive `#fb6a4a`, StimSens `#6baed6`,
+Disengaged `#bdbdbd`) — distinct from the lick-valence raster. (An earlier version drew the
+state tints behind the opaque raster bars, where they were fully occluded — hence "no shading".)
+
 ### Learned rule (`rules.md`, `W = 11`)
 ```
 |--- f_nolick <= 0.39                      # engaged (licking)

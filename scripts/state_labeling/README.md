@@ -49,11 +49,12 @@ change-size difficulty.
 
 **Keys:** `1`=Impulsive · `2`=StimSens · `3`=Disengaged (active label) ·
 **drag = paint a span** (saved on release) · `c`=toggle difficulty shading ·
-`←`/`→`=prev/next session · `q`=quit. Previously-saved spans reappear (tinted) when you
-revisit a session.
+`←`/`→`=prev/next session · `q`=quit.
 
 Spans append to `data/state_labels/state_episodes.csv` (git-diffable; hand-edit to fix a
 mislabel). **Label ≥ 2 sessions before calibrating** — cross-validation needs more than one.
+To review what you've already labeled, use the Step-4 re-shade figures (the "your labels"
+strip), or inspect the CSV directly.
 
 ### 2. Calibrate — `calibrate_states.py`
 
@@ -86,9 +87,13 @@ Tags every QC-filtered manifest session → one CSV per session in
 py scripts/state_labeling/validate_states.py
 ```
 
-Prints Cohen's κ + a confusion matrix (tagger vs your labels) and saves re-shade PNGs to
-`figures/state_labeler/`. Where the tagger disagrees, relabel that region (Step 1) and
-re-run 2→4. This refinement loop is the point of the tool.
+Prints Cohen's κ + a confusion matrix (tagger vs your labels) and saves a **3-track
+re-shade PNG** per session to `figures/state_labeler/`: the outcome raster on top, a
+**your-labels** strip, and a **tagger** strip (low-confidence/`state_gated` cells dimmed),
+all vertically aligned so disagreements show as a colour mismatch between the two strips.
+State colours: Impulsive `#fb6a4a`, StimSens `#6baed6`, Disengaged `#bdbdbd`
+(`--confidence` sets the dim threshold). Where the tagger disagrees, relabel that region
+(Step 1) and re-run 2→4. This refinement loop is the point of the tool.
 
 ## Output columns (downstream compatibility)
 
