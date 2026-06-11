@@ -1,5 +1,6 @@
 """CLI: fit the behavioral-state rule from labeled episodes; save model + rules.md."""
 import argparse
+import gc
 import os
 import sys
 
@@ -28,10 +29,11 @@ def main():
         sess = load_session(sn)
         rasters[sn] = build_outcome_raster(sess)
         del sess
+        gc.collect()
 
     result = calibrate_states(rasters, episodes, seed=args.seed)
     result.save(args.out_model)
-    os.makedirs(os.path.dirname(args.out_rules), exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(args.out_rules)), exist_ok=True)
     with open(args.out_rules, "w", encoding="utf-8") as f:
         f.write(f"# Behavioral-state rule\n\nwindow W = {result.window}\n")
         f.write(f"LOSO Cohen's kappa = {result.loso_kappa:.3f}\n")
