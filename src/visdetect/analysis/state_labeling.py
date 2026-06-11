@@ -56,6 +56,10 @@ _EPISODE_COLUMNS = [
     "session_name", "start_trial", "end_trial", "state_label", "labeler", "timestamp", "notes",
 ]
 
+_RASTER_COLUMNS = [
+    "trial_idx", "outcome", "is_go", "is_catch", "change_size", "lick_valence", "color",
+]
+
 
 def save_episode(episode: StateEpisode, path) -> None:
     """Append one episode to the labels CSV (creates the file with a header)."""
@@ -111,7 +115,7 @@ def build_outcome_raster(session) -> pd.DataFrame:
     """Per-trial raster frame: outcome, trial type, change size, lick-valence + color."""
     df = get_trial_dataframe(session)
     if df.empty:
-        return df
+        return pd.DataFrame(columns=_RASTER_COLUMNS)
     out = pd.DataFrame({
         "trial_idx": df["trial_idx"].astype(int),
         "outcome": df["outcome"],

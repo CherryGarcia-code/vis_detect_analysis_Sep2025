@@ -118,3 +118,11 @@ def test_build_outcome_raster_lick_valence():
     # color column is populated from LICK_VALENCE_COLORS
     assert raster.loc[0, "color"] == "#2e8b57"
     assert set(["trial_idx", "is_go", "is_catch", "change_size"]).issubset(raster.columns)
+
+
+def test_build_outcome_raster_empty_session_keeps_schema():
+    raster = build_outcome_raster(_session([]))
+    assert len(raster) == 0
+    # an empty session still returns the raster schema (not get_trial_dataframe's columns)
+    assert set(["trial_idx", "outcome", "is_go", "is_catch",
+                "change_size", "lick_valence", "color"]).issubset(raster.columns)
