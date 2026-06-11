@@ -79,3 +79,72 @@ def fit_state_tree(features_df: pd.DataFrame, seed: int = 42):
     )
     tree.fit(X, y)
     return tree
+
+
+@dataclass
+class CalibrationResult:
+    tree: object                 # sklearn DecisionTreeClassifier
+    window: int
+    state_labels: List[str]
+    feature_cols: List[str]
+    loso_kappa: float
+    rules_text: str
+
+    def save(self, path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def load(cls, path) -> "CalibrationResult":
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+
+def _pool_labeled(rasters: Dict[str, pd.DataFrame], episodes, W: int) -> pd.DataFrame:
+    frames = []
+    for sn, raster in rasters.items():
+        feats = extract_state_features(raster, W)
+        feats = attach_episode_labels(feats, episodes, sn)
+        feats = feats[feats["state"].notna()].copy()
+        feats["__session"] = sn
+        frames.append(feats)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def calibrate_states(rasters, episodes, w_grid=None, seed: int = 42) -> CalibrationResult:
+    """Fit the state rule: choose W by LOSO Cohen's kappa, then refit on all labels."""
+    from sklearn.metrics import cohen_kappa_score
+    from sklearn.tree import export_text
+    if w_grid is None:
+        w_grid = STATE_LABEL_W_GRID
+
+    best = None  # (W, mean_kappa, pooled)
+    for W in w_grid:
+        pooled = _pool_labeled(rasters, episodes, W)
+        if pooled.empty:
+            continue
+        sessions = pooled["__session"].unique()
+        kappas = []
+        for hold in sessions:
+            tr = pooled[pooled["__session"] != hold]
+            te = pooled[pooled["__session"] == hold]
+            if te.empty or tr["state"].nunique() < 2:
+                continue
+            m = fit_state_tree(tr, seed=seed)
+            pred = m.predict(te[STATE_FEATURE_COLS].values)
+            kappas.append(cohen_kappa_score(te["state"].astype(str).values, pred))
+        mean_k = float(np.mean(kappas)) if kappas else float("nan")
+        if best is None or (not np.isnan(mean_k) and (np.isnan(best[1]) or mean_k > best[1])):
+            best = (W, mean_k, pooled)
+
+    if best is None:
+        raise ValueError("No labeled trials found for any window in w_grid.")
+    W, kappa, pooled = best
+    tree = fit_state_tree(pooled, seed=seed)
+    rules = export_text(tree, feature_names=list(STATE_FEATURE_COLS))
+    return CalibrationResult(
+        tree=tree, window=W, state_labels=list(tree.classes_),
+        feature_cols=list(STATE_FEATURE_COLS), loso_kappa=kappa, rules_text=rules,
+    )

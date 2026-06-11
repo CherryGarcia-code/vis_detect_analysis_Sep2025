@@ -93,3 +93,51 @@ def test_fit_state_tree_raises_on_no_labeled_rows():
     feats["state"] = None   # nothing labeled
     with pytest.raises(ValueError, match="no labeled rows"):
         fit_state_tree(feats, seed=42)
+
+
+from visdetect.analysis.state_calibration import calibrate_states, CalibrationResult
+
+
+def _planted_raster(session_name):
+    # trials 0-9 impulsive (inappropriate_lick), 10-19 stimsens (appropriate_lick, easy),
+    # 20-29 disengaged (nolick, go, easy)
+    lv = (["inappropriate_lick"] * 10 + ["appropriate_lick"] * 10 + ["nolick"] * 10)
+    cs = ([1.5] * 10 + [4.0] * 10 + [4.0] * 10)
+    return pd.DataFrame({
+        "trial_idx": range(30), "lick_valence": lv,
+        "is_go": [True] * 30, "change_size": cs,
+    })
+
+
+def test_calibrate_states_returns_result_and_fits():
+    rasters = {"A": _planted_raster("A"), "B": _planted_raster("B")}
+    eps = []
+    for s in ("A", "B"):
+        eps += [
+            StateEpisode(s, 2, 7, "Impulsive", "ben", "t"),
+            StateEpisode(s, 12, 17, "StimSens", "ben", "t"),
+            StateEpisode(s, 22, 27, "Disengaged", "ben", "t"),
+        ]
+    result = calibrate_states(rasters, eps, w_grid=[3, 5], seed=42)
+    assert isinstance(result, CalibrationResult)
+    assert result.window in (3, 5)
+    assert set(result.state_labels) == {"Impulsive", "StimSens", "Disengaged"}
+    assert result.loso_kappa > 0.5
+    assert "f_" in result.rules_text
+
+
+def test_calibration_result_save_load(tmp_path):
+    rasters = {"A": _planted_raster("A"), "B": _planted_raster("B")}
+    eps = []
+    for s in ("A", "B"):
+        eps += [
+            StateEpisode(s, 2, 7, "Impulsive", "ben", "t"),
+            StateEpisode(s, 12, 17, "StimSens", "ben", "t"),
+            StateEpisode(s, 22, 27, "Disengaged", "ben", "t"),
+        ]
+    result = calibrate_states(rasters, eps, w_grid=[3, 5], seed=42)
+    p = tmp_path / "model.pkl"
+    result.save(p)
+    loaded = CalibrationResult.load(p)
+    assert loaded.window == result.window
+    assert loaded.state_labels == result.state_labels
