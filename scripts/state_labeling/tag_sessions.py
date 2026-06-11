@@ -21,14 +21,27 @@ def main():
     result = CalibrationResult.load(args.model)
     os.makedirs(args.out_dir, exist_ok=True)
     manifest = load_staging_manifest(qc_only=True)
+    tagged_n, skipped = 0, []
     for _, row in manifest.iterrows():
         sn = str(row["session_name"])
-        sess = load_session(sn)
-        tagged = decode_session_states(result, sess, confidence_threshold=args.confidence)
+        # Be resilient: a single unloadable session (e.g. missing pkl) must not
+        # abort the whole batch and silently drop every session after it.
+        try:
+            sess = load_session(sn)
+            tagged = decode_session_states(result, sess, confidence_threshold=args.confidence)
+        except Exception as e:
+            skipped.append(sn)
+            print(f"SKIP {sn}: {type(e).__name__}: {e}")
+            continue
         tagged.to_csv(os.path.join(args.out_dir, f"{sn}.csv"), index=False)
+        tagged_n += 1
         print(f"tagged {sn}: {len(tagged)} trials")
         del sess, tagged
         gc.collect()
+
+    print(f"\nDone: tagged {tagged_n}/{len(manifest)} sessions -> {args.out_dir}")
+    if skipped:
+        print(f"Skipped {len(skipped)} (could not load): {', '.join(skipped)}")
 
 
 if __name__ == "__main__":
