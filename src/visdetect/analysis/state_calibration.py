@@ -70,6 +70,8 @@ def fit_state_tree(features_df: pd.DataFrame, seed: int = 42):
     """Fit a shallow, readable decision tree on labeled rows (the 'state' column)."""
     from sklearn.tree import DecisionTreeClassifier
     train = features_df[features_df["state"].notna()]
+    if len(train) == 0:
+        raise ValueError("fit_state_tree: no labeled rows — attach episode labels first.")
     X = train[STATE_FEATURE_COLS].values
     y = train["state"].astype(str).values
     tree = DecisionTreeClassifier(

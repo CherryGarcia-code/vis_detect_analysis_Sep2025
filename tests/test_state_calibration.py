@@ -86,3 +86,10 @@ def test_fit_state_tree_separates_classes_and_is_deterministic():
     pred = t1.predict(df[STATE_FEATURE_COLS].values)
     assert (pred == df["state"].values).mean() == 1.0           # separable -> perfect train fit
     assert list(t1.feature_importances_) == list(t2.feature_importances_)  # deterministic
+
+
+def test_fit_state_tree_raises_on_no_labeled_rows():
+    feats = extract_state_features(_raster(["nolick"] * 4), W=3)
+    feats["state"] = None   # nothing labeled
+    with pytest.raises(ValueError, match="no labeled rows"):
+        fit_state_tree(feats, seed=42)
