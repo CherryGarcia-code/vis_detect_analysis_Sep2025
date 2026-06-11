@@ -205,3 +205,15 @@ def test_tag_features_emits_hmm_downstream_aliases():
     assert list(tagged["hmm_state"]) == list(tagged["state"])
     assert list(tagged["hmm_state_label"]) == list(tagged["state_label"])
     assert list(tagged["hmm_state_gated"]) == list(tagged["state_gated"])
+
+
+import subprocess, sys, os
+
+_SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts", "state_labeling")
+
+
+def test_calibrate_cli_help():
+    r = subprocess.run([sys.executable, os.path.join(_SCRIPTS, "calibrate_states.py"), "--help"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0
+    assert "usage" in (r.stdout + r.stderr).lower()
