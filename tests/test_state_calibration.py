@@ -190,3 +190,18 @@ def test_decode_session_states_runs_on_synthetic_session():
     tagged = decode_session_states(result, sess)
     assert len(tagged) == 30
     assert {"state", "state_label", "state_confidence", "state_gated"}.issubset(tagged.columns)
+
+
+def test_tag_features_emits_hmm_downstream_aliases():
+    # hmm_downstream consumes an `hmm_state` column; the tagged frame must carry the
+    # hmm_*-prefixed aliases (== the unprefixed columns) so it is drop-in there.
+    df = _separable_training_frame()
+    tree = fit_state_tree(df, seed=42)
+    from visdetect.analysis.constants import STATE_FEATURE_COLS
+    feats = df[STATE_FEATURE_COLS].copy()
+    feats["trial_idx"] = range(len(feats))
+    tagged = tag_features(tree, feats, confidence_threshold=0.8)
+    assert {"hmm_state", "hmm_state_label", "hmm_state_gated"}.issubset(tagged.columns)
+    assert list(tagged["hmm_state"]) == list(tagged["state"])
+    assert list(tagged["hmm_state_label"]) == list(tagged["state_label"])
+    assert list(tagged["hmm_state_gated"]) == list(tagged["state_gated"])

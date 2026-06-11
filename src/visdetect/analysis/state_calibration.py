@@ -165,7 +165,15 @@ def calibrate_states(rasters, episodes, w_grid=None, seed: int = 42) -> Calibrat
 
 def tag_features(tree, features_df: pd.DataFrame,
                  confidence_threshold: float = STATE_CONFIDENCE_THRESHOLD) -> pd.DataFrame:
-    """Tag each row with a state + confidence, mirroring hmm.decode_session columns."""
+    """Tag each row with a state + confidence.
+
+    Emits the spec's ``state`` / ``state_label`` / ``state_confidence`` /
+    ``state_gated`` / ``p_state_{k}`` columns, PLUS ``hmm_state`` /
+    ``hmm_state_label`` / ``hmm_state_gated`` aliases. The aliases make the frame
+    a genuine drop-in for ``hmm_downstream`` (which reads ``hmm_state``); the
+    unprefixed names mirror ``hmm.decode_session``'s non-prefixed ``p_state_{k}``
+    and give this parallel state system its own readable column set.
+    """
     from visdetect.analysis.hmm import assign_states_with_confidence
     probs = tree.predict_proba(features_df[STATE_FEATURE_COLS].values)
     classes = list(tree.classes_)
@@ -173,10 +181,16 @@ def tag_features(tree, features_df: pd.DataFrame,
     for k in range(len(classes)):
         out[f"p_state_{k}"] = probs[:, k]
     idx = probs.argmax(axis=1)
+    gated = assign_states_with_confidence(probs, threshold=confidence_threshold)
     out["state"] = idx.astype(int)
     out["state_label"] = [classes[i] for i in idx]
     out["state_confidence"] = probs.max(axis=1)
-    out["state_gated"] = assign_states_with_confidence(probs, threshold=confidence_threshold)
+    out["state_gated"] = gated
+    # hmm_downstream consumes an `hmm_state` column; expose prefixed aliases so the
+    # tagged frame is drop-in there without renaming at the call site.
+    out["hmm_state"] = out["state"]
+    out["hmm_state_label"] = out["state_label"]
+    out["hmm_state_gated"] = out["state_gated"]
     return out
 
 
