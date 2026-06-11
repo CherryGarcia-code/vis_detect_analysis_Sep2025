@@ -2,13 +2,13 @@
 
 PYDDM 0.9.0 RECONCILED API CONTRACT (authoritative — Tasks 3-7 must use exactly these):
   Imports (all top-level): from pyddm import (Model, Drift, Sample, Fittable,
-      fit_adjust_model, NoiseConstant, BoundConstant, ICPoint, OverlayNonDecision,
+      fit_adjust_model, NoiseConstant, BoundConstant, ICPointRatio, OverlayNonDecision,
       LossRobustLikelihood)
   1. Custom Drift: def get_drift(self, t, x, conditions, **kwargs)  # ORDER IS (t, x)!
      required_parameters may include non-numeric items (dict evmap, str R_kind, float dt);
      required_conditions = ["trial_uid"]; access via conditions["trial_uid"].
   2. Model(name=..., drift=..., noise=NoiseConstant(noise=1.0), bound=BoundConstant(B=a),
-     IC=ICPoint(x0=z), overlay=OverlayNonDecision(nondectime=t0), dx=0.01, dt=DT,
+     IC=ICPointRatio(x0=z), overlay=OverlayNonDecision(nondectime=t0), dx=0.01, dt=DT,  # z = starting-point ratio in [-1,1] of bound
      T_dur=..., choice_names=("lick","nolick"))   # choice_names MUST match the Sample.
   3. Simulate: sol = model.solve(conditions={"trial_uid": uid});
      rs = sol.resample(k, seed=...) -> a Sample; np.asarray(rs.choice_upper) = lick RTs,
@@ -114,7 +114,7 @@ def build_trial_evidence(session, tf_base: float = None, dt: float = DT) -> pd.D
 import warnings
 
 import pyddm
-from pyddm import (Model, Drift, NoiseConstant, BoundConstant, ICPoint,
+from pyddm import (Model, Drift, NoiseConstant, BoundConstant, ICPointRatio,
                    OverlayNonDecision, Sample)
 
 CHOICE_NAMES = ("lick", "nolick")   # value 1 -> upper(lick), 0 -> lower(nolick)
@@ -161,7 +161,7 @@ def build_model(params: dict, evmap: dict, R: str = "halfwave",
                             R_kind=R, urgency_kind=urgency, dt=dt, evmap=evmap),
         noise=NoiseConstant(noise=1.0),
         bound=BoundConstant(B=params["a"]),
-        IC=ICPoint(x0=params.get("z", 0.0)),
+        IC=ICPointRatio(x0=params.get("z", 0.0)),
         overlay=OverlayNonDecision(nondectime=params.get("t0", 0.0)),
         dx=0.01, dt=dt, T_dur=T_dur, choice_names=CHOICE_NAMES,
     )
@@ -184,3 +184,64 @@ def simulate_sample(evmap, conds, params, R="halfwave", urgency="rising",
         for rt in np.asarray(rs.choice_lower):
             rows.append({"trial_uid": uid, "RT": float(rt), "lick": 0})
     return pd.DataFrame(rows)
+
+
+from pyddm import Fittable, fit_adjust_model, LossRobustLikelihood
+
+# pyddm reports fitted-parameter names as ['v','u','B','x0']; map to canonical B0 names.
+_PARAM_NAME_MAP = {"v": "v", "u": "u", "B": "a", "x0": "z"}
+_FIXED_DEFAULTS = {"t0": 0.05, "lam": 0.0}
+
+
+def _sample_from_sim(sim_df) -> "Sample":
+    """Tidy DataFrame (trial_uid, RT, lick) -> pyddm Sample with matching choice_names."""
+    df = sim_df.dropna(subset=["RT"]).copy()
+    df = df[df["RT"] > 0]
+    return Sample.from_pandas_dataframe(df, rt_column_name="RT",
+                                        choice_column_name="lick",
+                                        choice_names=CHOICE_NAMES)
+
+
+def fit_model(sample, evmap, R="halfwave", urgency="rising", dt=DT, T_dur=3.5,
+              fixed: Optional[dict] = None) -> dict:
+    """Fit free params {v,a,z,u} by robust likelihood; z is the starting-point ratio.
+    Any key present in `fixed` (e.g. {"t0":...,"lam":...,"u":0.0}) is held constant.
+    Returns a complete dict keyed by canonical names v,a,z,u,t0,lam."""
+    fixed = fixed or {}
+
+    def free(lo, hi):
+        return Fittable(minval=lo, maxval=hi)
+
+    params = dict(
+        v=fixed.get("v", free(0, 10)),
+        a=fixed.get("a", free(0.3, 3.0)),
+        z=fixed.get("z", free(-0.9, 0.9)),         # ratio of bound (ICPointRatio)
+        u=fixed.get("u", free(0, 5)),
+        t0=fixed.get("t0", _FIXED_DEFAULTS["t0"]),
+        lam=fixed.get("lam", _FIXED_DEFAULTS["lam"]),
+    )
+    model = build_model(params, evmap, R=R, urgency=urgency, dt=dt, T_dur=T_dur)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        fit_adjust_model(sample=sample, model=model,
+                         lossfunction=LossRobustLikelihood, verbose=False)
+    raw = {name: float(val) for name, val in
+           zip(model.get_model_parameter_names(), model.get_model_parameters())}
+    out = {_PARAM_NAME_MAP.get(k, k): v for k, v in raw.items()}
+    # fold in fixed scalars so the returned dict is a complete param set
+    for k in ("v", "a", "z", "u", "t0", "lam"):
+        if k not in out:
+            val = fixed.get(k, _FIXED_DEFAULTS.get(k))
+            out[k] = float(val) if isinstance(val, (int, float)) else val
+    return out
+
+
+def recover_parameters(true_params, evmap, conds, R="halfwave", urgency="rising",
+                       dt=DT, T_dur=3.5, n_per_trial=1, seed=0) -> dict:
+    """Simulate from known params using the given evidence, refit, return recovered dict.
+    The core identifiability check (spec sec 6): poor recovery is itself a finding."""
+    sim = simulate_sample(evmap, conds, true_params, R=R, urgency=urgency,
+                          dt=dt, T_dur=T_dur, n_per_trial=n_per_trial, seed=seed)
+    samp = _sample_from_sim(sim)
+    return fit_model(samp, evmap, R=R, urgency=urgency, dt=dt, T_dur=T_dur,
+                     fixed={"t0": true_params["t0"], "lam": true_params["lam"]})

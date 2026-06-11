@@ -60,3 +60,29 @@ def test_model_drift_tracks_tf_and_fa_is_early_crossing():
     hit_rate_base = df[(df.trial_uid == 1) & (df.lick == 1)].shape[0]
     assert hit_rate_evi > hit_rate_base            # TF-driven crossings dominate
     assert df[(df.trial_uid == 1) & (df.lick == 1)].shape[0] >= 0  # FAs are early crossings
+
+
+from visdetect.analysis.ddm import recover_parameters
+
+
+@pytest.mark.slow
+def test_parameter_recovery_within_tolerance():
+    # Simulate from known params on synthetic evidence, refit, recover v and u in rank.
+    rng = np.random.default_rng(0)
+    n_trials = 400
+    evmap, conds = {}, {}
+    for uid in range(n_trials):
+        ct = rng.uniform(0.8, 2.0)
+        n = int(3.0 / 0.02)
+        e = np.zeros(n)
+        c = int(ct / 0.02)
+        e[c:] = 2.0                                  # a "change" of fixed size
+        evmap[uid] = e
+        conds[uid] = {"trial_uid": uid, "change_time": ct}
+    true = dict(v=2.5, a=1.0, z=0.0, u=0.4, t0=0.05, lam=0.0)
+    rec = recover_parameters(true, evmap, conds, R="halfwave", urgency="rising",
+                             n_per_trial=1, seed=1)
+    # recovery: signs/order preserved and within a generous tolerance
+    assert rec["v"] > 0 and rec["u"] > 0
+    assert abs(rec["v"] - true["v"]) / true["v"] < 0.5
+    assert abs(rec["u"] - true["u"]) / true["u"] < 0.7
