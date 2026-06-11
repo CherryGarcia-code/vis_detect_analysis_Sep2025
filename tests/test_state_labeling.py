@@ -165,3 +165,26 @@ def test_render_raster_change_size_shading_runs():
     render_raster(ax, raster, change_size_shading=True)
     assert len(ax.patches) >= 2
     plt.close(fig)
+
+
+def test_render_raster_outlines_only_catch_trials():
+    # trial 0 is a go trial (cs>1, edge "none"); trial 1 is a catch trial (cs==1, outlined)
+    raster = build_outcome_raster(_session([_trial("Hit", 2.0), _trial("Hit", 1.0)]))
+    fig, ax = plt.subplots()
+    render_raster(ax, raster)  # no episodes -> only the two trial rectangles
+    edge_alphas = sorted(p.get_edgecolor()[3] for p in ax.patches)
+    assert edge_alphas[0] == 0.0    # the go trial has no outline
+    assert edge_alphas[-1] > 0.0    # the catch trial is outlined
+    plt.close(fig)
+
+
+def test_render_raster_episode_spans_add_patches():
+    raster = build_outcome_raster(_session([_trial("Hit", 2.0), _trial("Hit", 1.0)]))
+    fig, ax = plt.subplots()
+    render_raster(ax, raster)
+    base = len(ax.patches)
+    plt.close(fig)
+    fig2, ax2 = plt.subplots()
+    render_raster(ax2, raster, episodes=[StateEpisode("T1", 0, 1, "Impulsive", "ben", "t")])
+    assert len(ax2.patches) == base + 1   # one extra span patch behind the trial bars
+    plt.close(fig2)

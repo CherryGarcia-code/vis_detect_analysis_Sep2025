@@ -152,7 +152,8 @@ def get_labeling_queue(manifest: Optional[pd.DataFrame] = None) -> List[str]:
     return [sn for _, _, sn in rows]
 
 
-# change_size -> opacity for the optional difficulty shading (bigger = more opaque)
+# change_size -> opacity for the optional difficulty shading (bigger = more opaque).
+# Keys must stay in sync with constants.CHANGE_SIZES; unknown sizes fall back to 1.0.
 _CS_OPACITY = {1.25: 0.30, 1.35: 0.45, 1.5: 0.60, 2.0: 0.80, 4.0: 1.0}
 
 
@@ -168,8 +169,7 @@ def render_raster(ax, raster_df, change_size_shading: bool = False, episodes=Non
     and genuine (go-trial) misses are shaded by change size. ``episodes`` (list of
     StateEpisode) are drawn as translucent state spans behind the ticks.
     """
-    import matplotlib.patches as mpatches
-    from visdetect.analysis.config import LICK_VALENCE_COLORS
+    import matplotlib.patches as mpatches  # deferred so the library imports without matplotlib
 
     n = len(raster_df)
     if episodes:
