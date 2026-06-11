@@ -37,6 +37,9 @@ def extract_state_features(raster_df: pd.DataFrame, W: int) -> pd.DataFrame:
     non_ref = (1 - ref)
     is_go = df["is_go"].astype(bool)
     easy = df["change_size"].astype(float) >= STATE_EASY_CHANGE_THRESH
+    # miss_easy needs is_go (a catch-trial nolick is a correct rejection, not a miss).
+    # hit_hard needs no is_go guard: classify_lick_valence only ever emits
+    # 'appropriate_lick' on go-trial hits, so applick already implies is_go.
     miss_easy = (nolick.astype(bool) & is_go & easy).astype(int)
     hit_hard = (applick.astype(bool) & (~easy)).astype(int)
 
