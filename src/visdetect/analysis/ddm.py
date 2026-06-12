@@ -238,14 +238,16 @@ def fit_model(sample, evmap, R="halfwave", urgency="rising", dt=DT, T_dur=3.5,
 
 
 def recover_parameters(true_params, evmap, conds, R="halfwave", urgency="rising",
-                       dt=DT, T_dur=3.5, n_per_trial=1, seed=0) -> dict:
+                       dt=DT, T_dur=3.5, n_per_trial=1, seed=0, fitparams=None) -> dict:
     """Simulate from known params using the given evidence, refit, return recovered dict.
-    The core identifiability check (spec sec 6): poor recovery is itself a finding."""
+    The core identifiability check (spec sec 6): poor recovery is itself a finding.
+    Pass `fitparams` (e.g. bounded+seeded DE) for a tractable run; None = pyddm default."""
     sim = simulate_sample(evmap, conds, true_params, R=R, urgency=urgency,
                           dt=dt, T_dur=T_dur, n_per_trial=n_per_trial, seed=seed)
     samp = _sample_from_sim(sim)
     return fit_model(samp, evmap, R=R, urgency=urgency, dt=dt, T_dur=T_dur,
-                     fixed={"t0": true_params["t0"], "lam": true_params["lam"]})
+                     fixed={"t0": true_params["t0"], "lam": true_params["lam"]},
+                     fitparams=fitparams)
 
 
 from sklearn.model_selection import KFold
