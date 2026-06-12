@@ -1,12 +1,17 @@
 """Interactive matplotlib GUI to sparsely label behavioral-state episodes on the
 outcome raster. Mirrors scripts/tf_labeling/run_labeling_gui.py.
 
+Two stacked tracks: the outcome raster (top) and a live "your labels" strip
+(bottom) that shows every span you've saved for the current session in its state
+colour — so revisiting a session shows your prior work, and a freshly painted
+span appears in the strip the moment you release.
+
 Keys: 1=Impulsive 2=StimSens 3=Disengaged 4=Abort  | drag=paint span (saved immediately)
       c=toggle change-size shading  | left/right=prev/next session (Expert->Naive)  q=quit
 (number keys are bound to STATE_LABELS in order, so the mapping stays in sync.)
 
 Each painted span is appended to the labels CSV on release (no explicit save needed).
-To correct a mislabel, edit the labels CSV directly or paint over the region.
+To correct a mislabel, paint over the region (later spans win) or edit the CSV directly.
 """
 import argparse
 import datetime as dt
@@ -25,13 +30,14 @@ def main():
 
     import matplotlib
     import matplotlib.pyplot as plt
+    from matplotlib import gridspec
     from matplotlib.widgets import SpanSelector
 
     from visdetect.suite.loader import load_session, session_exists
     from visdetect.analysis.constants import STATE_LABELS
     from visdetect.analysis.state_labeling import (
-        get_labeling_queue, build_outcome_raster, render_raster, save_episode,
-        load_episodes, StateEpisode,
+        get_labeling_queue, build_outcome_raster, render_raster, render_state_strip,
+        save_episode, load_episodes, episodes_to_trial_labels, StateEpisode,
     )
 
     # The visdetect imports above (qc.py, tf_pulse.py, unit_selection.py,
@@ -58,44 +64,70 @@ def main():
     keymap = {str(i + 1): s for i, s in enumerate(STATE_LABELS)}  # 1=first state, ...
     state = {"i": 0, "label": STATE_LABELS[0], "cs_shade": False}
 
-    fig, ax = plt.subplots(figsize=(14, 3))
+    fig = plt.figure(figsize=(14, 3.4))
+    gs = gridspec.GridSpec(2, 1, height_ratios=[3, 1], hspace=0.12)
+    ax_r = fig.add_subplot(gs[0])   # outcome raster
+    ax_y = fig.add_subplot(gs[1])   # live "your labels" strip
+
+    def _title():
+        sn = state.get("session_name", queue[state["i"]])
+        suffix = "(unloadable)" if state.get("raster_len", 0) == 0 else \
+                 f"active label: {state['label']}"
+        ax_r.set_title(f"{sn}  [{state['i']+1}/{len(queue)}]  {suffix}")
+
+    def refresh_strip():
+        """Redraw the 'your labels' strip from the CSV for the current session."""
+        ax_y.clear()
+        labels = episodes_to_trial_labels(
+            load_episodes(args.labels), state["session_name"], state["raster_len"])
+        render_state_strip(ax_y, labels, ylabel="your\nlabels")
+        ax_y.set_xlim(ax_r.get_xlim())
+        ax_y.set_xlabel("trial index")
 
     def draw():
-        ax.clear()
+        ax_r.clear()
+        ax_y.clear()
         sn = queue[state["i"]]
+        state["session_name"] = sn
         try:
             sess = load_session(sn)
         except Exception as e:  # never let a bad session kill the window
-            ax.text(0.5, 0.5, f"{sn}: could not load\n{type(e).__name__}: {e}\n"
-                              "use left/right to skip", ha="center", va="center",
-                    transform=ax.transAxes, color="crimson")
-            ax.set_title(f"{sn}  [{state['i']+1}/{len(queue)}]  (unloadable)")
-            fig.canvas.draw_idle()
+            ax_r.text(0.5, 0.5, f"{sn}: could not load\n{type(e).__name__}: {e}\n"
+                                "use left/right to skip", ha="center", va="center",
+                      transform=ax_r.transAxes, color="crimson")
             state["raster_len"] = 0
-            state["session_name"] = sn
+            _title()
+            fig.canvas.draw_idle()
             return
         raster = build_outcome_raster(sess)
-        # show previously-saved spans for this session so revisits are iterative
-        prior = [e for e in load_episodes(args.labels) if str(e.session_name) == str(sn)]
-        render_raster(ax, raster, change_size_shading=state["cs_shade"], episodes=prior)
-        ax.set_title(f"{sn}  [{state['i']+1}/{len(queue)}]  active label: {state['label']}")
-        fig.canvas.draw_idle()
+        render_raster(ax_r, raster, change_size_shading=state["cs_shade"])
+        ax_r.set_xlabel("")            # trial-index axis lives under the strip
+        ax_r.tick_params(labelbottom=False)
         state["raster_len"] = len(raster)
-        state["session_name"] = sn
+        refresh_strip()
+        _title()
+        fig.canvas.draw_idle()
         del sess
         gc.collect()
 
     def on_span(xmin, xmax):
-        lo, hi = int(round(xmin)), int(round(xmax))
+        if state.get("raster_len", 0) == 0:
+            return  # nothing to label on an unloadable session
+        lo = max(0, int(round(xmin)))
+        hi = min(state["raster_len"] - 1, int(round(xmax)))
+        if hi < lo:
+            return
         ep = StateEpisode(state["session_name"], lo, hi, state["label"], args.labeler,
                           dt.datetime.now().isoformat())
         save_episode(ep, args.labels)
-        ax.axvspan(lo - 0.5, hi + 0.5, alpha=0.18, color="orange", lw=0)
+        refresh_strip()            # the new span appears immediately in its state colour
         fig.canvas.draw_idle()
 
     def on_key(event):
         if event.key in keymap:
             state["label"] = keymap[event.key]
+            _title()
+            fig.canvas.draw_idle()
         elif event.key == "right":
             state["i"] = min(state["i"] + 1, len(queue) - 1); draw()
         elif event.key == "left":
@@ -104,11 +136,8 @@ def main():
             state["cs_shade"] = not state["cs_shade"]; draw()
         elif event.key == "q":
             plt.close(fig)
-            return  # figure is gone; don't touch its title/canvas afterwards
-        ax.set_title(ax.get_title().rsplit("active label:", 1)[0] + f"active label: {state['label']}")
-        fig.canvas.draw_idle()
 
-    span = SpanSelector(ax, on_span, "horizontal", useblit=True,
+    span = SpanSelector(ax_r, on_span, "horizontal", useblit=True,
                         props=dict(alpha=0.2, facecolor="orange"))
     fig.canvas.mpl_connect("key_press_event", on_key)
     draw()
