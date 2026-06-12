@@ -4,8 +4,13 @@ A human-in-the-loop tool that learns **interpretable** behavioral-state threshol
 from your sparse labels on the outcome raster, then tags every session in a form
 **drop-in compatible** with the existing GLM-HMM downstream interface.
 
-States: `Impulsive`, `StimSens`, `Disengaged` (see `STATE_LABELS` in
+States: `Impulsive`, `StimSens`, `Disengaged`, `Abort` (see `STATE_LABELS` in
 `visdetect.analysis.constants`).
+
+All outputs are **subject-scoped**: the active subject comes from the
+`VISDETECT_SUBJECT` env var (default `BG_046`), and tags/figures nest under
+`…/state_tags/{SUBJECT}/` and `…/state_labeler/{SUBJECT}/` so multi-subject runs
+never collide. See [Cross-subject tagging](#cross-subject-tagging).
 
 - **Library:** `src/visdetect/analysis/state_labeling.py` (data model, raster, queue,
   rendering) and `src/visdetect/analysis/state_calibration.py` (features, decision-tree
@@ -38,18 +43,21 @@ Raster colors encode the **lick decision's valence**:
 
 | Color | Meaning |
 |-------|---------|
-| 🟢 green  | appropriate lick — go-trial hit |
-| 🔴 red    | inappropriate lick — early lick, or catch-trial false alarm |
-| 🟣 purple | no-lick — miss or correct rejection |
-| grey      | abort |
-| muted tan | reflex lick (excluded from feature fractions) |
+| green   | appropriate lick — go-trial hit |
+| coral   | inappropriate lick — early lick, or catch-trial false alarm |
+| lavender| no-lick — miss or correct rejection |
+| grey    | abort |
+| tan     | reflex lick (excluded from feature fractions) |
 
+(Softened palette; an **outcome legend** is drawn to the left of the raster.)
 Catch trials are outlined in black. Press `c` to shade go-trial hits/misses by
 change-size difficulty.
 
-**Keys:** `1`=Impulsive · `2`=StimSens · `3`=Disengaged (active label) ·
+**Keys:** `1`=Impulsive · `2`=StimSens · `3`=Disengaged · `4`=Abort (active label) ·
 **drag = paint a span** (saved on release) · `c`=toggle difficulty shading ·
-`←`/`→`=prev/next session · `q`=quit.
+`←`/`→`=prev/next session · `q`=quit. (Number keys derive from `STATE_LABELS`.)
+The GUI shows a live **"your labels"** strip under the raster so prior spans
+appear on revisit.
 
 Spans append to `data/state_labels/state_episodes.csv` (git-diffable; hand-edit to fix a
 mislabel). **Label ≥ 2 sessions before calibrating** — cross-validation needs more than one.
@@ -78,8 +86,11 @@ session) — label more and re-run.
 py scripts/state_labeling/tag_sessions.py
 ```
 
-Tags every QC-filtered manifest session → one CSV per session in
-`data/cache/state_tags/{session}.csv`.
+Tags sessions → one CSV per session in `data/cache/state_tags/{SUBJECT}/{session}.csv`,
+plus `_tag_summary.csv` (state occupancy + mean outcome composition per tagged state).
+Session source: `--sessions` if given, else the staging manifest (BG_046), else every
+pkl on disk. Flags: `--limit N` (evenly-spread subset), `--figures` (also write a
+2-track raster+tagger PNG per session), `--sessions A B C`.
 
 ### 4. Validate & refine — `validate_states.py`
 
@@ -88,12 +99,14 @@ py scripts/state_labeling/validate_states.py
 ```
 
 Prints Cohen's κ + a confusion matrix (tagger vs your labels) and saves a **3-track
-re-shade PNG** per session to `figures/state_labeler/`: the outcome raster on top, a
-**your-labels** strip, and a **tagger** strip (low-confidence/`state_gated` cells dimmed),
+re-shade PNG** per session to `figures/state_labeler/{SUBJECT}/`: the outcome raster on
+top (with the outcome legend at left), a **your-labels** strip, and a **tagger** strip,
 all vertically aligned so disagreements show as a colour mismatch between the two strips.
-State colours: Impulsive `#fb6a4a`, StimSens `#6baed6`, Disengaged `#bdbdbd`
-(`--confidence` sets the dim threshold). Where the tagger disagrees, relabel that region
-(Step 1) and re-run 2→4. This refinement loop is the point of the tool.
+State colours (warm→cool arousal ramp): Impulsive `#ef6548`, StimSens `#6baed6`,
+Disengaged `#3474ae`, Abort `#bdbdbd`. Low-confidence/`state_gated` cells are dimmed
+(`--confidence` sets the threshold; an italic caption explains the fade — no grey swatch,
+since grey now means Abort). Where the tagger disagrees, relabel that region (Step 1) and
+re-run 2→4. This refinement loop is the point of the tool.
 
 ## Output columns (downstream compatibility)
 
@@ -118,11 +131,28 @@ State colours: Impulsive `#fb6a4a`, StimSens `#6baed6`, Disengaged `#bdbdbd`
 | `--labels` | label, calibrate, validate | `data/state_labels/state_episodes.csv` |
 | `--out-model` / `--model` | calibrate / tag, validate | `data/state_labels/state_rule.pkl` |
 | `--out-rules` | calibrate | `data/state_labels/rules.md` |
-| `--out-dir` | tag | `data/cache/state_tags` |
-| `--fig-dir` | validate | `figures/state_labeler` |
-| `--confidence` | tag | `0.8` |
+| `--out-dir` | tag | `data/cache/state_tags/{SUBJECT}` |
+| `--fig-dir` | tag, validate | `figures/state_labeler/{SUBJECT}` |
+| `--confidence` | tag, validate | `0.8` |
+| `--limit` / `--sessions` / `--figures` | tag | — |
 | `--seed` | calibrate | `42` |
 | `--labeler` | label | `$USERNAME` |
+
+## Cross-subject tagging
+
+The rule is subject-agnostic (a decision tree over outcome-composition fractions), so
+you can apply BG_046's rule to another subject as a **face-validity** check. Set the
+subject via the env var; outputs auto-nest under it:
+
+```
+VISDETECT_SUBJECT=BG_031 py scripts/state_labeling/tag_sessions.py --limit 5 --figures
+```
+
+Subjects without a staging manifest (BG_031/038/039) fall back to enumerating their pkls
+on disk (`list_pkl_sessions`). There are **no ground-truth labels** for other subjects, so
+`validate_states.py` (κ) doesn't apply — judge by the 2-track figures and `_tag_summary.csv`
+(each state should still carry its defining outcome signature: Impulsive→high `f_inapplick`,
+Disengaged→high `f_nolick`, Abort→high `f_abort`, StimSens→highest `f_applick`).
 
 ## Caveats
 
