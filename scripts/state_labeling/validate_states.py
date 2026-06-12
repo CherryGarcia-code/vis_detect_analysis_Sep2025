@@ -20,7 +20,7 @@ from visdetect.analysis.config import STATE_LABEL_COLORS
 from visdetect.analysis.constants import STATE_CONFIDENCE_THRESHOLD, STATE_LABELS
 from visdetect.analysis.state_labeling import (
     load_episodes, build_outcome_raster, episodes_to_trial_labels,
-    render_raster, render_state_strip,
+    render_raster, render_state_strip, lick_valence_legend_handles,
 )
 from visdetect.analysis.state_calibration import (
     CalibrationResult, extract_state_features, tag_features,
@@ -34,10 +34,17 @@ def _reshade_figure(sn, raster, your_labels, pred_labels, gated, fig_path):
     ax_r, ax_y, ax_t = (fig.add_subplot(gs[0]),
                         fig.add_subplot(gs[1]), fig.add_subplot(gs[2]))
 
+    fig.subplots_adjust(left=0.17)   # room for the outcome legend left of the tracks
+
     render_raster(ax_r, raster)
     ax_r.set_xlabel("")
     ax_r.tick_params(labelbottom=False)
     ax_r.set_title(f"{sn} — tagger vs your labels")
+    # outcome (lick-valence) legend, left of the top track
+    ax_r.legend(handles=lick_valence_legend_handles(), loc="center right",
+                bbox_to_anchor=(-0.015, 0.5), fontsize=6.5, frameon=False,
+                handlelength=1.1, handleheight=1.1, labelspacing=0.35,
+                borderaxespad=0.0, title="outcome", title_fontsize=7)
 
     render_state_strip(ax_y, list(your_labels), ylabel="your\nlabels")
     ax_y.set_xlim(ax_r.get_xlim()); ax_y.tick_params(labelbottom=False)
@@ -45,11 +52,13 @@ def _reshade_figure(sn, raster, your_labels, pred_labels, gated, fig_path):
     render_state_strip(ax_t, list(pred_labels), gated=gated, ylabel="tagger")
     ax_t.set_xlim(ax_r.get_xlim()); ax_t.set_xlabel("trial index")
 
+    # state legend along the bottom (no grey gated swatch — opacity is explained in text)
     handles = [Patch(facecolor=STATE_LABEL_COLORS.get(s, "#999999"), label=s)
                for s in STATE_LABELS]
-    handles.append(Patch(facecolor="#777777", alpha=0.30, label="low-confidence (gated)"))
     fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, -0.16),
                ncol=len(handles), frameon=False, fontsize=8)
+    fig.text(0.5, -0.26, "faded cells = low-confidence (gated)", ha="center",
+             fontsize=7, style="italic", color="0.45")
 
     fig.savefig(fig_path, dpi=120, bbox_inches="tight")
     plt.close(fig)
