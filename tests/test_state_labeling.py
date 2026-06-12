@@ -22,7 +22,7 @@ from visdetect.analysis.state_labeling import (
 
 
 def test_state_constants_exist():
-    assert C.STATE_LABELS == ["Impulsive", "StimSens", "Disengaged"]
+    assert C.STATE_LABELS == ["Impulsive", "StimSens", "Disengaged", "Abort"]
     assert C.STATE_EASY_CHANGE_THRESH == 2.0
     assert C.STATE_CONFIDENCE_THRESHOLD == 0.8
     assert C.STATE_LABEL_W_DEFAULT in C.STATE_LABEL_W_GRID
@@ -34,6 +34,12 @@ def test_state_constants_exist():
 def test_lick_valence_colors():
     for k in ["appropriate_lick", "inappropriate_lick", "nolick", "abort", "ref"]:
         assert k in CFG.LICK_VALENCE_COLORS
+
+
+def test_state_label_colors_cover_all_states():
+    # every state must have a strip colour (the validation legend derives from STATE_LABELS)
+    for s in C.STATE_LABELS:
+        assert s in CFG.STATE_LABEL_COLORS
 
 
 @pytest.mark.parametrize("outcome,is_go,is_catch,expected", [

@@ -1,8 +1,9 @@
 """Interactive matplotlib GUI to sparsely label behavioral-state episodes on the
 outcome raster. Mirrors scripts/tf_labeling/run_labeling_gui.py.
 
-Keys: 1=Impulsive 2=StimSens 3=Disengaged  | drag=paint span (saved immediately)
+Keys: 1=Impulsive 2=StimSens 3=Disengaged 4=Abort  | drag=paint span (saved immediately)
       c=toggle change-size shading  | left/right=prev/next session (Expert->Naive)  q=quit
+(number keys are bound to STATE_LABELS in order, so the mapping stays in sync.)
 
 Each painted span is appended to the labels CSV on release (no explicit save needed).
 To correct a mislabel, edit the labels CSV directly or paint over the region.
@@ -27,6 +28,7 @@ def main():
     from matplotlib.widgets import SpanSelector
 
     from visdetect.suite.loader import load_session
+    from visdetect.analysis.constants import STATE_LABELS
     from visdetect.analysis.state_labeling import (
         get_labeling_queue, build_outcome_raster, render_raster, save_episode,
         load_episodes, StateEpisode,
@@ -47,8 +49,8 @@ def main():
     if not queue:
         print("No sessions in the labeling queue — check the QC-filtered staging manifest.")
         return
-    state = {"i": 0, "label": "Impulsive", "cs_shade": False}
-    keymap = {"1": "Impulsive", "2": "StimSens", "3": "Disengaged"}
+    keymap = {str(i + 1): s for i, s in enumerate(STATE_LABELS)}  # 1=first state, ...
+    state = {"i": 0, "label": STATE_LABELS[0], "cs_shade": False}
 
     fig, ax = plt.subplots(figsize=(14, 3))
 

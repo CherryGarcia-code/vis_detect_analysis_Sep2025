@@ -232,6 +232,7 @@ STATE_LABEL_COLORS: Dict[str, str] = {
     "Impulsive":  "#fb6a4a",   # orange-red (HMM Impulsive)
     "StimSens":   "#6baed6",   # blue       (HMM Engaged)
     "Disengaged": "#bdbdbd",   # grey       (HMM Disengaged)
+    "Abort":      "#8c564b",   # brown — neutral 4th state (abort-dominated regime)
 }
 
 # =====================================================================

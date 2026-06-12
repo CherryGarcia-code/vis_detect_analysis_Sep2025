@@ -134,6 +134,35 @@ def test_calibrate_states_returns_result_and_fits():
     assert "f_" in result.rules_text
 
 
+def _planted_raster_4state(_session_name):
+    # adds a 4th block of pure-abort trials (30-39) to the 3-state planting
+    lv = (["inappropriate_lick"] * 10 + ["appropriate_lick"] * 10
+          + ["nolick"] * 10 + ["abort"] * 10)
+    cs = ([1.5] * 10 + [4.0] * 10 + [4.0] * 10 + [1.5] * 10)
+    return pd.DataFrame({
+        "trial_idx": range(40), "lick_valence": lv,
+        "is_go": [True] * 40, "change_size": cs,
+    })
+
+
+def test_calibrate_and_tag_recover_abort_as_fourth_state():
+    rasters = {s: _planted_raster_4state(s) for s in ("A", "B")}
+    eps = []
+    for s in ("A", "B"):
+        eps += [
+            StateEpisode(s, 2, 7, "Impulsive", "ben", "t"),
+            StateEpisode(s, 12, 17, "StimSens", "ben", "t"),
+            StateEpisode(s, 22, 27, "Disengaged", "ben", "t"),
+            StateEpisode(s, 32, 37, "Abort", "ben", "t"),
+        ]
+    result = calibrate_states(rasters, eps, w_grid=[3, 5], seed=42)
+    assert "Abort" in result.state_labels
+    # the all-abort core (trials 32-37 have pure-abort windows at W in {3,5}) -> Abort
+    feats = extract_state_features(rasters["A"], result.window)
+    tagged = tag_features(result.tree, feats, confidence_threshold=0.0)
+    assert (tagged.iloc[32:38]["state_label"] == "Abort").all()
+
+
 def test_calibration_result_save_load(tmp_path):
     rasters = {"A": _planted_raster("A"), "B": _planted_raster("B")}
     eps = []

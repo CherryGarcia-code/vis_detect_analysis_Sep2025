@@ -17,7 +17,7 @@ from matplotlib.patches import Patch
 
 from visdetect.suite.loader import load_session
 from visdetect.analysis.config import STATE_LABEL_COLORS
-from visdetect.analysis.constants import STATE_CONFIDENCE_THRESHOLD
+from visdetect.analysis.constants import STATE_CONFIDENCE_THRESHOLD, STATE_LABELS
 from visdetect.analysis.state_labeling import (
     load_episodes, build_outcome_raster, episodes_to_trial_labels,
     render_raster, render_state_strip,
@@ -45,11 +45,11 @@ def _reshade_figure(sn, raster, your_labels, pred_labels, gated, fig_path):
     render_state_strip(ax_t, list(pred_labels), gated=gated, ylabel="tagger")
     ax_t.set_xlim(ax_r.get_xlim()); ax_t.set_xlabel("trial index")
 
-    handles = [Patch(facecolor=STATE_LABEL_COLORS[s], label=s)
-               for s in ("Impulsive", "StimSens", "Disengaged")]
+    handles = [Patch(facecolor=STATE_LABEL_COLORS.get(s, "#999999"), label=s)
+               for s in STATE_LABELS]
     handles.append(Patch(facecolor="#777777", alpha=0.30, label="low-confidence (gated)"))
     fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, -0.16),
-               ncol=4, frameon=False, fontsize=8)
+               ncol=len(handles), frameon=False, fontsize=8)
 
     fig.savefig(fig_path, dpi=120, bbox_inches="tight")
     plt.close(fig)

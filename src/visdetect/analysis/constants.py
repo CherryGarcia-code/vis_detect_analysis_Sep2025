@@ -244,7 +244,7 @@ PUPIL_BLINK_MAX_GAP_MS: float = 500.0     # Max NaN gap to interpolate (blinks)
 # =====================================================================
 # Behavioral state labeler (user-defined states)
 # =====================================================================
-STATE_LABELS: List[str] = ["Impulsive", "StimSens", "Disengaged"]
+STATE_LABELS: List[str] = ["Impulsive", "StimSens", "Disengaged", "Abort"]
 STATE_EASY_CHANGE_THRESH: float = 2.0   # change_size >= this is an "easy"/obvious change
 STATE_CONFIDENCE_THRESHOLD: float = 0.8  # gate trials below this tagger confidence
 STATE_LABEL_W_GRID: List[int] = [11, 15, 21, 31, 41, 51, 61]  # candidate window widths (trials)
