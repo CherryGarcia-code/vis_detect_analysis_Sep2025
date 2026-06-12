@@ -136,3 +136,29 @@ def test_stage_comparison_recovers_the_true_varying_knob():
                                R="halfwave", urgency="rising", fitparams=_FAST_FITPARAMS)
     assert res["winner"] == "M_v"
     assert res["delta_v"] > 0     # v increases Learning -> Expert
+
+
+@pytest.mark.slow
+def test_route_mixture_higher_tf_share_in_engaged():
+    # Engaged trials: evidence-driven licks (fast pulses precede licks).
+    # Impulsive trials: flat-evidence licks. Engaged TF-share must exceed Impulsive.
+    # (LL-gain decomposition; reduced trials + fast/seeded DE; verified ~4.5 min.)
+    from visdetect.analysis.ddm import route_mixture_by_state
+    rng = np.random.default_rng(0)
+
+    def stage(evfun, n, off, v, u, seed):
+        evmap, conds = {}, {}
+        for k in range(n):
+            uid = off + k
+            evmap[uid] = evfun()
+            conds[uid] = {"trial_uid": uid, "change_time": np.inf}
+        sim = simulate_sample(evmap, conds, dict(v=v, a=1, z=0, u=u, t0=0.05, lam=0),
+                              R="halfwave", urgency="rising", n_per_trial=1, seed=seed)
+        return sim, evmap
+
+    sim_e, eng_ev = stage(lambda: np.r_[np.zeros(20), np.ones(130) * 2.0], 110, 0, 3, 0.1, 1)
+    sim_i, imp_ev = stage(lambda: np.zeros(150), 110, 100000, 0.1, 0.8, 2)
+    res = route_mixture_by_state(
+        {"engaged": (sim_e, eng_ev), "impulsive": (sim_i, imp_ev)},
+        fitparams=_FAST_FITPARAMS)
+    assert res["engaged"]["tf_share"] > res["impulsive"]["tf_share"]

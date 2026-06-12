@@ -340,3 +340,58 @@ def compare_stage_models(samples_by_stage: Dict[str, tuple], R="halfwave",
             "delta_v": per_stage[stages[-1]]["v"] - per_stage[stages[0]]["v"],
             "delta_u": per_stage[stages[-1]]["u"] - per_stage[stages[0]]["u"],
             "per_stage": per_stage}
+
+
+def load_state_labels(session_name, K: int = 3):
+    """Pluggable per-trial behavioural-state accessor (spec §3/§10).
+
+    Default source = GLM-HMM assignments (suite.loader.load_hmm_assignments). To
+    swap in the in-development self-tailored classifier, change ONLY this function's
+    body -- no model/fit code depends on the source. Returns a pandas Series of state
+    labels indexed by trial order (trial_idx) for the given session.
+    """
+    from visdetect.suite.loader import load_hmm_assignments
+    df = load_hmm_assignments(K=K)
+    sub = df[df["session_name"].astype(int) == int(session_name)]
+    col = "hmm_state_label" if "hmm_state_label" in sub.columns else "hmm_state"
+    if "trial_idx" in sub.columns:
+        return sub.set_index("trial_idx")[col]
+    return sub[col].reset_index(drop=True)
+
+
+def _state_insample_ll(df, evmap, R, urgency, fixed, dt=DT, T_dur=3.5, fitparams=None):
+    """Fit a model spec on df; return its in-sample log-likelihood (higher = better)."""
+    m = fit_model(_sample_from_sim(df), evmap, R=R, urgency=urgency, dt=dt, T_dur=T_dur,
+                  fixed=fixed, fitparams=fitparams)
+    model = build_model({**m, **fixed}, evmap, R=R, urgency=urgency, dt=dt, T_dur=T_dur)
+    loss = LossRobustLikelihood(_sample_from_sim(df), required_conditions=["trial_uid"],
+                                dt=dt, T_dur=T_dur).loss(model)
+    return -float(loss)
+
+
+def route_mixture_by_state(samples_by_state: Dict[str, tuple], R="halfwave",
+                           urgency="rising", fixed=None, dt=DT, T_dur=3.5,
+                           fitparams=None) -> dict:
+    """Per-state route decomposition (spec §5 secondary).
+
+    tf_share := TF-route likelihood gain / (TF gain + urgency gain), where each
+    route's gain is how much in-sample log-likelihood drops when that route is
+    removed (v=0 removes the TF/sensory route; u=0 removes the impulsivity route).
+    This likelihood-based decomposition is robust to v being unidentifiable under
+    flat (impulsive) evidence -- unlike a raw v/(v+u) ratio. Predicts engaged >
+    impulsive (engaged early licks are more TF/evidence-driven).
+
+    samples_by_state: {state: (sample_df, evmap)} with sample_df a tidy DataFrame.
+    """
+    fixed = fixed or {"t0": 0.05, "lam": 0.0}
+    out = {}
+    for state, (df, ev) in samples_by_state.items():
+        full = _state_insample_ll(df, ev, R, urgency, fixed, dt, T_dur, fitparams)
+        no_tf = _state_insample_ll(df, ev, R, urgency, {**fixed, "v": 0.0}, dt, T_dur, fitparams)
+        no_urge = _state_insample_ll(df, ev, R, urgency, {**fixed, "u": 0.0}, dt, T_dur, fitparams)
+        tf_gain = max(full - no_tf, 0.0)
+        urge_gain = max(full - no_urge, 0.0)
+        tf_share = float(tf_gain / (tf_gain + urge_gain + 1e-9))
+        out[state] = {"tf_share": tf_share, "ll_full": full,
+                      "ll_no_tf": no_tf, "ll_no_urge": no_urge}
+    return out
