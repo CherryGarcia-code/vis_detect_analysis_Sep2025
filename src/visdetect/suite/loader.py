@@ -102,6 +102,29 @@ def session_exists(session_name) -> bool:
     return resolve_session_pkl(session_name) is not None
 
 
+def list_pkl_sessions(subject: Optional[str] = None) -> List[str]:
+    """Session-name strings (the date token) for every pkl on disk for ``subject``.
+
+    A manifest-free session source: subjects other than BG_046 have pkls but no
+    staging manifest, so callers that just need "every session this subject has"
+    (e.g. cross-subject tagging) can enumerate them directly. Chronologically
+    sorted. ``subject`` defaults to the active SUBJECT (VISDETECT_SUBJECT).
+    """
+    import glob
+    subj = subject or SUBJECT
+    pkl_dir = os.path.join(ROOT, "data", "pkls", subj)
+    prefix = f"{subj}_"
+    names = []
+    for path in glob.glob(os.path.join(pkl_dir, f"{prefix}*.pkl")):
+        base = os.path.basename(path)[:-4]      # strip ".pkl"
+        token = base[len(prefix):] if base.startswith(prefix) else ""
+        # keep clean numeric date tokens only; skip variants/backups like
+        # "05092025_b" or "..._preconsolidate" that aren't real session dates.
+        if token.isdigit():
+            names.append(token)
+    return chronological_sort(names)
+
+
 def load_session(session_name) -> "Session":
     """Load a single session by name (DDMMYYYY or DDMMYY int or string).
 

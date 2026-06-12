@@ -254,3 +254,57 @@ def lick_valence_legend_handles():
     ]
     return [mpatches.Patch(facecolor=fc, edgecolor=ec, linewidth=1.0, label=lab)
             for lab, fc, ec in spec]
+
+
+def render_tag_figure(sn, raster, pred_labels, gated, fig_path,
+                      your_labels=None, title=None):
+    """Write an aligned multi-track figure for a tagged session.
+
+    Tracks: outcome raster (top) + tagger state strip. If ``your_labels`` is
+    given (the experimenter's per-trial labels, length n, None where unlabeled)
+    a middle "your labels" strip is added — this is the 3-track validation
+    figure. With ``your_labels=None`` it is the 2-track view for a subject with
+    no ground-truth labels (cross-subject tagging). Single source of truth for
+    both the GUI/validation and cross-subject figures.
+    """
+    import matplotlib.pyplot as plt          # deferred so the library imports without matplotlib
+    from matplotlib import gridspec
+    from matplotlib.patches import Patch
+    from visdetect.analysis.config import STATE_LABEL_COLORS
+    from visdetect.analysis.constants import STATE_LABELS
+
+    has_your = your_labels is not None
+    heights = [3, 1, 1] if has_your else [3, 1]
+    fig = plt.figure(figsize=(13, 3.2 if has_your else 2.6))
+    gs = gridspec.GridSpec(len(heights), 1, height_ratios=heights, hspace=0.18)
+    fig.subplots_adjust(left=0.17)            # room for the outcome legend
+
+    ax_r = fig.add_subplot(gs[0])
+    render_raster(ax_r, raster)
+    ax_r.set_xlabel(""); ax_r.tick_params(labelbottom=False)
+    ax_r.set_title(title or f"{sn} — tagger" + (" vs your labels" if has_your else ""))
+    ax_r.legend(handles=lick_valence_legend_handles(), loc="center right",
+                bbox_to_anchor=(-0.015, 0.5), fontsize=6.5, frameon=False,
+                handlelength=1.1, handleheight=1.1, labelspacing=0.35,
+                borderaxespad=0.0, title="outcome", title_fontsize=7)
+
+    row = 1
+    if has_your:
+        ax_y = fig.add_subplot(gs[row]); row += 1
+        render_state_strip(ax_y, list(your_labels), ylabel="your\nlabels")
+        ax_y.set_xlim(ax_r.get_xlim()); ax_y.tick_params(labelbottom=False)
+
+    ax_t = fig.add_subplot(gs[row])
+    render_state_strip(ax_t, list(pred_labels), gated=gated, ylabel="tagger")
+    ax_t.set_xlim(ax_r.get_xlim()); ax_t.set_xlabel("trial index")
+
+    handles = [Patch(facecolor=STATE_LABEL_COLORS.get(s, "#999999"), label=s)
+               for s in STATE_LABELS]
+    fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, -0.16),
+               ncol=len(handles), frameon=False, fontsize=8)
+    fig.text(0.5, -0.26, "faded cells = low-confidence (gated)", ha="center",
+             fontsize=7, style="italic", color="0.45")
+
+    fig.savefig(fig_path, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    return fig_path

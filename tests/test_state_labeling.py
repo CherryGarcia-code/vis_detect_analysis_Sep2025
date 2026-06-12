@@ -8,6 +8,7 @@ import pytest
 from visdetect.analysis import config as CFG
 from visdetect.analysis import constants as C
 from visdetect.core.session import Session, Trial
+from visdetect.suite import loader as LOADER
 from visdetect.analysis.state_labeling import (
     build_outcome_raster,
     classify_lick_valence,
@@ -17,6 +18,7 @@ from visdetect.analysis.state_labeling import (
     load_episodes,
     render_raster,
     render_state_strip,
+    render_tag_figure,
     save_episode,
     StateEpisode,
 )
@@ -224,3 +226,33 @@ def test_lick_valence_legend_handles():
         CFG.LICK_VALENCE_COLORS["appropriate_lick"])
     # the catch-trial key is an unfilled (white) swatch with a dark outline
     assert matplotlib.colors.to_hex(handles[-1].get_edgecolor()) == "#111111"
+
+
+def test_list_pkl_sessions_filters_and_sorts(tmp_path, monkeypatch):
+    # manifest-free session source: enumerate a subject's pkls from disk
+    pkl_dir = tmp_path / "data" / "pkls" / "BG_999"
+    pkl_dir.mkdir(parents=True)
+    for fn in ["BG_999_01072025.pkl", "BG_999_27062025.pkl",
+               "BG_999_05092025_b.pkl",     # variant token -> skipped (not numeric)
+               "OTHER_01012025.pkl"]:        # wrong subject prefix -> ignored
+        (pkl_dir / fn).touch()
+    monkeypatch.setattr(LOADER, "ROOT", str(tmp_path))
+    names = LOADER.list_pkl_sessions("BG_999")
+    assert names == ["27062025", "01072025"]   # numeric only, chronological
+
+
+def test_render_tag_figure_two_and_three_track(tmp_path):
+    raster = build_outcome_raster(_session([
+        _trial("Hit", 2.0), _trial("FA", 1.5), _trial("Miss", 4.0), _trial("abort", 1.5),
+    ]))
+    pred = ["Impulsive", "Impulsive", "Disengaged", "Abort"]
+    gated = [0, -1, 0, 0]
+    # 2-track (no experimenter labels — cross-subject view)
+    p2 = tmp_path / "tag.png"
+    render_tag_figure("Sx", raster, pred, gated, str(p2))
+    assert p2.exists() and p2.stat().st_size > 0
+    # 3-track (validation view, with a sparse "your labels" track)
+    p3 = tmp_path / "reshade.png"
+    render_tag_figure("Sx", raster, pred, gated, str(p3),
+                      your_labels=["Impulsive", None, "Disengaged", None])
+    assert p3.exists() and p3.stat().st_size > 0
