@@ -215,24 +215,27 @@ FA_SUBTYPE_COLORS: Dict[str, str] = {
 # =====================================================================
 # Lick-valence colors (behavioral state labeler raster)
 # =====================================================================
+# Softened (desaturated) palette so the dense raster is easy on the eye; each hue
+# is still legible down to the lowest change-size opacity (alpha 0.30). The abort
+# grey is shared with the Abort state below so the two tracks echo each other.
 LICK_VALENCE_COLORS: Dict[str, str] = {
-    "appropriate_lick":   "#2e8b57",   # green  — hit on a real change
-    "inappropriate_lick": "#d6453a",   # red    — early lick or catch SDT-FA
-    "nolick":             "#7b5cb8",   # purple — miss or correct rejection
-    "abort":              "#9aa0a6",   # grey
-    "ref":                "#d9c7a0",   # muted  — reflex lick (excluded from fractions)
+    "appropriate_lick":   "#6fb58f",   # soft green   — hit on a real change
+    "inappropriate_lick": "#e3897c",   # soft coral   — early lick or catch SDT-FA
+    "nolick":             "#9488bf",   # soft lavender — miss or correct rejection
+    "abort":              "#bdbdbd",   # grey (= Abort state)
+    "ref":                "#ddd0b3",   # soft tan     — reflex lick (excluded from fractions)
 }
 
 # =====================================================================
-# Behavioral-state colors (labeler state strips) — reuse the HMM-state palette
-# so state shading is consistent project-wide AND distinct from the lick-valence
-# raster colors above. StimSens = the stimulus-sensitive "engaged" regime.
+# Behavioral-state colors (labeler state strips). Warm -> cool "arousal" ramp:
+# Impulsive (warm red) -> StimSens (light blue, engaged) -> Disengaged (darker
+# blue, withdrawn); Abort = neutral grey (shares the abort-outcome grey above).
 # =====================================================================
 STATE_LABEL_COLORS: Dict[str, str] = {
-    "Impulsive":  "#fb6a4a",   # orange-red (HMM Impulsive)
-    "StimSens":   "#6baed6",   # blue       (HMM Engaged)
-    "Disengaged": "#bdbdbd",   # grey       (HMM Disengaged)
-    "Abort":      "#8c564b",   # brown — neutral 4th state (abort-dominated regime)
+    "Impulsive":  "#ef6548",   # soft red — over-aroused / inappropriate-lick driven
+    "StimSens":   "#6baed6",   # light blue — stimulus-sensitive engaged
+    "Disengaged": "#3474ae",   # darker soft blue — withdrawn
+    "Abort":      "#bdbdbd",   # grey — neutral 4th state (= abort outcome colour)
 }
 
 # =====================================================================

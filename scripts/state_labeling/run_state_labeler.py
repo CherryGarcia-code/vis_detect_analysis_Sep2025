@@ -38,6 +38,7 @@ def main():
     from visdetect.analysis.state_labeling import (
         get_labeling_queue, build_outcome_raster, render_raster, render_state_strip,
         save_episode, load_episodes, episodes_to_trial_labels, StateEpisode,
+        lick_valence_legend_handles,
     )
 
     # The visdetect imports above (qc.py, tf_pulse.py, unit_selection.py,
@@ -68,6 +69,7 @@ def main():
     gs = gridspec.GridSpec(2, 1, height_ratios=[3, 1], hspace=0.12)
     ax_r = fig.add_subplot(gs[0])   # outcome raster
     ax_y = fig.add_subplot(gs[1])   # live "your labels" strip
+    fig.subplots_adjust(left=0.14)  # room for the outcome legend left of the tracks
 
     def _title():
         sn = state.get("session_name", queue[state["i"]])
@@ -101,6 +103,10 @@ def main():
             return
         raster = build_outcome_raster(sess)
         render_raster(ax_r, raster, change_size_shading=state["cs_shade"])
+        ax_r.legend(handles=lick_valence_legend_handles(), loc="center right",
+                    bbox_to_anchor=(-0.01, 0.5), fontsize=6, frameon=False,
+                    handlelength=1.0, handleheight=1.0, labelspacing=0.3,
+                    borderaxespad=0.0, title="outcome", title_fontsize=6.5)
         ax_r.set_xlabel("")            # trial-index axis lives under the strip
         ax_r.tick_params(labelbottom=False)
         state["raster_len"] = len(raster)

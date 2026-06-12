@@ -13,6 +13,7 @@ from visdetect.analysis.state_labeling import (
     classify_lick_valence,
     episodes_to_trial_labels,
     get_labeling_queue,
+    lick_valence_legend_handles,
     load_episodes,
     render_raster,
     render_state_strip,
@@ -127,7 +128,7 @@ def test_build_outcome_raster_lick_valence():
         "nolick", "inappropriate_lick", "abort",
     ]
     # color column is populated from LICK_VALENCE_COLORS
-    assert raster.loc[0, "color"] == "#2e8b57"
+    assert raster.loc[0, "color"] == CFG.LICK_VALENCE_COLORS["appropriate_lick"]
     assert set(["trial_idx", "is_go", "is_catch", "change_size"]).issubset(raster.columns)
     # SDT behavioral-label booleans are carried for hmm_downstream drop-in
     assert set(["is_hit", "is_fa", "is_miss"]).issubset(raster.columns)
@@ -209,3 +210,17 @@ def test_render_state_strip_gated_cells_are_dimmed():
     alphas = sorted((p.get_alpha() if p.get_alpha() is not None else 1.0) for p in ax.patches)
     assert alphas[0] < 1.0 and alphas[-1] == 1.0
     plt.close(fig)
+
+
+def test_lick_valence_legend_handles():
+    handles = lick_valence_legend_handles()
+    labels = [h.get_label() for h in handles]
+    # one swatch per outcome plus a catch-trial key for the black outline
+    assert any("hit" in l for l in labels)
+    assert any("catch" in l for l in labels)
+    assert len(handles) == 6
+    # the appropriate-lick swatch uses the live config colour (not a stale literal)
+    assert handles[0].get_facecolor()[:3] == matplotlib.colors.to_rgb(
+        CFG.LICK_VALENCE_COLORS["appropriate_lick"])
+    # the catch-trial key is an unfilled (white) swatch with a dark outline
+    assert matplotlib.colors.to_hex(handles[-1].get_edgecolor()) == "#111111"

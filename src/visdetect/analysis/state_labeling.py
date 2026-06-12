@@ -236,3 +236,21 @@ def render_state_strip(ax, labels, colors=None, gated=None, ylabel=None):
     if ylabel:
         ax.set_ylabel(ylabel, rotation=0, ha="right", va="center", fontsize=9)
     return ax
+
+
+def lick_valence_legend_handles():
+    """matplotlib Patch handles describing the outcome raster, for a legend placed
+    left of the top track. Friendly labels; the last entry keys the black outline
+    that marks catch trials (drawn as an unfilled swatch)."""
+    import matplotlib.patches as mpatches  # deferred so the library imports without matplotlib
+    from visdetect.analysis.config import LICK_VALENCE_COLORS as C
+    spec = [
+        ("hit (appropriate)",        C["appropriate_lick"],   "0.55"),
+        ("FA/early (inappropriate)", C["inappropriate_lick"], "0.55"),
+        ("miss/CR (no lick)",        C["nolick"],             "0.55"),
+        ("abort",                    C["abort"],              "0.55"),
+        ("ref",                      C["ref"],                "0.55"),
+        ("catch trial",              "white",                 "#111111"),
+    ]
+    return [mpatches.Patch(facecolor=fc, edgecolor=ec, linewidth=1.0, label=lab)
+            for lab, fc, ec in spec]
