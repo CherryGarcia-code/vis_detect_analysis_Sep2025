@@ -27,7 +27,7 @@ def main():
     import matplotlib.pyplot as plt
     from matplotlib.widgets import SpanSelector
 
-    from visdetect.suite.loader import load_session
+    from visdetect.suite.loader import load_session, session_exists
     from visdetect.analysis.constants import STATE_LABELS
     from visdetect.analysis.state_labeling import (
         get_labeling_queue, build_outcome_raster, render_raster, save_episode,
@@ -45,9 +45,15 @@ def main():
             "This needs a desktop session with tkinter — don't run it headless/over SSH."
         )
 
-    queue = get_labeling_queue()
+    # Drop manifest sessions that have no pkl on disk (e.g. 05092025) so the GUI
+    # never tries to load — and crash on — a session that isn't there.
+    full_queue = get_labeling_queue()
+    queue = [sn for sn in full_queue if session_exists(sn)]
+    missing = [sn for sn in full_queue if sn not in queue]
+    if missing:
+        print(f"Skipping {len(missing)} manifest session(s) with no pkl: {missing}")
     if not queue:
-        print("No sessions in the labeling queue — check the QC-filtered staging manifest.")
+        print("No loadable sessions in the labeling queue — check the QC-filtered staging manifest.")
         return
     keymap = {str(i + 1): s for i, s in enumerate(STATE_LABELS)}  # 1=first state, ...
     state = {"i": 0, "label": STATE_LABELS[0], "cs_shade": False}
@@ -57,7 +63,17 @@ def main():
     def draw():
         ax.clear()
         sn = queue[state["i"]]
-        sess = load_session(sn)
+        try:
+            sess = load_session(sn)
+        except Exception as e:  # never let a bad session kill the window
+            ax.text(0.5, 0.5, f"{sn}: could not load\n{type(e).__name__}: {e}\n"
+                              "use left/right to skip", ha="center", va="center",
+                    transform=ax.transAxes, color="crimson")
+            ax.set_title(f"{sn}  [{state['i']+1}/{len(queue)}]  (unloadable)")
+            fig.canvas.draw_idle()
+            state["raster_len"] = 0
+            state["session_name"] = sn
+            return
         raster = build_outcome_raster(sess)
         # show previously-saved spans for this session so revisits are iterative
         prior = [e for e in load_episodes(args.labels) if str(e.session_name) == str(sn)]
