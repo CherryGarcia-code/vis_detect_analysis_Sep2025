@@ -296,3 +296,47 @@ def route_attribution(sample_df, evmap, R="halfwave", urgency="rising", fixed=No
                          k=k, seed=seed, fitparams=fitparams)
     return {"two_route_cvll": two, "tf_only_cvll": tf_only,
             "two_route_wins": two > tf_only}
+
+
+def _aic(ll: float, k_params: int) -> float:
+    return 2 * k_params - 2 * ll
+
+
+def compare_stage_models(samples_by_stage: Dict[str, tuple], R="halfwave",
+                         urgency="rising", fixed=None, dt=DT, T_dur=3.5,
+                         fitparams=None) -> dict:
+    """Nested comparison: which single parameter must vary across stages.
+
+    samples_by_stage: {stage: (sample_df, evmap)} with sample_df a tidy DataFrame
+    (trial_uid, RT, lick). Fits each stage independently, then scores M_shared /
+    M_v / M_a / M_zu / M_full by AIC over the pooled in-sample log-likelihood
+    (using each stage's fit for the "free" parameter(s), stage-0's fit otherwise).
+    The minimal model that fits ~as well as M_full names the knob learning turns.
+    """
+    fixed = fixed or {"t0": 0.05, "lam": 0.0}
+    stages = list(samples_by_stage)
+    per_stage = {s: fit_model(_sample_from_sim(df), ev, R=R, urgency=urgency,
+                              dt=dt, T_dur=T_dur, fixed=fixed, fitparams=fitparams)
+                 for s, (df, ev) in samples_by_stage.items()}
+
+    def stage_ll(free_keys):
+        ll = 0.0
+        for s, (df, ev) in samples_by_stage.items():
+            p = {**per_stage[stages[0]]}                  # shared baseline (stage 0)
+            for kk in free_keys:                          # listed keys take this stage's value
+                p[kk] = per_stage[s][kk]
+            model = build_model({**p, **fixed}, ev, R=R, urgency=urgency, dt=dt, T_dur=T_dur)
+            ll += -float(LossRobustLikelihood(_sample_from_sim(df),
+                         required_conditions=["trial_uid"], dt=dt, T_dur=T_dur).loss(model))
+        return ll
+
+    ladder = {"M_shared": [], "M_v": ["v"], "M_a": ["a"], "M_zu": ["z", "u"],
+              "M_full": ["v", "a", "z", "u"]}
+    n = len(stages)
+    aics = {name: _aic(stage_ll(keys), 4 + len(keys) * (n - 1))
+            for name, keys in ladder.items()}
+    winner = min(aics, key=aics.get)
+    return {"winner": winner, "aic": aics,
+            "delta_v": per_stage[stages[-1]]["v"] - per_stage[stages[0]]["v"],
+            "delta_u": per_stage[stages[-1]]["u"] - per_stage[stages[0]]["u"],
+            "per_stage": per_stage}

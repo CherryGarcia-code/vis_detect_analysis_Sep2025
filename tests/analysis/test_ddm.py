@@ -111,3 +111,28 @@ def test_route_attribution_prefers_two_route_when_data_has_impulsive_fas():
     res = route_attribution(sim, evmap, k=2, fitparams=_FAST_FITPARAMS)
     assert res["two_route_wins"]                    # impulsivity route required
     assert res["two_route_cvll"] > res["tf_only_cvll"]
+
+
+@pytest.mark.slow
+def test_stage_comparison_recovers_the_true_varying_knob():
+    # Two stages identical except v doubles -> M_v should win (lowest AIC).
+    # (Trial count reduced + fast/seeded DE for tractable runtime; verified ~2 min.)
+    from visdetect.analysis.ddm import compare_stage_models
+    rng = np.random.default_rng(0)
+
+    def make(uidoff, v):
+        evmap, conds = {}, {}
+        for k in range(120):
+            uid = uidoff + k
+            ct = rng.uniform(0.8, 1.8); n = 150; e = np.zeros(n); e[int(ct / 0.02):] = 2.0
+            evmap[uid] = e; conds[uid] = {"trial_uid": uid, "change_time": ct}
+        sim = simulate_sample(evmap, conds, dict(v=v, a=1.0, z=0.0, u=0.3, t0=0.05, lam=0.0),
+                              R="halfwave", urgency="rising", n_per_trial=1, seed=uidoff)
+        return sim, evmap                                 # tidy DataFrame, not a Sample
+
+    sA, eA = make(0, 1.5)
+    sB, eB = make(100000, 3.0)
+    res = compare_stage_models({"Learning": (sA, eA), "Expert": (sB, eB)},
+                               R="halfwave", urgency="rising", fitparams=_FAST_FITPARAMS)
+    assert res["winner"] == "M_v"
+    assert res["delta_v"] > 0     # v increases Learning -> Expert
