@@ -203,7 +203,7 @@ def _sample_from_sim(sim_df) -> "Sample":
 
 
 def fit_model(sample, evmap, R="halfwave", urgency="rising", dt=DT, T_dur=3.5,
-              fixed: Optional[dict] = None) -> dict:
+              fixed: Optional[dict] = None, fitparams: Optional[dict] = None) -> dict:
     """Fit free params {v,a,z,u} by robust likelihood; z is the starting-point ratio.
     Any key present in `fixed` (e.g. {"t0":...,"lam":...,"u":0.0}) is held constant.
     Returns a complete dict keyed by canonical names v,a,z,u,t0,lam."""
@@ -223,8 +223,9 @@ def fit_model(sample, evmap, R="halfwave", urgency="rising", dt=DT, T_dur=3.5,
     model = build_model(params, evmap, R=R, urgency=urgency, dt=dt, T_dur=T_dur)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
+        _fp = {"fitparams": fitparams} if fitparams is not None else {}
         fit_adjust_model(sample=sample, model=model,
-                         lossfunction=LossRobustLikelihood, verbose=False)
+                         lossfunction=LossRobustLikelihood, verbose=False, **_fp)
     raw = {name: float(val) for name, val in
            zip(model.get_model_parameter_names(), model.get_model_parameters())}
     out = {_PARAM_NAME_MAP.get(k, k): v for k, v in raw.items()}
@@ -245,3 +246,53 @@ def recover_parameters(true_params, evmap, conds, R="halfwave", urgency="rising"
     samp = _sample_from_sim(sim)
     return fit_model(samp, evmap, R=R, urgency=urgency, dt=dt, T_dur=T_dur,
                      fixed={"t0": true_params["t0"], "lam": true_params["lam"]})
+
+
+from sklearn.model_selection import KFold
+
+
+def _cv_loglik(sample_df, evmap, R, urgency, fixed, dt=DT, T_dur=3.5, k=3, seed=0,
+               fitparams=None) -> float:
+    """K-fold held-out mean log-likelihood (higher = better) of a model spec.
+
+    sample_df is a tidy DataFrame (trial_uid, RT, lick). Held-out loss is
+    LossRobustLikelihood(sample, ...).loss(model); CV log-likelihood = -loss.
+    """
+    df = sample_df.dropna(subset=["RT"]).reset_index(drop=True)
+    df = df[df["RT"] > 0].reset_index(drop=True)
+    kf = KFold(n_splits=k, shuffle=True, random_state=seed)
+    lls = []
+    for tr, te in kf.split(df):
+        m = fit_model(_sample_from_sim(df.iloc[tr]), evmap, R=R, urgency=urgency,
+                      dt=dt, T_dur=T_dur, fixed=fixed, fitparams=fitparams)
+        model = build_model({**m, **fixed}, evmap, R=R, urgency=urgency, dt=dt, T_dur=T_dur)
+        te_samp = _sample_from_sim(df.iloc[te])
+        loss = LossRobustLikelihood(te_samp, required_conditions=["trial_uid"],
+                                    dt=dt, T_dur=T_dur).loss(model)
+        lls.append(-float(loss))
+    return float(np.mean(lls))
+
+
+def select_structure(sample_df, evmap, fixed=None, dt=DT, T_dur=3.5, k=3, seed=0,
+                     fitparams=None) -> dict:
+    """Step 0: choose rectification R and urgency form by CV log-likelihood."""
+    fixed = fixed or {"t0": 0.05, "lam": 0.0}
+    grid = [(R, U) for R in ("symmetric", "halfwave", "asym") for U in ("rising", "const")]
+    scores = {f"{R}|{U}": _cv_loglik(sample_df, evmap, R, U, fixed, dt, T_dur, k=k,
+                                     seed=seed, fitparams=fitparams)
+              for (R, U) in grid}
+    best = max(scores, key=scores.get)
+    R, U = best.split("|")
+    return {"R": R, "urgency": U, "scores": scores}
+
+
+def route_attribution(sample_df, evmap, R="halfwave", urgency="rising", fixed=None,
+                      dt=DT, T_dur=3.5, k=3, seed=0, fitparams=None) -> dict:
+    """Step 0b: two-route vs TF-only (u fixed to 0) by CV log-likelihood."""
+    fixed = fixed or {"t0": 0.05, "lam": 0.0}
+    two = _cv_loglik(sample_df, evmap, R, urgency, fixed, dt, T_dur, k=k, seed=seed,
+                     fitparams=fitparams)
+    tf_only = _cv_loglik(sample_df, evmap, R, urgency, {**fixed, "u": 0.0}, dt, T_dur,
+                         k=k, seed=seed, fitparams=fitparams)
+    return {"two_route_cvll": two, "tf_only_cvll": tf_only,
+            "two_route_wins": two > tf_only}

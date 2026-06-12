@@ -86,3 +86,28 @@ def test_parameter_recovery_within_tolerance():
     assert rec["v"] > 0 and rec["u"] > 0
     assert abs(rec["v"] - true["v"]) / true["v"] < 0.5
     assert abs(rec["u"] - true["u"]) / true["u"] < 0.7
+
+
+# Fast optimizer config for the model-fitting tests below: bounded + seeded
+# differential-evolution keeps these CV tests to ~1-2 min while preserving the
+# DIRECTIONAL result they assert (rough fits are fine for two-route-vs-tf-only).
+_FAST_FITPARAMS = {"seed": 0, "maxiter": 8, "popsize": 5, "polish": False}
+
+
+@pytest.mark.slow
+def test_route_attribution_prefers_two_route_when_data_has_impulsive_fas():
+    # Many "FAs" with FLAT evidence (pure time-driven) -> two-route (with urgency)
+    # must beat TF-only. (Trial count reduced + fast/seeded DE for tractable runtime;
+    # the directional gap is large and robust. Verified ~76 s.)
+    from visdetect.analysis.ddm import route_attribution
+    rng = np.random.default_rng(0)
+    evmap, conds = {}, {}
+    for uid in range(90):
+        evmap[uid] = np.zeros(150)                  # flat baseline -> no sensory drive
+        conds[uid] = {"trial_uid": uid, "change_time": np.inf}
+    true = dict(v=0.1, a=1.0, z=0.0, u=0.8, t0=0.05, lam=0.0)  # impulsivity-driven
+    sim = simulate_sample(evmap, conds, true, R="halfwave", urgency="rising",
+                          n_per_trial=1, seed=2)
+    res = route_attribution(sim, evmap, k=2, fitparams=_FAST_FITPARAMS)
+    assert res["two_route_wins"]                    # impulsivity route required
+    assert res["two_route_cvll"] > res["tf_only_cvll"]
