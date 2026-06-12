@@ -1,0 +1,217 @@
+"""Feature extraction, decision-tree calibration, and tagging for behavioral states.
+
+See docs/superpowers/specs/2026-06-10-behavioral-state-labeler-design.md.
+Features are local outcome-composition fractions (lick-valence + difficulty-aware)
+over a symmetric window W. The rule is a shallow DecisionTreeClassifier fit on the
+experimenter's labeled trials; tagging mirrors hmm.decode_session columns.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional
+import pickle
+
+import numpy as np
+import pandas as pd
+
+from visdetect.analysis.constants import (
+    STATE_EASY_CHANGE_THRESH, STATE_FEATURE_COLS, STATE_LABEL_W_GRID,
+    STATE_CONFIDENCE_THRESHOLD,
+)
+
+
+def extract_state_features(raster_df: pd.DataFrame, W: int) -> pd.DataFrame:
+    """Add local-window composition features (STATE_FEATURE_COLS) per trial.
+
+    Fractions use a symmetric, centered window of width ``W`` trials, with the
+    denominator = window trials excluding 'ref'. Edges shrink (min_periods=1).
+    """
+    df = raster_df.reset_index(drop=True).copy()
+    lv = df["lick_valence"]
+    applick = (lv == "appropriate_lick").astype(int)
+    inapplick = (lv == "inappropriate_lick").astype(int)
+    nolick = (lv == "nolick").astype(int)
+    abort = (lv == "abort").astype(int)
+    ref = (lv == "ref").astype(int)
+    non_ref = (1 - ref)
+    is_go = df["is_go"].astype(bool)
+    easy = df["change_size"].astype(float) >= STATE_EASY_CHANGE_THRESH
+    # miss_easy needs is_go (a catch-trial nolick is a correct rejection, not a miss).
+    # hit_hard needs no is_go guard: classify_lick_valence only ever emits
+    # 'appropriate_lick' on go-trial hits, so applick already implies is_go.
+    miss_easy = (nolick.astype(bool) & is_go & easy).astype(int)
+    hit_hard = (applick.astype(bool) & (~easy)).astype(int)
+
+    def roll(s):
+        return s.rolling(W, center=True, min_periods=1).sum()
+
+    denom = roll(non_ref).replace(0, np.nan)
+    df["f_applick"]   = (roll(applick) / denom).fillna(0.0)
+    df["f_inapplick"] = (roll(inapplick) / denom).fillna(0.0)
+    df["f_nolick"]    = (roll(nolick) / denom).fillna(0.0)
+    df["f_abort"]     = (roll(abort) / denom).fillna(0.0)
+    df["f_miss_easy"] = (roll(miss_easy) / denom).fillna(0.0)
+    df["f_hit_hard"]  = (roll(hit_hard) / denom).fillna(0.0)
+    return df
+
+
+def attach_episode_labels(features_df: pd.DataFrame, episodes, session_name: str) -> pd.DataFrame:
+    """Add a 'state' column from episodes (None where unlabeled), keyed by trial_idx."""
+    from visdetect.analysis.state_labeling import episodes_to_trial_labels
+    df = features_df.copy()
+    n = int(df["trial_idx"].max()) + 1 if len(df) else 0
+    lab = episodes_to_trial_labels(episodes, session_name, n)
+    df["state"] = [lab[int(i)] for i in df["trial_idx"]]
+    return df
+
+
+def fit_state_tree(features_df: pd.DataFrame, seed: int = 42):
+    """Fit a shallow, readable decision tree on labeled rows (the 'state' column)."""
+    from sklearn.tree import DecisionTreeClassifier
+    train = features_df[features_df["state"].notna()]
+    if len(train) == 0:
+        raise ValueError("fit_state_tree: no labeled rows — attach episode labels first.")
+    X = train[STATE_FEATURE_COLS].values
+    y = train["state"].astype(str).values
+    tree = DecisionTreeClassifier(
+        max_depth=3, min_samples_leaf=5, class_weight="balanced", random_state=seed,
+    )
+    tree.fit(X, y)
+    return tree
+
+
+@dataclass
+class CalibrationResult:
+    tree: object                 # sklearn DecisionTreeClassifier
+    window: int
+    state_labels: List[str]
+    feature_cols: List[str]
+    loso_kappa: float
+    rules_text: str
+
+    def save(self, path) -> None:
+        # Note: the pickled sklearn tree is version-coupled; regenerate via
+        # calibrate_states if scikit-learn is upgraded.
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(self, f)
+
+    @classmethod
+    def load(cls, path) -> "CalibrationResult":
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+
+def _pool_labeled(rasters: Dict[str, pd.DataFrame], episodes, W: int) -> pd.DataFrame:
+    frames = []
+    for sn, raster in rasters.items():
+        feats = extract_state_features(raster, W)
+        feats = attach_episode_labels(feats, episodes, sn)
+        feats = feats[feats["state"].notna()].copy()
+        feats["__session"] = sn
+        frames.append(feats)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def calibrate_states(rasters, episodes, w_grid=None, seed: int = 42) -> CalibrationResult:
+    """Fit the state rule: choose W by LOSO Cohen's kappa, then refit on all labels."""
+    from sklearn.metrics import cohen_kappa_score
+    from sklearn.tree import export_text
+    if w_grid is None:
+        w_grid = STATE_LABEL_W_GRID
+
+    best = None  # (W, mean_kappa, pooled)
+    for W in w_grid:
+        pooled = _pool_labeled(rasters, episodes, W)
+        if pooled.empty:
+            continue
+        sessions = pooled["__session"].unique()
+        kappas = []
+        for hold in sessions:
+            tr = pooled[pooled["__session"] != hold]
+            te = pooled[pooled["__session"] == hold]
+            # Skip un-scoreable folds: nothing to train on, training has <2 classes,
+            # or the held-out session has <2 true classes. A single-class held-out
+            # fold makes cohen_kappa_score do 0/0 -> NaN, which would poison the mean
+            # across ALL sessions; such a session simply can't be validated against
+            # (its labels still train the model in every other fold).
+            if te.empty or tr.empty or tr["state"].nunique() < 2 or te["state"].nunique() < 2:
+                continue
+            m = fit_state_tree(tr, seed=seed)
+            pred = m.predict(te[STATE_FEATURE_COLS].values)
+            kappas.append(cohen_kappa_score(te["state"].astype(str).values, pred))
+        # nanmean as a backstop in case any fold still yields NaN.
+        mean_k = float(np.nanmean(kappas)) if kappas else float("nan")
+        # Prefer any real (non-NaN) kappa over NaN; among real kappas prefer the higher.
+        if best is None or (not np.isnan(mean_k) and (np.isnan(best[1]) or mean_k > best[1])):
+            best = (W, mean_k, pooled)
+
+    if best is None:
+        raise ValueError("No labeled trials found for any window in w_grid.")
+    W, kappa, pooled = best
+    if np.isnan(kappa):
+        import warnings
+        warnings.warn(
+            "calibrate_states: every LOSO fold was degenerate (e.g. only one labeled "
+            "session), so loso_kappa is NaN and the rule is unvalidated. Label more "
+            "sessions before trusting this model.",
+            UserWarning, stacklevel=2,
+        )
+    tree = fit_state_tree(pooled, seed=seed)
+    rules = export_text(tree, feature_names=list(STATE_FEATURE_COLS))
+    return CalibrationResult(
+        tree=tree, window=W, state_labels=list(tree.classes_),
+        feature_cols=list(STATE_FEATURE_COLS), loso_kappa=kappa, rules_text=rules,
+    )
+
+
+def tag_features(tree, features_df: pd.DataFrame,
+                 confidence_threshold: float = STATE_CONFIDENCE_THRESHOLD) -> pd.DataFrame:
+    """Tag each row with a state + confidence.
+
+    Emits the spec's ``state`` / ``state_label`` / ``state_confidence`` /
+    ``state_gated`` / ``p_state_{k}`` columns, PLUS ``hmm_state`` /
+    ``hmm_state_label`` / ``hmm_state_gated`` aliases. The aliases make the frame
+    a genuine drop-in for ``hmm_downstream`` (which reads ``hmm_state``); the
+    unprefixed names mirror ``hmm.decode_session``'s non-prefixed ``p_state_{k}``
+    and give this parallel state system its own readable column set.
+
+    Note: ``p_state_{k}`` is keyed to ``tree.classes_[k]`` (alphabetical class
+    order), which is NOT the HMM's Viterbi-state numbering. Use the string
+    ``state_label`` / ``hmm_state_label`` columns as the stable interface; treat
+    the numeric ``p_state_{k}`` ordering as tree-specific.
+    """
+    from visdetect.analysis.hmm import assign_states_with_confidence
+    probs = tree.predict_proba(features_df[STATE_FEATURE_COLS].values)
+    classes = list(tree.classes_)
+    out = features_df.copy()
+    for k in range(len(classes)):
+        out[f"p_state_{k}"] = probs[:, k]
+    idx = probs.argmax(axis=1)
+    gated = assign_states_with_confidence(probs, threshold=confidence_threshold)
+    out["state"] = idx.astype(int)
+    out["state_label"] = [classes[i] for i in idx]
+    out["state_confidence"] = probs.max(axis=1)
+    out["state_gated"] = gated
+    # hmm_downstream consumes an `hmm_state` column; expose prefixed aliases so the
+    # tagged frame is drop-in there without renaming at the call site.
+    out["hmm_state"] = out["state"]
+    out["hmm_state_label"] = out["state_label"]
+    out["hmm_state_gated"] = out["state_gated"]
+    return out
+
+
+def decode_session_states(result: CalibrationResult, session,
+                          confidence_threshold: float = STATE_CONFIDENCE_THRESHOLD) -> pd.DataFrame:
+    """Decode one session to per-trial states (mirrors hmm.decode_session)."""
+    from visdetect.analysis.state_labeling import build_outcome_raster
+    raster = build_outcome_raster(session)
+    if raster.empty:
+        return raster
+    feats = extract_state_features(raster, result.window)
+    tagged = tag_features(result.tree, feats, confidence_threshold=confidence_threshold)
+    # session_name lets hmm_downstream group/pool a concatenation of per-session tags.
+    tagged["session_name"] = session.session_name
+    return tagged

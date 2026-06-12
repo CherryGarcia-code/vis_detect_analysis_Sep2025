@@ -54,10 +54,10 @@ DEFAULT_VERDICTS_PATH = os.path.join(ROOT, "FIGURES", "tracking_qc", "verdicts_t
 
 # ── Session loading ───────────────────────────────────────────────────
 
-def load_session(session_name) -> "Session":
-    """Load a single session by name (DDMMYYYY or DDMMYY int or string).
+def _session_pkl_candidates(session_name) -> List[str]:
+    """Ordered, de-duplicated date-format variants to try for ``session_name``.
 
-    Tries multiple date-format variants to handle subjects with mixed naming:
+    Handles subjects with mixed naming:
       - 8-digit DDMMYYYY (BG_046, BG_039, newer sessions)
       - 6-digit DDMMYY   (BG_031, BG_038, older sessions)
     Also converts between the two formats when needed.
@@ -76,18 +76,46 @@ def load_session(session_name) -> "Session":
         padded6 = digits.zfill(6)
         candidates.append(padded6[:4] + "20" + padded6[4:])  # e.g. 250425 -> 25042025
 
-    seen = set()
+    seen, ordered = set(), []
     for candidate in candidates:
-        if candidate in seen:
-            continue
-        seen.add(candidate)
+        if candidate not in seen:
+            seen.add(candidate)
+            ordered.append(candidate)
+    return ordered
+
+
+def resolve_session_pkl(session_name) -> Optional[str]:
+    """Return the on-disk pkl path for ``session_name``, or None if none exists.
+
+    Cheap (only ``os.path.exists`` checks, no unpickling), so it is safe to call
+    to pre-filter a queue of sessions before loading any of them.
+    """
+    for candidate in _session_pkl_candidates(session_name):
         pkl_path = os.path.join(PKL_DIR, f"{SUBJECT}_{candidate}.pkl")
         if os.path.exists(pkl_path):
-            return _load_session_raw(pkl_path)
+            return pkl_path
+    return None
+
+
+def session_exists(session_name) -> bool:
+    """True if a pkl for ``session_name`` exists on disk (no load)."""
+    return resolve_session_pkl(session_name) is not None
+
+
+def load_session(session_name) -> "Session":
+    """Load a single session by name (DDMMYYYY or DDMMYY int or string).
+
+    Tries multiple date-format variants to handle subjects with mixed naming;
+    see :func:`_session_pkl_candidates`.
+    """
+    pkl_path = resolve_session_pkl(session_name)
+    if pkl_path is not None:
+        return _load_session_raw(pkl_path)
 
     raise FileNotFoundError(
         f"pkl not found for session '{session_name}' in {PKL_DIR} "
-        f"(tried {SUBJECT}_<date>.pkl with candidates: {list(seen)})"
+        f"(tried {SUBJECT}_<date>.pkl with candidates: "
+        f"{_session_pkl_candidates(session_name)})"
     )
 
 

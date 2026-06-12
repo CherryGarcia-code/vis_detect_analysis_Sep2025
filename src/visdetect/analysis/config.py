@@ -213,6 +213,29 @@ FA_SUBTYPE_COLORS: Dict[str, str] = {
 }
 
 # =====================================================================
+# Lick-valence colors (behavioral state labeler raster)
+# =====================================================================
+LICK_VALENCE_COLORS: Dict[str, str] = {
+    "appropriate_lick":   "#2e8b57",   # green  — hit on a real change
+    "inappropriate_lick": "#d6453a",   # red    — early lick or catch SDT-FA
+    "nolick":             "#7b5cb8",   # purple — miss or correct rejection
+    "abort":              "#9aa0a6",   # grey
+    "ref":                "#d9c7a0",   # muted  — reflex lick (excluded from fractions)
+}
+
+# =====================================================================
+# Behavioral-state colors (labeler state strips) — reuse the HMM-state palette
+# so state shading is consistent project-wide AND distinct from the lick-valence
+# raster colors above. StimSens = the stimulus-sensitive "engaged" regime.
+# =====================================================================
+STATE_LABEL_COLORS: Dict[str, str] = {
+    "Impulsive":  "#fb6a4a",   # orange-red (HMM Impulsive)
+    "StimSens":   "#6baed6",   # blue       (HMM Engaged)
+    "Disengaged": "#bdbdbd",   # grey       (HMM Disengaged)
+    "Abort":      "#8c564b",   # brown — neutral 4th state (abort-dominated regime)
+}
+
+# =====================================================================
 # Change-size groupings (derived from constants)
 # =====================================================================
 CHANGE_SIZES: List[float]  = sorted(ALL_GO_CHANGE_SIZES)   # [1.25, 1.35, 1.5, 2.0, 4.0]
