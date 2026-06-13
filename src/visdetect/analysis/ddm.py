@@ -214,7 +214,7 @@ def fit_model(sample, evmap, R="halfwave", urgency="rising", dt=DT, T_dur=3.5,
 
     params = dict(
         v=fixed.get("v", free(0, 10)),
-        a=fixed.get("a", free(0.3, 3.0)),
+        a=fixed.get("a", free(0.3, 8.0)),          # wide: long-baseline data wants a high bound
         z=fixed.get("z", free(-0.9, 0.9)),         # ratio of bound (ICPointRatio)
         u=fixed.get("u", free(0, 5)),
         t0=fixed.get("t0", _FIXED_DEFAULTS["t0"]),

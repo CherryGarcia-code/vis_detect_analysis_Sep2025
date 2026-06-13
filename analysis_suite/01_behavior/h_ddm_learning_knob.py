@@ -40,12 +40,19 @@ setup_style()
 # ── Config (tune for runtime vs thoroughness) ────────────────────────
 # Bounded + seeded differential evolution: tractable on large trial sets, reproducible.
 FITPARAMS = {"seed": 0, "maxiter": 15, "popsize": 8, "polish": False}
+# Real BG_046 baselines are long (change_time ~6 s; decision_time p99 ~13.6 s, max ~19 s).
+# The accumulator is aligned to Baseline_ON, so T_DUR must cover the decision times, and a
+# coarser dt (matched to the ~50 ms TF update period) keeps the integration grid tractable.
+DT_REAL = 0.05          # integration step for real fits (50 ms ~ TF update period)
+T_DUR = 11.0            # first-passage horizon (s); covers ~95% of decision times
+MAX_DECISION_T = 11.0   # drop trials whose decision_time exceeds the horizon (~5% tail)
 UID_STRIDE = 100000     # per-session offset so trial_uid is globally unique
-STAGE_MAX = 600         # cap trials/stage for the (slow) per-stage fits
-POOLED_MAX = 300        # cap pooled trials for Step 0 structure selection / Step 0b route attr
-STATE_MAX = 300         # cap trials/state for the route-mixture secondary
+STAGE_MAX = 250         # cap trials/stage for the (slow) per-stage fits
+POOLED_MAX = 180        # cap pooled trials for Step 0 structure selection / Step 0b route attr
+STATE_MAX = 160         # cap trials/state for the route-mixture secondary
 CV_K = 2                # folds for CV log-likelihood on real data
-RUN_STRUCTURE = True    # Step 0 structural grid (expensive: 6 specs x CV_K fits)
+RUN_STRUCTURE = False   # Step 0 structural grid (expensive: 6 specs x CV_K fits) — default off;
+                        # the first real run uses the lit-predicted R=halfwave/urgency=rising.
 RUN_STATE = True        # spec sec 5 state-resolved secondary (needs HMM labels)
 SEED = 42
 PARAM_KEYS = ("v", "a", "z", "u")
@@ -77,8 +84,10 @@ def _bucket_state(label):
     if not isinstance(label, str):
         return None
     s = label.lower()
-    if "impuls" in s:
+    if "impuls" in s or "bias" in s:
         return "impulsive"
+    if "diseng" in s:
+        return None                              # disengaged: excluded from the secondary
     if "engag" in s or "sens" in s or "stim" in s or "attent" in s:
         return "engaged"
     return None
@@ -102,12 +111,14 @@ def build_stage_samples(state_control=False):
             except Exception:
                 continue
             try:
-                ev_df = ddm.build_trial_evidence(sess)
+                ev_df = ddm.build_trial_evidence(sess, dt=DT_REAL)
             except Exception:
                 del sess; gc.collect(); continue
             if ev_df is None or len(ev_df) == 0:
                 del sess; gc.collect(); continue
-            ev_df = ev_df.copy()
+            ev_df = ev_df[ev_df["decision_time"] <= MAX_DECISION_T].copy()
+            if len(ev_df) == 0:
+                del sess; gc.collect(); continue
             if state_control:
                 try:
                     states = ddm.load_state_labels(sname)
@@ -152,7 +163,8 @@ def _panel_rt(ax, capped, per_stage, R, U):
             p = {k: per_stage[stage][k] for k in ("v", "a", "z", "u", "t0", "lam")}
             conds = {u: {"trial_uid": u} for u in list(ev)[:200]}
             sim = ddm.simulate_sample(_evmap_for_keys(ev, conds), conds, p, R=R,
-                                      urgency=U, n_per_trial=20, seed=0)
+                                      urgency=U, dt=DT_REAL, T_dur=T_DUR,
+                                      n_per_trial=20, seed=0)
             mrt = sim.loc[sim["lick"] == 1, "RT"].to_numpy()
             mrt = mrt[np.isfinite(mrt) & (mrt > 0)]
             if len(mrt):
@@ -284,15 +296,15 @@ def main():
     pooled_ev_s = _evmap_for(pooled_s, pooled_ev)
 
     if RUN_STRUCTURE:
-        struct = ddm.select_structure(pooled_s, pooled_ev_s, dt=ddm.DT, k=CV_K,
-                                       fitparams=FITPARAMS)
+        struct = ddm.select_structure(pooled_s, pooled_ev_s, dt=DT_REAL, T_dur=T_DUR,
+                                       k=CV_K, fitparams=FITPARAMS)
     else:
         struct = {"R": "halfwave", "urgency": "rising", "scores": {}}
     R, U = struct["R"], struct["urgency"]
     print(f"  structure: R={R} urgency={U}")
 
-    attr = ddm.route_attribution(pooled_s, pooled_ev_s, R=R, urgency=U, dt=ddm.DT,
-                                 k=CV_K, fitparams=FITPARAMS)
+    attr = ddm.route_attribution(pooled_s, pooled_ev_s, R=R, urgency=U, dt=DT_REAL,
+                                 T_dur=T_DUR, k=CV_K, fitparams=FITPARAMS)
     print(f"  route: two={attr['two_route_cvll']:.1f} tf_only={attr['tf_only_cvll']:.1f} "
           f"two_wins={attr['two_route_wins']}")
 
@@ -301,7 +313,8 @@ def main():
     for s, (df, ev) in by_stage.items():
         sub = _subsample(df, STAGE_MAX)
         capped[s] = (sub, _evmap_for(sub, ev))
-    comp = ddm.compare_stage_models(capped, R=R, urgency=U, dt=ddm.DT, fitparams=FITPARAMS)
+    comp = ddm.compare_stage_models(capped, R=R, urgency=U, dt=DT_REAL, T_dur=T_DUR,
+                                    fitparams=FITPARAMS)
     per_stage = comp["per_stage"]
     print(f"  WINNER={comp['winner']}  dv={comp['delta_v']:.3f}  du={comp['delta_u']:.3f}")
 
@@ -316,8 +329,8 @@ def main():
                 if sub is not None and len(sub) >= 30:
                     sbs[b] = (sub, _evmap_for(sub, pooled_ev))
             if len(sbs) == 2:
-                state_mix = ddm.route_mixture_by_state(sbs, R=R, urgency=U, dt=ddm.DT,
-                                                       fitparams=FITPARAMS)
+                state_mix = ddm.route_mixture_by_state(sbs, R=R, urgency=U, dt=DT_REAL,
+                                                       T_dur=T_DUR, fitparams=FITPARAMS)
                 print("  state tf_share: " + ", ".join(
                     f"{k}={v['tf_share']:.2f}" for k, v in state_mix.items()))
         except Exception as e:  # noqa: BLE001
