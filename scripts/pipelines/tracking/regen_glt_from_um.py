@@ -18,12 +18,13 @@ from visdetect.analysis.tracking_registry import (  # noqa: E402
     load_canonical_long, find_cluster_collisions, resolve_collisions, long_to_cellregistry,
 )
 from visdetect.analysis.track_verdict import load_kept_map  # noqa: E402
+from visdetect.analysis.config import TRACKING_QC_DIR, GLT_PATH, SUBJECT  # noqa: E402
 
 DEFAULT_LONG = ("X:/public/projects/BeJG_20230130_VisDetect/wEPhys/"
                 "BG_046/unit_match/output/all42/unit_index.csv")
-TRIMMED = REPO_ROOT / "FIGURES" / "tracking_qc" / "verdicts_trimmed.csv"
-WIDE_OUT = REPO_ROOT / "data" / "unit_match" / "output" / "BG_046_um329_CellRegistry.csv"
-GLT_OUT = REPO_ROOT / "table_output" / "Grand_Longitudinal_Table.csv"
+TRIMMED = Path(TRACKING_QC_DIR) / "verdicts_trimmed.csv"
+WIDE_OUT = REPO_ROOT / "data" / "unit_match" / "output" / f"{SUBJECT}_um329_CellRegistry.csv"
+GLT_OUT = Path(GLT_PATH)
 
 
 def main():

@@ -57,6 +57,7 @@ from visdetect.analysis.tracking_qc import (        # noqa: E402
 )
 from visdetect.core.session import load_session                 # noqa: E402
 from visdetect.suite.loader import load_staging_manifest, load_filtered_manifest  # noqa: E402
+from visdetect.analysis.config import TRACKING_QC_DIR  # noqa: E402
 
 from qc_sheet_figures import write_uid_pdf                       # noqa: E402
 
@@ -70,12 +71,12 @@ DEFAULT_REGISTRY     = DEFAULT_UM_ROOT / "unit_index.csv"
 # unit_index.csv directly. Both are row-aligned with their own registry.
 DEFAULT_PROB_MATRIX  = DEFAULT_UM_ROOT / "batch0" / "output_prob_matrix.npy"
 DEFAULT_PROB_INDEX   = DEFAULT_UM_ROOT / "batch0" / "unit_index.csv"
-DEFAULT_ISI_STATS    = REPO_ROOT / "FIGURES" / "tracking_qc" / "track_validation_stats.csv"
+DEFAULT_ISI_STATS    = Path(TRACKING_QC_DIR) / "track_validation_stats.csv"
 DEFAULT_RAW_WF_ROOT  = REPO_ROOT / "data" / "unit_match" / "input" / "BG_046"
 DEFAULT_PKL_DIR      = REPO_ROOT / "data" / "pkls" / "BG_046"
 
-DEFAULT_OUT_DIR      = REPO_ROOT / "FIGURES" / "tracking_qc" / "per_uid_sheets"
-DEFAULT_VERDICTS_CSV = REPO_ROOT / "FIGURES" / "tracking_qc" / "verdicts.csv"
+DEFAULT_OUT_DIR      = Path(TRACKING_QC_DIR) / "per_uid_sheets"
+DEFAULT_VERDICTS_CSV = Path(TRACKING_QC_DIR) / "verdicts.csv"
 DEFAULT_CACHE_PATH   = REPO_ROOT / "data" / "cache" / "tracking_qc_intermediates.pkl"
 
 

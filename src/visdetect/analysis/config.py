@@ -86,7 +86,7 @@ SUBJECT: str = os.getenv("VISDETECT_SUBJECT", "BG_046")
 # Paths
 # =====================================================================
 PKL_DIR                = os.path.join(ROOT, "data", "pkls", SUBJECT) # f"{SUBJECT}_concat_sort")
-GLT_PATH               = os.path.join(ROOT, "table_output", "Grand_Longitudinal_Table.csv")
+GLT_PATH               = os.path.join(ROOT, "table_output", SUBJECT, "Grand_Longitudinal_Table.csv")
 STAGING_MANIFEST_PATH  = os.path.join(ROOT, "data", f"{SUBJECT}_staging_manifest.csv")
 
 # HMM K = 3 (QC-passed, self_init_0p8)
@@ -105,9 +105,14 @@ MAT_DIR                = os.path.join(ROOT, "data", "mat", SUBJECT)
 # Raw waveforms (UnitMatch input)
 RAW_WF_DIR             = os.path.join(ROOT, "data", "unit_match", "input", SUBJECT)
 
-# Waveform cell-type labels (pre-computed)
-WAVEFORM_LABELS_PATH   = os.path.join(ROOT, "AI_exploration", "figures",
-                                      "waveform_celltype_labels.csv")
+# Waveform cell-type labels (regenerated per-subject by
+# scripts/analysis/build_waveform_celltype_labels.py; the legacy
+# AI_exploration/preTprime CSV is stale and must not be used)
+WAVEFORM_LABELS_PATH   = os.path.join(ROOT, "data", SUBJECT, "waveform_celltype_labels.csv")
+
+# Per-subject tracking-QC output dir (track_validation, verdicts, per-UID sheets,
+# regenerated GLT verdicts). Subject-scoped so multiple subjects never collide.
+TRACKING_QC_DIR        = os.path.join(ROOT, "FIGURES", "tracking_qc", SUBJECT)
 
 # Pre-computed TF pulse traces (per-session NPZ files)
 TF_TRACES_DIR          = os.path.join(ROOT, "data", "cache", "tf_traces", SUBJECT)
