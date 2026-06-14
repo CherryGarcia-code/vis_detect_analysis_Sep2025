@@ -33,11 +33,12 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 from visdetect.core.session import load_session  # noqa: E402
+from visdetect.analysis.config import TRACKING_QC_DIR  # noqa: E402
 
 DEFAULT_REGISTRY = ("X:/public/projects/BeJG_20230130_VisDetect/wEPhys/"
                     "BG_046/unit_match/output/all42/unit_index.csv")
 DEFAULT_PKL_DIR = REPO_ROOT / "data" / "pkls" / "BG_046"
-OUT_DIR = REPO_ROOT / "FIGURES" / "tracking_qc"
+OUT_DIR = Path(TRACKING_QC_DIR)
 
 # ISI histogram: 50 log-spaced bins from 1 ms to 10 s (paper-style)
 ISI_BINS = np.logspace(-3, 1, 51)

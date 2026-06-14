@@ -47,9 +47,9 @@ from visdetect.analysis.config import (   # noqa: F401
 from visdetect.analysis.constants import DEFAULT_Z_THRESH_TF
 from visdetect.core.session import load_session as _load_session_raw
 
-# Canonical trimmed-verdict cohort location: repo-root FIGURES/tracking_qc
+# Canonical trimmed-verdict cohort location: repo-root FIGURES/tracking_qc/<SUBJECT>
 # (where the QC-sheets pipeline writes it) — NOT analysis_suite/figures.
-DEFAULT_VERDICTS_PATH = os.path.join(ROOT, "FIGURES", "tracking_qc", "verdicts_trimmed.csv")
+DEFAULT_VERDICTS_PATH = os.path.join(ROOT, "FIGURES", "tracking_qc", SUBJECT, "verdicts_trimmed.csv")
 
 
 # ── Session loading ───────────────────────────────────────────────────
