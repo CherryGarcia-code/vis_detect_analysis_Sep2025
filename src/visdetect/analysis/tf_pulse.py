@@ -90,16 +90,31 @@ def _per_trial_event_times(session, key: str) -> np.ndarray:
 
 
 def _outcome_time_for_trial(trial, baseline_t: Optional[float]) -> Optional[float]:
+    """Absolute time of a baseline lick (fa/abort/ref), or None.
+
+    Case-insensitive on both the outcome label and the reaction-time key,
+    so lowercase ('fa') or capitalised ('Abort') data are handled uniformly.
+    Hit response licks are post-change and not returned here (the change-onset
+    guard already removes pulses near them).
+    """
     out = getattr(trial, "trialoutcome", None)
     rts = getattr(trial, "reactiontimes", {}) or {}
-    if out in ("FA", "abort") and baseline_t is not None:
-        val = rts.get(out, np.nan)
-        try:
-            fv = float(val)
-        except Exception:
-            return None
-        if np.isfinite(fv):
-            return float(baseline_t + fv)
+    if baseline_t is None or out is None:
+        return None
+    out_l = str(out).lower()
+    if out_l not in ("fa", "abort", "ref"):
+        return None
+    val = np.nan
+    for k, v in rts.items():
+        if str(k).lower() == out_l:
+            val = v
+            break
+    try:
+        fv = float(val)
+    except (TypeError, ValueError):
+        return None
+    if np.isfinite(fv):
+        return float(baseline_t + fv)
     return None
 
 
