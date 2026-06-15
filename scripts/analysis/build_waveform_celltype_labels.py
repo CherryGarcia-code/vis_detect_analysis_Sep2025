@@ -13,7 +13,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from visdetect.analysis.config import RAW_WF_DIR, WAVEFORM_LABELS_PATH  # noqa: E402
