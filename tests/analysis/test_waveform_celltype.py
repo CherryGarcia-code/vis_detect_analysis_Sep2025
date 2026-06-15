@@ -67,3 +67,12 @@ def test_classify_labels_align_with_input_length():
     labels, info = classify_celltype(t2p)
     assert labels.shape == t2p.shape
     assert info["n"] >= 1
+
+
+def test_classify_too_few_in_window_all_unclassified():
+    # Fewer than 2 in-window values -> no GMM fit; all Unclassified, NaN info.
+    labels, info = classify_celltype(np.array([np.nan, np.nan]))
+    assert list(labels) == ["Unclassified", "Unclassified"]
+    assert info["n"] == 0
+    assert np.isnan(info["threshold_ms"])
+    assert np.isnan(info["delta_bic"])

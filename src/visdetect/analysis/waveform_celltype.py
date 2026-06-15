@@ -56,12 +56,15 @@ def classify_celltype(
 
     A single global GMM is fit on T2P values within (T2P_MIN_MS, T2P_MAX_MS).
     The decision threshold is the mean of the two component means; units with
-    T2P below it are FSI (narrow), at/above it SPN (broad). NaN T2P → Unclassified.
+    T2P below it are FSI (narrow), at/above it SPN (broad). Only NaN inputs are
+    Unclassified: a finite value outside the fit window is still labelled by the
+    threshold (it is excluded from the GMM fit but not from classification).
 
     Returns
     -------
     labels : ndarray of str, same shape as t2p_ms (values in {FSI, SPN, Unclassified}).
-    info : dict with threshold_ms, narrow_mean_ms, broad_mean_ms, delta_bic, n.
+    info : dict with threshold_ms, narrow_mean_ms, broad_mean_ms, delta_bic, and
+        n (the count of finite, in-window values the GMM was fit on).
     """
     from sklearn.mixture import GaussianMixture
 
