@@ -2,7 +2,7 @@
 import numpy as np
 from visdetect.core.session import Trial
 from visdetect.analysis.tf_pulse import _outcome_time_for_trial, _collect_pulses, TFRespPulseConfig
-from visdetect.core.session import Session
+from visdetect.utils.synthetic import make_synthetic_session
 
 
 def _trial(outcome, rts):
@@ -43,8 +43,10 @@ def test_outcome_time_none_baseline_returns_none():
     assert _outcome_time_for_trial(t, None) is None
 
 
-# append to tests/analysis/test_tf_pulse_guards.py
-from visdetect.utils.synthetic import make_synthetic_session
+def test_outcome_time_missing_rt_key_returns_none():
+    # Outcome is a baseline lick but no matching reaction-time key -> None
+    t = _trial("FA", {"RT": 0.3})
+    assert _outcome_time_for_trial(t, 10.0) is None
 
 
 def test_collect_pulses_constraints_reduce_count():
