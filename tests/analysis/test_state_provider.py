@@ -89,3 +89,47 @@ def test_uniform_inzone_provider_labels_all_valid(tmp_path):
     prov.write(sess, "07072025", tmp_path)
     idx = sp.in_zone_trial_indices("07072025", tmp_path)
     assert idx == [0, 1, 2, 3]
+
+
+def test_canonical_from_hmm_label_maps_stimsens():
+    # behavioral-state labeler vocabulary uses "StimSens" for the engaged state
+    assert sp.canonical_from_hmm_label("StimSens") == "in_zone"
+
+
+def test_rows_from_tag_df_maps_gates_and_carries_confidence():
+    df = pd.DataFrame({
+        "trial_idx": [0, 1, 2, 3, 4],
+        "state_label": ["StimSens", "Impulsive", "Disengaged", "Abort", "StimSens"],
+        "state_gated": [2, 1, 0, 1, -1],     # last row ungated (-1) -> dropped
+        "state_confidence": [0.9, 0.8, 0.7, 0.99, 0.95],
+    })
+    rows = sp.rows_from_tag_df(df)
+    # Abort -> no canonical -> dropped; trial 4 ungated -> dropped
+    assert rows == [(0, "in_zone", pytest.approx(0.9)),
+                    (1, "impulsive", pytest.approx(0.8)),
+                    (2, "disengaged", pytest.approx(0.7))]
+
+
+def test_rows_from_tag_df_no_gating_keeps_ungated():
+    df = pd.DataFrame({
+        "trial_idx": [0, 1],
+        "state_label": ["StimSens", "StimSens"],
+        "state_gated": [-1, 2],
+        "state_confidence": [0.5, 0.9],
+    })
+    rows = sp.rows_from_tag_df(df, use_gating=False)
+    assert rows == [(0, "in_zone", pytest.approx(0.5)),
+                    (1, "in_zone", pytest.approx(0.9))]
+
+
+def test_rows_from_tag_df_alt_label_column():
+    # can key off the HMM label column instead of the decision-tree one
+    df = pd.DataFrame({
+        "trial_idx": [0, 1],
+        "hmm_state_label": ["StimSens", "Disengaged"],
+        "state_gated": [2, 1],
+        "state_confidence": [0.9, 0.8],
+    })
+    rows = sp.rows_from_tag_df(df, label_col="hmm_state_label")
+    assert rows == [(0, "in_zone", pytest.approx(0.9)),
+                    (1, "disengaged", pytest.approx(0.8))]

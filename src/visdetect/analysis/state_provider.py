@@ -71,6 +71,7 @@ from visdetect.core.session import Session
 
 _HMM_CANONICAL = {
     "Stimulus_sensitive": IN_ZONE,
+    "StimSens": IN_ZONE,          # behavioral-state labeler vocabulary
     "Impulsive": IMPULSIVE,
     "Disengaged": DISENGAGED,
 }
@@ -99,6 +100,36 @@ def rows_from_decoded_df(df) -> List[Tuple[int, str, float]]:
         if canon is None:
             continue
         rows.append((int(r["trial_idx"]), canon, float(r["p_state_max"])))
+    return rows
+
+
+def rows_from_tag_df(df, *, label_col: str = "state_label",
+                     gate_col: str = "state_gated",
+                     conf_col: str = "state_confidence",
+                     use_gating: bool = True,
+                     ungated_value: int = -1) -> List[Tuple[int, str, float]]:
+    """Convert a behavioral-state-labeler tag table to canonical state-table rows.
+
+    The labeler (scripts/state_labeling/, data/cache/state_tags/<subject>/<sess>.csv)
+    emits its own vocabulary (StimSens/Impulsive/Disengaged/Abort/...). This maps
+    `label_col` -> the canonical 3-state set via canonical_from_hmm_label; rows with
+    no canonical equivalent (e.g. Abort) are dropped.
+
+    Gating: `gate_col` is the GATED state index, with `ungated_value` (-1) marking
+    trials that did not pass the labeler's confidence gate. When use_gating, those
+    are dropped. Confidence comes from `conf_col` (1.0 if absent/NaN).
+    """
+    rows: List[Tuple[int, str, float]] = []
+    has_gate = gate_col in df.columns
+    has_conf = conf_col in df.columns
+    for _, r in df.iterrows():
+        if use_gating and has_gate and int(r[gate_col]) == ungated_value:
+            continue
+        canon = canonical_from_hmm_label(r[label_col])
+        if canon is None:
+            continue
+        conf = float(r[conf_col]) if has_conf and pd.notna(r[conf_col]) else 1.0
+        rows.append((int(r["trial_idx"]), canon, conf))
     return rows
 
 
