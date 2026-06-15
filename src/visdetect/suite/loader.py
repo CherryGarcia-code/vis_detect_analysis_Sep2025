@@ -445,6 +445,9 @@ def build_unit_table(qc_only: bool = True, validate: bool = True,
             wf_sub.columns = ["_wf_session", "_wf_cluster", "celltype"]
             wf_sub["_wf_session"] = wf_sub["_wf_session"].astype(int)
             wf_sub["_wf_cluster"] = wf_sub["_wf_cluster"].astype(int)
+            # The waveform workstream owns `celltype`; drop any pre-existing column
+            # so the merge can't suffix it to celltype_x/celltype_y.
+            glt.drop(columns=["celltype"], errors="ignore", inplace=True)
             glt = glt.merge(
                 wf_sub,
                 left_on=["Session_Date", "Cluster_ID"],
