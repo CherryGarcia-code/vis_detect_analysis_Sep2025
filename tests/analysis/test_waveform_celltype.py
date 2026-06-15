@@ -33,3 +33,11 @@ def test_features_short_input_returns_nans():
 def test_features_flat_input_safe():
     f = compute_waveform_features(np.zeros(82))
     assert set(f) == {"t2p_ms", "half_width_ms", "pt_ratio"}
+
+
+def test_features_trough_at_last_sample_returns_nans():
+    # Global min at the final sample -> no post-trough samples to find a peak.
+    w = np.zeros(82)
+    w[-1] = -1.0
+    f = compute_waveform_features(w)
+    assert np.isnan(f["t2p_ms"])

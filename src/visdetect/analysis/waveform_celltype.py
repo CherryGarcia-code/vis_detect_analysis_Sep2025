@@ -8,7 +8,7 @@ See docs/superpowers/specs/2026-06-03-presentation-prep-roadmap-design.md (§9).
 """
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 
