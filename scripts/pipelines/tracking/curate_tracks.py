@@ -8,10 +8,13 @@ Outputs (FIGURES/tracking_qc/curation/):
 Usage:
     py scripts/pipelines/tracking/curate_tracks.py [--min-span 2] [--rebuild-cache]
 
-Note on registry path: the liberal cohort (with the ``batch_uid_liberal``
-column) and its row-aligned ``output_prob_matrix.npy`` both live under
-``batch0/`` for this single-batch run. The top-level ``all42/unit_index.csv``
-is a reconciled registry that only carries ``global_uid`` — do not use it here.
+Registry note (revised June 2026): curate the ``global_uid`` registry
+(``all42/unit_index.csv``), NOT the ``batch_uid_liberal`` column. On BG_046 the
+"liberal" assignment over-merges into a few heterogeneous mega-blobs (e.g. a
+39-session uid spanning several distinct neurons) that the backward sweep cannot
+recover and truncates to span 1. The intermediate/``global_uid`` registry has the
+clean long tracks (61 span>=10 vs liberal's 23) the original QC used. Override with
+``--registry``/``--liberal-col`` to curate a different column.
 """
 from __future__ import annotations
 
@@ -37,7 +40,7 @@ from visdetect.suite.loader import load_filtered_manifest           # noqa: E402
 
 UM_ROOT = Path("X:/public/projects/BeJG_20230130_VisDetect/wEPhys/"
                "BG_046/unit_match/output/all42")
-DEFAULT_REGISTRY = UM_ROOT / "batch0" / "unit_index.csv"
+DEFAULT_REGISTRY = UM_ROOT / "unit_index.csv"          # reconciled global_uid registry
 DEFAULT_PROB_MATRIX = UM_ROOT / "batch0" / "output_prob_matrix.npy"
 DEFAULT_RAW_WF_ROOT = REPO_ROOT / "data" / "unit_match" / "input" / "BG_046"
 DEFAULT_PKL_DIR = REPO_ROOT / "data" / "pkls" / "BG_046"
@@ -73,7 +76,9 @@ def _session_pkl(pkl_dir: Path, sess: str):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
-    ap.add_argument("--liberal-col", default="batch_uid_liberal")
+    ap.add_argument("--liberal-col", default="global_uid",
+                    help="UID column to curate. Default global_uid (clean long "
+                         "tracks); batch_uid_liberal over-merges into blobs here.")
     ap.add_argument("--prob-matrix", type=Path, default=DEFAULT_PROB_MATRIX)
     ap.add_argument("--raw-wf-root", type=Path, default=DEFAULT_RAW_WF_ROOT)
     ap.add_argument("--pkl-dir", type=Path, default=DEFAULT_PKL_DIR)

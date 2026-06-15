@@ -133,12 +133,28 @@ def test_score_link_hard_contradiction_stops():
     assert lr.stop_reason == "hard_contradiction"
 
 
-def test_score_link_soft_depth_warn_skips():
+def test_score_link_warn_keeps_with_review():
+    # A 'warn'-level link (depth 30um here; wave 0.90-0.95 is symmetric) is
+    # plausibly the same neuron degraded by drift/slow shape change -> KEEP but
+    # flag review, NOT truncate. (Long tracks routinely have warn-level links.)
     p = tc.CurationParams()
     a = _feat("S2", wave=_W, depth=100.0, isi=_ISI, psth_val=1.0, n_inzone=50)
     b = _feat("S1", wave=_W, depth=130.0, isi=_ISI, psth_val=1.0, n_inzone=50)  # 30um = depth warn
     lr = tc.score_link(a, b, a, p, gap_sessions=1)
+    assert lr.decision == "KEEP"
+    assert lr.review_flag is True
+
+
+def test_score_link_single_hard_fail_skips():
+    # Exactly one metric HARD-fails (depth 50um jump, waveform fine) -> SKIP
+    # (bridgeable). STOP needs BOTH to fail; a single fail is not a hard
+    # contradiction.
+    p = tc.CurationParams()
+    a = _feat("S2", wave=_W, depth=100.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+    b = _feat("S1", wave=_W, depth=150.0, isi=_ISI, psth_val=1.0, n_inzone=50)  # 50um = depth fail
+    lr = tc.score_link(a, b, a, p, gap_sessions=1)
     assert lr.decision == "SKIP"
+    assert lr.stop_reason == ""
 
 
 def test_score_link_func_conflict_flags_review_but_keeps():
@@ -227,7 +243,7 @@ def _chain_feats(session_names, *, swap_at=None, dropout_at=None):
         if s == swap_at:
             wave, depth = -_W.copy(), 220.0      # hard contradiction
         elif s == dropout_at:
-            depth = 130.0                         # soft (depth warn) -> SKIP
+            depth = 150.0                         # 50um = hard depth fail -> SKIP (bridgeable)
         feats[s] = _feat(s, wave=wave, depth=depth, isi=_ISI, psth_val=1.0, n_inzone=50)
     return feats
 
@@ -264,10 +280,10 @@ def test_sweep_single_dropout_is_bridged():
 def test_sweep_skips_exhausted_drops_trailing():
     p = tc.CurationParams(max_bridge_gap=1)
     order = ["S1", "S2", "S3", "S4"]
-    # S3 and S2 both soft-fail -> 2 consecutive skips > max_bridge_gap=1 -> STOP
+    # S3 and S2 both hard-fail on depth -> 2 consecutive skips > max_bridge_gap=1 -> STOP
     feats = _chain_feats(order)
-    feats["S3"] = _feat("S3", wave=_W, depth=130.0, isi=_ISI, psth_val=1.0, n_inzone=50)
-    feats["S2"] = _feat("S2", wave=_W, depth=130.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+    feats["S3"] = _feat("S3", wave=_W, depth=150.0, isi=_ISI, psth_val=1.0, n_inzone=50)
+    feats["S2"] = _feat("S2", wave=_W, depth=150.0, isi=_ISI, psth_val=1.0, n_inzone=50)
     res = tc.sweep_uid(feats, order, p)
     assert res.kept_sessions == ["S4"]
     assert "S3" in res.dropped_sessions and "S2" in res.dropped_sessions

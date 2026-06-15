@@ -231,17 +231,27 @@ def score_link(anchor: CurationFeature, candidate: CurationFeature,
         n_inzone_trials=candidate.n_inzone_trials,
     )
 
+    # Decision policy (revised June 2026): the gate must not shred genuine long
+    # tracks. Real same-neuron links routinely score "warn" (waveform r 0.90-0.95,
+    # depth 25-40 um) across weeks of drift/slow shape change. So:
+    #   - STOP  only on a HARD contradiction = waveform AND depth both fail
+    #     (flipped template at a clearly different depth -> different neuron).
+    #   - SKIP  (bridgeable) when exactly ONE of waveform/depth hard-fails.
+    #   - KEEP  otherwise (neither hard-fails); flag review unless every signal
+    #     is a clean pass. A "warn" keeps the track alive but flagged, rather
+    #     than truncating it (the old pass-only-KEEP rule collapsed 39-session
+    #     tracks to span 1 on a single 0.94 waveform correlation).
     if w == "fail" and d == "fail":
         return LinkResult(**base, decision="STOP", review_flag=False,
                           stop_reason="hard_contradiction")
-    if w == "pass" and d in ("pass", "na"):
-        review = (badge_isi_hist_corr(isi_corr) != "pass")
-        if func_evaluable and badge_func_resp(func_corr) != "pass":
-            review = True
-        if not depth_evaluable:
-            review = True               # kept without depth corroboration
-        return LinkResult(**base, decision="KEEP", review_flag=review)
-    return LinkResult(**base, decision="SKIP", review_flag=False)
+    if w == "fail" or d == "fail":
+        return LinkResult(**base, decision="SKIP", review_flag=False)
+    review = (w == "warn") or (d == "warn") or (not depth_evaluable)
+    if badge_isi_hist_corr(isi_corr) != "pass":
+        review = True
+    if func_evaluable and badge_func_resp(func_corr) != "pass":
+        review = True
+    return LinkResult(**base, decision="KEEP", review_flag=review)
 
 
 @dataclass

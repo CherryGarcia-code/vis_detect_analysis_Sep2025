@@ -42,9 +42,9 @@ from build_qc_sheets import compute_uid_metrics, _pair_scores_from_paths  # noqa
 
 UM_ROOT = Path("X:/public/projects/BeJG_20230130_VisDetect/wEPhys/"
                "BG_046/unit_match/output/all42")
-DEFAULT_REGISTRY = UM_ROOT / "batch0" / "unit_index.csv"
+DEFAULT_REGISTRY = UM_ROOT / "unit_index.csv"          # reconciled global_uid registry
 DEFAULT_PROB_MATRIX = UM_ROOT / "batch0" / "output_prob_matrix.npy"
-DEFAULT_PROB_INDEX = UM_ROOT / "batch0" / "unit_index.csv"
+DEFAULT_PROB_INDEX = UM_ROOT / "batch0" / "unit_index.csv"   # row-aligned w/ the matrix (pair scores)
 DEFAULT_TRACKS = REPO_ROOT / "FIGURES" / "tracking_qc" / "curation" / "curated_tracks.csv"
 DEFAULT_RAW_WF_ROOT = REPO_ROOT / "data" / "unit_match" / "input" / "BG_046"
 DEFAULT_PKL_DIR = REPO_ROOT / "data" / "pkls" / "BG_046"
@@ -84,7 +84,7 @@ def main() -> int:
     ap.add_argument("--tier", default="trusted",
                     choices=["trusted", "review", "suspect"])
     ap.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
-    ap.add_argument("--liberal-col", default="batch_uid_liberal")
+    ap.add_argument("--liberal-col", default="global_uid")
     ap.add_argument("--prob-matrix", type=Path, default=DEFAULT_PROB_MATRIX)
     ap.add_argument("--prob-index", type=Path, default=DEFAULT_PROB_INDEX)
     ap.add_argument("--raw-wf-root", type=Path, default=DEFAULT_RAW_WF_ROOT)

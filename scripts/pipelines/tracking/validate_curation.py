@@ -23,7 +23,7 @@ from visdetect.core.session import load_session                     # noqa: E402
 
 UM_ROOT = Path("X:/public/projects/BeJG_20230130_VisDetect/wEPhys/"
                "BG_046/unit_match/output/all42")
-DEFAULT_REGISTRY = UM_ROOT / "batch0" / "unit_index.csv"
+DEFAULT_REGISTRY = UM_ROOT / "unit_index.csv"          # reconciled global_uid registry
 DEFAULT_TRACKS = REPO_ROOT / "FIGURES" / "tracking_qc" / "curation" / "curated_tracks.csv"
 DEFAULT_PKL_DIR = REPO_ROOT / "data" / "pkls" / "BG_046"
 OUT_DIR = REPO_ROOT / "FIGURES" / "tracking_qc" / "curation"
@@ -41,7 +41,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tracks", type=Path, default=DEFAULT_TRACKS)
     ap.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
-    ap.add_argument("--liberal-col", default="batch_uid_liberal")
+    ap.add_argument("--liberal-col", default="global_uid")
     ap.add_argument("--pkl-dir", type=Path, default=DEFAULT_PKL_DIR)
     args = ap.parse_args()
 
