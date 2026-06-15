@@ -433,23 +433,30 @@ def build_unit_table(qc_only: bool = True, validate: bool = True,
         glt["is_lick_responsive"] = False
         glt["lick_p_value"] = np.nan
 
-    # Merge waveform cell-type labels
+    # Merge waveform cell-type labels.
+    # load_waveform_labels normalizes to session_name/cell_type, so accept either
+    # naming and always populate `celltype` (fillna so unlabeled units are "unknown").
     try:
         wf = load_waveform_labels()
-        if "session_date" in wf.columns and "cluster_id" in wf.columns:
-            wf_sub = wf[["session_date", "cluster_id", "celltype"]].copy()
-            wf_sub["session_date"] = wf_sub["session_date"].astype(int)
+        sess_col = next((c for c in ("session_name", "session_date") if c in wf.columns), None)
+        type_col = next((c for c in ("cell_type", "celltype") if c in wf.columns), None)
+        if sess_col and "cluster_id" in wf.columns and type_col:
+            wf_sub = wf[[sess_col, "cluster_id", type_col]].copy()
+            wf_sub.columns = ["_wf_session", "_wf_cluster", "celltype"]
+            wf_sub["_wf_session"] = wf_sub["_wf_session"].astype(int)
+            wf_sub["_wf_cluster"] = wf_sub["_wf_cluster"].astype(int)
             glt = glt.merge(
                 wf_sub,
                 left_on=["Session_Date", "Cluster_ID"],
-                right_on=["session_date", "cluster_id"],
+                right_on=["_wf_session", "_wf_cluster"],
                 how="left",
             )
-            glt.drop(columns=["session_date", "cluster_id"], errors="ignore", inplace=True)
+            glt.drop(columns=["_wf_session", "_wf_cluster"], errors="ignore", inplace=True)
+            glt["celltype"] = glt["celltype"].fillna("unknown")
         else:
-            glt["celltype"] = np.nan
+            glt["celltype"] = "unknown"
     except FileNotFoundError:
-        glt["celltype"] = np.nan
+        glt["celltype"] = "unknown"
 
     # Merge detrended TF responsiveness (if available)
     dt_df = load_tf_responsiveness_detrended()
