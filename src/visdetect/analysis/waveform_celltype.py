@@ -49,29 +49,45 @@ def compute_waveform_features(peak_waveform: np.ndarray) -> Dict[str, float]:
 
 
 def classify_celltype(
-    t2p_ms_array: np.ndarray,
-    *,
+    t2p_ms: np.ndarray,
     random_state: int = 42,
-) -> Tuple[np.ndarray, object]:
-    """Classify FSI vs SPN using a 2-component GMM fit on trough-to-peak duration.
+) -> Tuple[np.ndarray, Dict[str, float]]:
+    """Classify units FSI/SPN from trough-to-peak via a 2-component GMM.
 
-    Parameters
-    ----------
-    t2p_ms_array:
-        1-D array of per-unit T2P values (ms). NaN entries are excluded from
-        fitting and returned as label ``-1`` (unclassified).
-    random_state:
-        Seed for GMM initialisation.
+    A single global GMM is fit on T2P values within (T2P_MIN_MS, T2P_MAX_MS).
+    The decision threshold is the mean of the two component means; units with
+    T2P below it are FSI (narrow), at/above it SPN (broad). NaN T2P → Unclassified.
 
     Returns
     -------
-    labels : np.ndarray of int (same length as input)
-        0 = FSI (narrow spike, short T2P), 1 = SPN (broad spike, long T2P),
-        -1 = NaN input (unclassified).
-    gmm : fitted sklearn GaussianMixture instance (for inspection / plotting).
-
-    Notes
-    -----
-    Implemented in Task 2. Raises NotImplementedError until then.
+    labels : ndarray of str, same shape as t2p_ms (values in {FSI, SPN, Unclassified}).
+    info : dict with threshold_ms, narrow_mean_ms, broad_mean_ms, delta_bic, n.
     """
-    raise NotImplementedError("classify_celltype will be implemented in Task 2 (GMM classifier).")
+    from sklearn.mixture import GaussianMixture
+
+    arr = np.asarray(t2p_ms, dtype=float)
+    finite = np.isfinite(arr)
+    in_window = finite & (arr > T2P_MIN_MS) & (arr < T2P_MAX_MS)
+    X = arr[in_window].reshape(-1, 1)
+    if X.shape[0] < 2:
+        labels = np.full(arr.shape, "Unclassified", dtype=object)
+        return labels, {"threshold_ms": np.nan, "narrow_mean_ms": np.nan,
+                        "broad_mean_ms": np.nan, "delta_bic": np.nan, "n": int(X.shape[0])}
+
+    gmm2 = GaussianMixture(n_components=2, random_state=random_state).fit(X)
+    gmm1 = GaussianMixture(n_components=1, random_state=random_state).fit(X)
+    means = np.sort(gmm2.means_.flatten())
+    threshold = float(means.mean())
+
+    labels = np.full(arr.shape, "Unclassified", dtype=object)
+    labels[finite & (arr < threshold)] = "FSI"
+    labels[finite & (arr >= threshold)] = "SPN"
+
+    info = {
+        "threshold_ms": threshold,
+        "narrow_mean_ms": float(means[0]),
+        "broad_mean_ms": float(means[1]),
+        "delta_bic": float(gmm1.bic(X) - gmm2.bic(X)),
+        "n": int(X.shape[0]),
+    }
+    return labels, info
