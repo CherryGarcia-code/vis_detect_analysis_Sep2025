@@ -6,10 +6,11 @@ on the *curated* cohort. build_qc_sheets.py can't do this directly: it's hardwir
 the >=10-session global_uid cohort (select_long_tracks min_span=10), whereas curated
 trusted tracks span 3-7 sessions and are keyed on the liberal batch_uid_liberal column.
 
-For each curated track of the chosen --tier, builds a UIDIntermediate from its KEPT
-sessions (the track the curation asserts), computes the standard QC metrics over those
-sessions, and writes the same 2-page PDF (footprints, waveform overlay, depth trajectory,
-ISI hist, FR, PSTHs + badges), stamped with the curation tier via `trimmed_verdict`.
+For each curated track, renders the FULL liberal track and marks the curation's DROPPED
+sessions (dimmed + red heatmap label), exactly like build_qc_sheets' trimmed view. Badge
+metrics are computed on the KEPT subset (the track the curation asserts). Stages come from
+the broad staging manifest (Naive->Learning); sessions absent there render light-grey
+"Unknown" (genuinely unstaged in behaviour) — which is NOT the same as dropped.
 
 Usage:
     py scripts/pipelines/tracking/render_curation_sheets.py [--tier trusted] [--uids 842 ...]
@@ -34,7 +35,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from visdetect.analysis.tracking_qc import (                       # noqa: E402
     UIDIntermediate, extract_session_records, load_channel_positions)
 from visdetect.core.session import load_session                    # noqa: E402
-from visdetect.suite.loader import load_filtered_manifest          # noqa: E402
+from visdetect.suite.loader import load_staging_manifest           # noqa: E402
 
 from qc_sheet_figures import write_uid_pdf                         # noqa: E402
 from build_qc_sheets import compute_uid_metrics, _pair_scores_from_paths  # noqa: E402
@@ -66,12 +67,12 @@ def _session_pkl(pkl_dir: Path, sess: str):
     return None
 
 
-def cohort_from_tracks(tracks_df: pd.DataFrame, tier: str) -> Dict[int, List[str]]:
-    """{curated_uid -> kept-session list} for the rows in `tier` with span >= 2."""
-    out: Dict[int, List[str]] = {}
+def cohort_from_tracks(tracks_df: pd.DataFrame, tier: str) -> Dict[int, set]:
+    """{curated_uid -> set of KEPT session names} for the rows in `tier` (span>=2)."""
+    out: Dict[int, set] = {}
     sub = tracks_df[tracks_df["confidence_tier"] == tier]
     for _, row in sub.iterrows():
-        kept = [s for s in str(row["kept_sessions"]).split(";") if s]
+        kept = {_norm(s) for s in str(row["kept_sessions"]).split(";") if s}
         if len(kept) >= 2:
             out[int(row["curated_uid"])] = kept
     return out
@@ -96,40 +97,40 @@ def main() -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     tracks = pd.read_csv(args.tracks)
-    cohort = cohort_from_tracks(tracks, args.tier)
+    kept_by_uid = cohort_from_tracks(tracks, args.tier)
     if args.uids:
-        cohort = {u: s for u, s in cohort.items() if u in set(args.uids)}
+        kept_by_uid = {u: s for u, s in kept_by_uid.items() if u in set(args.uids)}
     if args.max_uids:
-        cohort = dict(list(cohort.items())[:args.max_uids])
-    if not cohort:
+        kept_by_uid = dict(list(kept_by_uid.items())[:args.max_uids])
+    if not kept_by_uid:
         print(f"no {args.tier} tracks to render", flush=True)
         return 0
-    print(f"{args.tier}: {len(cohort)} tracks to render", flush=True)
+    print(f"{args.tier}: {len(kept_by_uid)} tracks to render", flush=True)
 
-    # Liberal registry -> ks_unit_id per (uid, kept session)
+    # Liberal registry: FULL session list + ks_unit_id per (uid, session). We
+    # render the full track and mark the curation's dropped sessions (= full minus
+    # kept), so kept vs dropped is explicit.
     reg = pd.read_csv(args.registry)
     reg["session"] = reg["session"].astype(str)
     reg["uid"] = reg[args.liberal_col].astype(int)
     uid_to_ks: Dict[int, Dict[str, int]] = {}
     for _, r in reg.iterrows():
         u = int(r["uid"])
-        if u in cohort and str(r["session"]) in cohort[u]:
+        if u in kept_by_uid:
             uid_to_ks.setdefault(u, {})[str(r["session"])] = int(r["ks_unit_id"])
 
-    manifest = load_filtered_manifest(
-        include_stages=["Naive", "Learning", "Expert"],
-        merge_naive_learning=True, min_trials=150, min_dprime=None)
-    stage_by_sess = {_norm(r["session_name"]): str(r["stage"])
-                     for _, r in manifest.iterrows()}
+    # Broad stage source (Naive->Learning to match the renderer's palette).
+    manifest = load_staging_manifest(qc_only=False, apply_filter=False)
+    stage_by_sess: Dict[str, str] = {}
+    for _, r in manifest.iterrows():
+        st = str(r["stage"])
+        stage_by_sess[_norm(r["session_name"])] = "Learning" if st == "Naive" else st
 
-    # Build intermediates, outer loop by session (load each pkl once).
-    intermediates: Dict[int, UIDIntermediate] = {}
-    for u, kept in cohort.items():
-        stages = {stage_by_sess.get(_norm(s), "Unknown") for s in kept}
-        has_n2e = ("Expert" in stages) and bool(stages & {"Naive", "Learning"})
-        intermediates[u] = UIDIntermediate(global_uid=u, span=len(kept),
-                                           has_naive_to_expert=has_n2e,
-                                           suspect_known=False, sessions=[])
+    intermediates: Dict[int, UIDIntermediate] = {
+        u: UIDIntermediate(global_uid=u, span=len(ks), has_naive_to_expert=False,
+                           suspect_known=False, sessions=[])
+        for u, ks in uid_to_ks.items()
+    }
 
     sess_set = sorted({s for ks in uid_to_ks.values() for s in ks}, key=_session_date)
     for sess in sess_set:
@@ -151,7 +152,6 @@ def main() -> int:
         del S; gc.collect()
         print(f"  {sess}: {len(records)}/{len(uids_here)} records", flush=True)
 
-    # Pair-score (consecutive UM match prob) traces from the liberal prob matrix.
     uid_to_sessions = {u: sorted(ks.keys(), key=_session_date)
                        for u, ks in uid_to_ks.items()}
     pair_scores = _pair_scores_from_paths(args.prob_matrix, args.prob_index,
@@ -160,16 +160,28 @@ def main() -> int:
     n = 0
     for u, iv in intermediates.items():
         iv.sessions.sort(key=lambda r: _session_date(r.session_name))
-        if len(iv.sessions) < 2:
-            print(f"  uid {u}: <2 records, skipped", flush=True); continue
-        m = compute_uid_metrics(iv)
-        out = args.out_dir / f"{args.tier}_uid{u}_span{len(iv.sessions)}.pdf"
+        iv.span = len(iv.sessions)
+        kept = kept_by_uid[u]
+        kept_recs = [r for r in iv.sessions if _norm(r.session_name) in kept]
+        dropped_idx = [i for i, r in enumerate(iv.sessions)
+                       if _norm(r.session_name) not in kept]
+        iv.has_naive_to_expert = (
+            "Expert" in {r.stage for r in kept_recs}
+            and "Learning" in {r.stage for r in kept_recs})
+        if len(kept_recs) < 2:
+            print(f"  uid {u}: <2 kept records, skipped", flush=True); continue
+        kept_iv = UIDIntermediate(global_uid=u, span=len(kept_recs),
+                                  has_naive_to_expert=iv.has_naive_to_expert,
+                                  suspect_known=False, sessions=kept_recs)
+        m = compute_uid_metrics(kept_iv)
+        out = args.out_dir / f"{args.tier}_uid{u}_span{len(kept_recs)}.pdf"
         write_uid_pdf(out, iv, pair_scores.get(u),
                       isi_score=m["isi_hist_corr"], depth_std=m["depth_std_um"],
                       wave_corr=m["wave_corr"], fr_cv_val=m["fr_cv"],
-                      n_kept=len(iv.sessions), trimmed_verdict=args.tier)
+                      dropped_indices=dropped_idx or None,
+                      n_kept=len(kept_recs), trimmed_verdict=args.tier)
         n += 1
-        print(f"  wrote {out.name}", flush=True)
+        print(f"  wrote {out.name} (kept {len(kept_recs)}/{len(iv.sessions)})", flush=True)
     print(f"Done: {n} sheets -> {args.out_dir}", flush=True)
     return 0
 
