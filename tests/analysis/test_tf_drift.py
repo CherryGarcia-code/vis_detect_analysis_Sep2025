@@ -31,3 +31,58 @@ def test_estimate_drift_flat_is_flat():
     grid_t, drift, mean_rate = estimate_drift(spikes, 0.0, t_end, bin_s=1.0, kernel_s=20.0)
     assert abs(mean_rate - 5.0) < 0.5
     assert np.std(drift) < 1.0           # ~flat, no spurious trend
+
+
+# append to tests/analysis/test_tf_drift.py
+from visdetect.analysis.tf_drift import detrended_pulse_average
+
+PRE = (-0.4, 0.0)
+POST = (0.0, 0.5)
+
+
+def _flat_spikes(t_end, rate, seed):
+    rng = np.random.default_rng(seed)
+    return np.sort(rng.uniform(0, t_end, size=rng.poisson(rate * t_end)))
+
+
+def _flat_plus_bump(t_end, rate, pulses, bump_hz, bump_dur, seed):
+    rng = np.random.default_rng(seed)
+    base = np.sort(rng.uniform(0, t_end, size=rng.poisson(rate * t_end)))
+    parts = [base]
+    for p in pulses:
+        n = rng.poisson(bump_hz * bump_dur)
+        if n:
+            parts.append(rng.uniform(p, p + bump_dur, size=n))
+    return np.sort(np.concatenate(parts))
+
+
+def test_detrended_baseline_is_in_hz_near_mean_rate():
+    t_end = 400.0
+    spikes = _flat_spikes(t_end, 5.0, seed=2)
+    pulses = np.arange(10.0, t_end - 10.0, 2.0)
+    gt, dr, mr = estimate_drift(spikes, 0.0, t_end, bin_s=1.0, kernel_s=20.0)
+    det, sem, t_vec = detrended_pulse_average(
+        spikes, pulses, PRE, POST, 0.005, 20.0, gt, dr, mr)
+    pre = det[t_vec < 0.0]
+    assert abs(pre.mean() - 5.0) < 1.5            # baseline ~ true rate in Hz
+    assert abs(np.polyfit(t_vec[t_vec < 0.0], pre, 1)[0]) < 5.0  # ~flat
+
+
+def test_detrended_preserves_pulse_response():
+    t_end = 400.0
+    pulses = np.arange(10.0, t_end - 10.0, 2.0)
+    spikes = _flat_plus_bump(t_end, 5.0, pulses, bump_hz=30.0, bump_dur=0.1, seed=4)
+    gt, dr, mr = estimate_drift(spikes, 0.0, t_end, bin_s=1.0, kernel_s=20.0)
+    det, sem, t_vec = detrended_pulse_average(
+        spikes, pulses, PRE, POST, 0.005, 20.0, gt, dr, mr)
+    baseline = det[t_vec < 0.0].mean()
+    peak = det[(t_vec >= 0.0) & (t_vec < 0.15)].max()
+    assert peak > baseline + 8.0                  # injected bump survives detrend
+
+
+def test_detrended_empty_pulses_returns_empty():
+    spikes = _flat_spikes(100.0, 5.0, seed=5)
+    det, sem, t_vec = detrended_pulse_average(
+        spikes, np.array([]), PRE, POST, 0.005, 20.0,
+        *estimate_drift(spikes, 0.0, 100.0))
+    assert det.size == 0

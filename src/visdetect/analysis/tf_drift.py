@@ -45,3 +45,47 @@ def estimate_drift(
     grid_t = 0.5 * (edges[:-1] + edges[1:])
     mean_rate = float(spike_times.size / dur)
     return grid_t, drift, mean_rate
+
+
+# add to src/visdetect/analysis/tf_drift.py
+def detrended_pulse_average(
+    spike_times: np.ndarray,
+    pulse_times: np.ndarray,
+    pre_window: Tuple[float, float],
+    post_window: Tuple[float, float],
+    dt: float,
+    sigma_ms: float,
+    drift_grid_t: np.ndarray,
+    drift_rate: np.ndarray,
+    mean_rate: float,
+    trace_start=None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Drift-corrected pulse-triggered average in Hz.
+
+    detrended(t) = PTA(fine_rate)/dt - PTA(slow_drift) + mean_rate
+    """
+    from visdetect.analysis.tf_pulse import _mean_activity_per_unit
+
+    mean_fine, sem, t_vec = _mean_activity_per_unit(
+        spike_times, pulse_times, pre_window, post_window, dt, sigma_ms,
+        trace_start=trace_start)
+    if mean_fine.size == 0:
+        return mean_fine, sem, t_vec
+
+    mean_fine_hz = mean_fine / dt
+    sem_hz = sem / dt
+
+    pulses = np.asarray(pulse_times, dtype=float)
+    pulses = pulses[np.isfinite(pulses)]
+    drift_grid_t = np.asarray(drift_grid_t, dtype=float)
+    drift_rate = np.asarray(drift_rate, dtype=float)
+
+    drift_pta = np.zeros_like(t_vec)
+    for tp in pulses:
+        drift_pta += np.interp(
+            tp + t_vec, drift_grid_t, drift_rate,
+            left=drift_rate[0], right=drift_rate[-1])
+    drift_pta /= max(pulses.size, 1)
+
+    detrended = mean_fine_hz - drift_pta + float(mean_rate)
+    return detrended, sem_hz, t_vec
