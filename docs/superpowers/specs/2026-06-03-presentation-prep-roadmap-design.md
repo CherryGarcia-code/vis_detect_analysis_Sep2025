@@ -296,14 +296,33 @@ lands and the column contract is stable.
 > `fillna("unknown")` so unlabeled units get the P0 contract default. Regression
 > tests cover both the normalized and legacy column namings.
 >
-> **⚠️ Trust rule / caveat (NOT yet science-ready):** the global GMM is fit on
-> **every** `Unit*_RawSpikes.npy` in each RawWaveforms dir — i.e. ALL sorted
-> clusters (~180/session), NOT QC-filtered `good_and_stable_ids` (~100/session in
-> the unit table). The resulting **84% FSI / 16% SPN** split is biologically
-> inverted for striatum (canonical ≈ 95% SPN / 1–2% FSI; Hjorth/Snudda), almost
-> certainly because narrow MUA/noise-cluster waveforms swell the narrow (FSI) mode
-> and bias the threshold. This is harmless to the downstream join (build_unit_table
-> only surfaces `celltype` for units present in the GLT, i.e. good units), but the
-> labels themselves should **not** be used for cell-type-resolved biology until the
-> GMM is re-fit on QC-filtered units only. Recommended follow-up (out of M2 scope):
-> filter `session_unit_ids` to `good_and_stable_ids` before pooling T2P, then re-run.
+> **⚠️ Trust rule / caveat (NOT yet anatomy-faithful) — root cause CORRECTED 2026-06-16:**
+> The ~84% FSI / 16% SPN split is biologically inverted for striatum (canonical
+> ≈ 95% SPN / 1–2% FSI; Hjorth/Snudda). **An earlier version of this note blamed
+> noise-cluster contamination (producer globbing all RawWaveforms); that was WRONG**
+> — verified on 5 QC sessions: the `RawWaveforms/` set is **identical to
+> `good_and_stable_ids`** (the pkl identities) for 4/5 sessions (e.g. 108==108,
+> 316==316), NOT the larger Kilosort-"good" set. The producer already operates on
+> QC-good units, so restricting to `good_and_stable_ids` is a **no-op** and does NOT
+> fix the ratio (GOOD-only FSI% = 65/68/93/91/89 across sessions).
+>
+> The real driver is a **firing-rate / detectability sampling bias** (verified): the
+> narrow ("FSI") units fire ~4–5× faster (median ~12 Hz) than the broad ("SPN") units
+> (median ~2.4 Hz), and the broad units pile up against the `DEFAULT_MIN_FR = 1.0 Hz`
+> ingest floor (34% within 1–1.5 Hz, 46% < 2 Hz — a truncation signature). Sparse
+> SPNs are preferentially lost to isolation + the 1 Hz QC, enriching the surviving
+> population for fast narrow cells. Example mean waveforms
+> (`FIGURES/qc/m2_celltype_diagnostic.png`) confirm the narrow vs broad classes are
+> genuinely different shapes (T2P is **not** compressing SPN shapes) and the GMM modes
+> (0.19 / 0.64 ms) are literature-consistent — so the labels are **shape-valid**, but
+> the *proportions* reflect which cells survive QC, not anatomy. Harmless to the
+> downstream join (build_unit_table surfaces celltype only for GLT/good units), but
+> the counts are not anatomy-faithful.
+>
+> **Real follow-up (NOT "filter to good_stable", which is a no-op):** to recover
+> sparse SPNs, re-ingest from raw KS with a lower mean-FR floor (e.g. 0.2–0.5 Hz)
+> while tightening ISI-violation / presence-ratio / amplitude gates to protect
+> isolation, and/or add a task-responsiveness inclusion path (keep a low-mean-rate
+> unit if it shows a significant trial-locked response with a minimum spike count).
+> This requires **re-ingest** because pkls store spikes only for good_and_stable units;
+> a session-mean Hz floor cannot be relaxed at analysis time.
