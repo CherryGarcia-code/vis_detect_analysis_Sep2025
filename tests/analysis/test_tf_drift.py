@@ -110,3 +110,43 @@ def test_prepulse_slope_too_few_bins_is_nan():
 def test_prepulse_slope_exactly_one_bin_is_nan():
     t_vec = np.array([-0.2, 0.1])   # one sample in PRE, one outside
     assert np.isnan(prepulse_slope(np.array([5.0, 5.0]), t_vec, PRE))
+
+
+from visdetect.analysis.tf_drift import circular_shift_null
+
+
+def test_null_envelope_flags_real_bump():
+    t_end = 200.0
+    pulses = np.arange(10.0, t_end - 10.0, 3.0)
+    spikes = _flat_plus_bump(t_end, 5.0, pulses, bump_hz=30.0, bump_dur=0.1, seed=7)
+    gt, dr, mr = estimate_drift(spikes, 0.0, t_end, bin_s=1.0, kernel_s=20.0)
+    det, _, t_vec = detrended_pulse_average(
+        spikes, pulses, PRE, POST, 0.005, 20.0, gt, dr, mr)
+    from visdetect.analysis.tf_pulse import _zscore_trace
+    obs_z = _zscore_trace(det, t_vec, PRE)
+
+    null_z, t_null = circular_shift_null(
+        spikes, pulses, PRE, POST, 0.005, 20.0, bin_s=1.0, kernel_s=20.0,
+        session_dur=t_end, n_shuffles=30, seed=0)
+    hi = np.percentile(null_z, 95, axis=0)
+    post = (t_vec >= 0.0) & (t_vec < 0.15)
+    assert obs_z[post].max() > hi[post].max()      # real response exits the null
+
+
+def test_null_envelope_contains_flat_unit():
+    t_end = 200.0
+    pulses = np.arange(10.0, t_end - 10.0, 3.0)
+    spikes = _flat_spikes(t_end, 5.0, seed=8)
+    gt, dr, mr = estimate_drift(spikes, 0.0, t_end, bin_s=1.0, kernel_s=20.0)
+    det, _, t_vec = detrended_pulse_average(
+        spikes, pulses, PRE, POST, 0.005, 20.0, gt, dr, mr)
+    from visdetect.analysis.tf_pulse import _zscore_trace
+    obs_z = _zscore_trace(det, t_vec, PRE)
+    null_z, _ = circular_shift_null(
+        spikes, pulses, PRE, POST, 0.005, 20.0, bin_s=1.0, kernel_s=20.0,
+        session_dur=t_end, n_shuffles=30, seed=0)
+    lo = np.percentile(null_z, 2.5, axis=0)
+    hi = np.percentile(null_z, 97.5, axis=0)
+    post = (t_vec >= 0.0) & (t_vec < 0.5)
+    frac_inside = np.mean((obs_z[post] >= lo[post]) & (obs_z[post] <= hi[post]))
+    assert frac_inside > 0.8                       # flat unit mostly within null

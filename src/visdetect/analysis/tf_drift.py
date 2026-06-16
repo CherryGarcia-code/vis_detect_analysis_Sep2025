@@ -102,3 +102,42 @@ def prepulse_slope(trace, t_vec, pre_window: Tuple[float, float]) -> float:
     if mask.sum() < 2:
         return float("nan")
     return float(np.polyfit(t_vec[mask], trace[mask], 1)[0])
+
+
+def circular_shift_null(
+    spike_times: np.ndarray,
+    pulse_times: np.ndarray,
+    pre_window: Tuple[float, float],
+    post_window: Tuple[float, float],
+    dt: float,
+    sigma_ms: float,
+    bin_s: float,
+    kernel_s: float,
+    session_dur: float,
+    n_shuffles: int = 200,
+    seed: int = 0,
+    trace_start=None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Null bank of z-scored detrended pulse traces under circular shifts.
+
+    Returns (null_z, t_vec): null_z is (n_shuffles, n_time).
+    """
+    from visdetect.analysis.tf_pulse import _zscore_trace
+
+    rng = np.random.default_rng(seed)
+    spike_times = np.sort(np.asarray(spike_times, dtype=float))
+    min_shift = max(30.0, session_dur * 0.05)
+    hi = session_dur - min_shift
+    if hi <= min_shift:
+        hi = session_dur * 0.95
+    rows = []
+    t_vec = None
+    for _ in range(int(n_shuffles)):
+        shift = rng.uniform(min_shift, hi)
+        shifted = np.sort((spike_times + shift) % session_dur)
+        gt, dr, mr = estimate_drift(shifted, 0.0, session_dur, bin_s, kernel_s)
+        det, _, t_vec = detrended_pulse_average(
+            shifted, pulse_times, pre_window, post_window, dt, sigma_ms,
+            gt, dr, mr, trace_start=trace_start)
+        rows.append(_zscore_trace(det, t_vec, pre_window))
+    return np.asarray(rows), t_vec
