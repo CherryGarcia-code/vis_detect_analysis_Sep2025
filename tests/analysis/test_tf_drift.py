@@ -85,3 +85,23 @@ def test_detrended_empty_pulses_returns_empty():
         spikes, np.array([]), PRE, POST, 0.005, 20.0,
         *estimate_drift(spikes, 0.0, 100.0))
     assert det.size == 0
+
+
+from visdetect.analysis.tf_drift import prepulse_slope
+
+
+def test_prepulse_slope_of_flat_is_zero():
+    t_vec = np.linspace(-0.4, 0.5, 180)
+    trace = np.full_like(t_vec, 7.0)
+    assert abs(prepulse_slope(trace, t_vec, PRE)) < 1e-6
+
+
+def test_prepulse_slope_of_ramp_matches_slope():
+    t_vec = np.linspace(-0.4, 0.5, 180)
+    trace = 3.0 * t_vec + 2.0           # slope 3.0 over the pre-window
+    assert abs(prepulse_slope(trace, t_vec, PRE) - 3.0) < 1e-6
+
+
+def test_prepulse_slope_too_few_bins_is_nan():
+    t_vec = np.array([0.1, 0.2])        # nothing in the pre-window
+    assert np.isnan(prepulse_slope(np.array([1.0, 2.0]), t_vec, PRE))

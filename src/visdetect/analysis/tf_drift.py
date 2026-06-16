@@ -88,3 +88,17 @@ def detrended_pulse_average(
 
     detrended = mean_fine_hz - drift_pta + float(mean_rate)
     return detrended, sem_hz, t_vec
+
+
+def prepulse_slope(trace, t_vec, pre_window: Tuple[float, float]) -> float:
+    """Linear slope (units/s) of ``trace`` within the pre-pulse window.
+
+    The Phase-0 success metric: after detrend, the population distribution of
+    this should collapse toward 0. NaN if < 2 samples fall in the window.
+    """
+    t_vec = np.asarray(t_vec, dtype=float)
+    trace = np.asarray(trace, dtype=float)
+    mask = (t_vec >= pre_window[0]) & (t_vec < pre_window[1])
+    if mask.sum() < 2:
+        return float("nan")
+    return float(np.polyfit(t_vec[mask], trace[mask], 1)[0])
