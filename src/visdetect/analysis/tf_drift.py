@@ -47,7 +47,6 @@ def estimate_drift(
     return grid_t, drift, mean_rate
 
 
-# add to src/visdetect/analysis/tf_drift.py
 def detrended_pulse_average(
     spike_times: np.ndarray,
     pulse_times: np.ndarray,

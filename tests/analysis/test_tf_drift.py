@@ -33,7 +33,6 @@ def test_estimate_drift_flat_is_flat():
     assert np.std(drift) < 1.0           # ~flat, no spurious trend
 
 
-# append to tests/analysis/test_tf_drift.py
 from visdetect.analysis.tf_drift import detrended_pulse_average
 
 PRE = (-0.4, 0.0)
