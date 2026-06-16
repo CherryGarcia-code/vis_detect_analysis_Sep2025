@@ -60,6 +60,7 @@ def run_units(session, cluster_ids, kernel_s=20.0, n_shuffles=100, out_png="phas
     fig, axes = plt.subplots(n, 2, figsize=(11, 2.6 * max(n, 1)), squeeze=False)
     for r, cid in enumerate(cluster_ids):
         st = np.sort(spikes_by_cid.get(int(cid), np.array([])))
+        # Last-spike proxy for session duration — fine for the eyeball gate; Plan 2 should use the true recording length.
         sess_dur = float(st.max()) if st.size else 1.0
         gt, dr, mr = estimate_drift(st, 0.0, sess_dur, bin_s=BIN_S, kernel_s=kernel_s)
         for col, (pulses, label) in enumerate(

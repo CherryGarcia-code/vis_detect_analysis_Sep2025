@@ -167,6 +167,7 @@ def test_phase0_run_on_session_smoke(tmp_path):
         use_constraints=False,
         out_png=str(tmp_path / "phase0.png"))
     assert (tmp_path / "phase0.png").exists()
+    # 2 clusters x fast-only: the synthetic baseline_values (~[1,41]) never fall below the slow log2 threshold, so only "fast" pulses exist -> one row per cluster.
     assert len(rows) == 2
     for r in rows:
         assert "slope_raw" in r and "slope_detrended" in r
