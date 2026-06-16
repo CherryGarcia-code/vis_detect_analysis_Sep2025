@@ -105,3 +105,8 @@ def test_prepulse_slope_of_ramp_matches_slope():
 def test_prepulse_slope_too_few_bins_is_nan():
     t_vec = np.array([0.1, 0.2])        # nothing in the pre-window
     assert np.isnan(prepulse_slope(np.array([1.0, 2.0]), t_vec, PRE))
+
+
+def test_prepulse_slope_exactly_one_bin_is_nan():
+    t_vec = np.array([-0.2, 0.1])   # one sample in PRE, one outside
+    assert np.isnan(prepulse_slope(np.array([5.0, 5.0]), t_vec, PRE))
