@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -52,10 +53,32 @@ OLD_BATCHED = {2: 17.4, 3: 8.3, 5: 3.4, 10: 1.0, 15: 0.4, 20: 0.1}
 
 
 def parse_session_date(name: str) -> datetime:
+    """Chronological sort key from a session-dir name.
+
+    Handles BG_046's bare dates ('23062025', legacy 7-digit) AND the
+    per-subject full-stem dir names ('BG_031_01042025', 6-digit
+    'BG_031_050325', '..._v2'/'..._b' suffixes). Returns datetime.min when
+    no date can be parsed so such dirs sort first but never crash the run.
+    """
     s = str(name)
-    if len(s) == 7:
-        s = "0" + s
-    return datetime.strptime(s, "%d%m%Y")
+    m = re.search(r"(\d{8})", s)          # DDMMYYYY
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%d%m%Y")
+        except ValueError:
+            pass
+    m = re.search(r"(?<!\d)(\d{6})(?!\d)", s)   # DDMMYY (6-digit, isolated)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%d%m%y")
+        except ValueError:
+            pass
+    if len(s) == 7:                       # legacy 7-digit (leading zero dropped)
+        try:
+            return datetime.strptime("0" + s, "%d%m%Y")
+        except ValueError:
+            pass
+    return datetime.min
 
 
 def make_batches(n: int, batch_size: int, overlap: int):

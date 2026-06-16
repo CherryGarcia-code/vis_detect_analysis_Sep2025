@@ -41,52 +41,72 @@ src_dir = repo_root / 'src'
 from visdetect.core.session import load_session
 
 
+def _resolve_ks_dirs(session_dir):
+    """Resolve the probe folder and Kilosort-output folder for one session.
+
+    Mirrors ``visdetect.core.ingest._find_probe_folder`` + the kilosort4/
+    fallback: KS4 sometimes writes its .npy outputs into a ``kilosort4/``
+    subfolder of the probe folder (BG_038/BG_039 + most BG_031 sessions),
+    while older runs (BG_046, some BG_031) put them directly in the probe
+    folder. The raw ``.ap.bin``/``.ap.meta`` always live in the probe folder.
+
+    Returns ``(probe_dir, ks_out_dir, bin_path)`` (any may be None).
+    """
+    ks_phy = session_dir / "Kilosort&Phy"
+    if not ks_phy.exists():
+        return None, None, None
+    candidates = [d for d in ks_phy.iterdir()
+                  if d.is_dir() and not d.name.startswith('.') and 'Sorted' not in d.name]
+    if not candidates:
+        return None, None, None
+    # Prefer an *imec0* probe folder; else the first directory (one probe here).
+    probe_dir = next((d for d in candidates if 'imec0' in d.name.lower()),
+                     sorted(candidates)[0])
+
+    # Use kilosort4/ only if it actually carries spike data; else the probe dir.
+    ks4 = probe_dir / "kilosort4"
+    ks_out_dir = ks4 if (ks4 / "spike_times.npy").exists() else probe_dir
+
+    bins = list(probe_dir.glob("*.ap.bin")) + list(probe_dir.glob("*.ap.cbin"))
+    bin_path = bins[0] if bins else None
+    return probe_dir, ks_out_dir, bin_path
+
+
 def get_session_paths(manifest_path, subject="BG_046"):
     """
-    Read the staging manifest to retrieve session info.
+    Read the manifest to retrieve session info.
     We need:
     1. Session Name
     2. Path to pickle
-    3. Path to Kilosort Raw Data (We need to map this)
+    3. Path to Kilosort Raw Data (probe folder + KS-output folder)
     """
     df = pd.read_csv(manifest_path, dtype={'session_name': str})
-    
-    # We need to find the RAW Kilosort locations. 
-    # Since they are on X:, we will search for them.
+
+    # Raw Kilosort locations live on X: (== /ceph cluster mount).
     base_raw_dir = Path(r"X:\public\projects\BeJG_20230130_VisDetect\wEPhys") / subject / "Processed data"
-    
+
     sessions = []
     for _, row in df.iterrows():
         sess_name = row['session_name']
-        # Construct expected raw path
-        # Search for Kilosort folder
-        search_pattern = base_raw_dir / f"*{sess_name}*" / "Kilosort&Phy" / "*imec0"
-        found = list(glob.glob(str(search_pattern)))
-        
-        # Fallback: less specific
-        if not found:
-            search_pattern = base_raw_dir / f"*{sess_name}*" / "Kilosort&Phy"
-            found_base = list(glob.glob(str(search_pattern)))
-            if found_base:
-                found = list(Path(found_base[0]).glob("*imec0"))
+        # Exact folder match first (session_name == X: Processed-data folder
+        # name for the per-subject manifests); glob fallback keeps BG_046's
+        # bare-date manifest (session_name '23062025' -> 'BG_046_23062025/')
+        # working. Exact-first also avoids the '..._v2' substring ambiguity.
+        session_dir = base_raw_dir / str(sess_name)
+        if not session_dir.exists():
+            cand = sorted(glob.glob(str(base_raw_dir / f"*{sess_name}*")))
+            session_dir = Path(cand[0]) if cand else session_dir
 
-        raw_ks_path = None
-        bin_path = None
-        
-        if found:
-            raw_ks_path = Path(found[0])
-            # Look for .bin or .cbin file
-            bins = list(raw_ks_path.glob("*.ap.cbin")) + list(raw_ks_path.glob("*.ap.bin"))
-            if bins:
-                bin_path = bins[0]
-        
+        probe_dir, ks_out_dir, bin_path = _resolve_ks_dirs(session_dir)
+
         sessions.append({
             'name': sess_name,
             'pkl_path': repo_root / row['path'],
-            'ks_path': raw_ks_path,
-            'bin_path': bin_path
+            'ks_path': ks_out_dir,    # KS .npy outputs (kilosort4/ or probe dir)
+            'probe_dir': probe_dir,   # holds the raw .ap.bin / .ap.meta
+            'bin_path': bin_path,
         })
-        
+
     return sessions
 
 
@@ -102,22 +122,31 @@ def load_spikes(ks_path, good_ids=None):
         return None, None
 
 
-def process_session(sess_info, output_root, n_workers=1):
+def process_session(sess_info, output_root, n_workers=1, skip_existing=True):
     """
     Process a single session:
     1. Load ALL spike times (no ITI filtering).
     2. Compute mean waveforms for first/second half of spikes per cluster.
     3. Save to UnitMatch structure.
+
+    A ``_extraction_complete.txt`` marker is written on success; when
+    ``skip_existing`` is True (default) a session with that marker is skipped,
+    making the (multi-hour) full run safely resumable after an interrupt.
     """
     sess_name = str(sess_info['name'])
     print(f"\nProcessing {sess_name}...")
-    
+
+    # Resumability: skip sessions already finished in a previous run.
+    sess_out_dir = output_root / sess_name
+    if skip_existing and (sess_out_dir / "_extraction_complete.txt").exists():
+        print(f"Skipping {sess_name}: already complete (marker present).")
+        return
+
     if not sess_info['ks_path'] or not sess_info['bin_path']:
         print(f"Skipping {sess_name}: No binary data found.")
         return
 
     # Create output dir
-    sess_out_dir = output_root / sess_name
     wav_out_dir = sess_out_dir / "RawWaveforms"
     wav_out_dir.mkdir(parents=True, exist_ok=True)
     
@@ -144,8 +173,10 @@ def process_session(sess_info, output_root, n_workers=1):
         print(f"Failed to load spikes for {sess_name}")
         return
 
-    # Load Channel Map
-    meta_files = list(sess_info['ks_path'].glob("*.meta"))
+    # Load .ap.meta from the PROBE folder (the kilosort4/ subfolder has no
+    # .meta; reading nSavedChans wrong would corrupt the memmap reshape).
+    probe_dir = sess_info.get('probe_dir') or sess_info['ks_path']
+    meta_files = list(probe_dir.glob("*.meta"))
     n_chan = 385  # Default fallback
     fs = 30000.0
     
@@ -280,27 +311,35 @@ def process_session(sess_info, output_root, n_workers=1):
                   total=len(clusters_to_process), 
                   desc=f"  Units {sess_name}"))
 
-    print(f"  Finished {sess_name}: {len(list(wav_out_dir.glob('*.npy')))} waveforms saved.")
+    n_saved = len(list(wav_out_dir.glob('*.npy')))
+    print(f"  Finished {sess_name}: {n_saved} waveforms saved.")
+    # Completion marker for resumable re-runs (see skip_existing).
+    (sess_out_dir / "_extraction_complete.txt").write_text(
+        f"{n_saved} waveforms\n")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prepare full-trial waveforms for UnitMatch")
+    parser.add_argument('--subject', type=str, default='BG_046',
+                        help='Subject ID; sets the X: Processed-data root')
     parser.add_argument('--manifest', type=str, default='data/BG_046_staging_manifest.csv',
-                        help='Path to staging manifest CSV')
+                        help='Path to manifest CSV (needs session_name + path columns)')
     parser.add_argument('--output', type=str, default='data/unit_match/input/BG_046',
                         help='Output directory for prepared waveforms')
     parser.add_argument('--n_workers', type=int, default=4,
                         help='Number of parallel workers for waveform extraction')
-    parser.add_argument('--sessions', nargs='+', 
+    parser.add_argument('--sessions', nargs='+',
                         help='List of session dates (DDMMYYYY) or names to process explicitly')
+    parser.add_argument('--no-skip-existing', action='store_true',
+                        help='Re-extract sessions even if a completion marker exists')
     args = parser.parse_args()
-    
+
     manifest_path = repo_root / args.manifest
     if not manifest_path.exists():
         print(f"Manifest not found: {manifest_path}")
         sys.exit(1)
-    
-    sessions = get_session_paths(manifest_path)
+
+    sessions = get_session_paths(manifest_path, subject=args.subject)
     print(f"Found {len(sessions)} sessions in manifest.")
     
     # Filter if sessions specified
@@ -336,7 +375,8 @@ if __name__ == "__main__":
     
     # Process sessions sequentially (to avoid IO thrashing on X: drive)
     for sess in sessions:
-        process_session(sess, output_path, args.n_workers)
+        process_session(sess, output_path, args.n_workers,
+                        skip_existing=not args.no_skip_existing)
     
     print(f"\n{'='*60}")
     print("All sessions processed!")
