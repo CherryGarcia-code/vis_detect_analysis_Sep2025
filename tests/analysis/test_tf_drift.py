@@ -150,3 +150,23 @@ def test_null_envelope_contains_flat_unit():
     post = (t_vec >= 0.0) & (t_vec < 0.5)
     frac_inside = np.mean((obs_z[post] >= lo[post]) & (obs_z[post] <= hi[post]))
     assert frac_inside > 0.8                       # flat unit mostly within null
+
+
+def test_phase0_run_on_session_smoke(tmp_path):
+    from visdetect.utils.synthetic import make_synthetic_session
+    import sys, importlib.util, pathlib
+    mod_path = pathlib.Path(__file__).resolve().parents[2] / \
+        "scripts" / "tf_responsiveness" / "validate_drift_phase0.py"
+    spec = importlib.util.spec_from_file_location("validate_drift_phase0", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    sess = make_synthetic_session(n_trials=60, n_clusters=4, seed=11)
+    rows = mod.run_units(
+        sess, cluster_ids=[0, 1], kernel_s=20.0, n_shuffles=10,
+        use_constraints=False,
+        out_png=str(tmp_path / "phase0.png"))
+    assert (tmp_path / "phase0.png").exists()
+    assert len(rows) == 2
+    for r in rows:
+        assert "slope_raw" in r and "slope_detrended" in r
