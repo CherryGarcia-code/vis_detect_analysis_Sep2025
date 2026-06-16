@@ -276,3 +276,34 @@ lands and the column contract is stable.
 > **Late-bound swap:** to evaluate fine-tuned DeepUM instead, emit a canonical long
 > registry (`session, ks_unit_id, global_uid`) from its output and pass it via
 > `regen_glt_from_um.py --registry-long`; everything downstream is unchanged.
+
+> **M2 done (2026-06-15):** FSI/SPN labels regenerated from the **current**
+> RawWaveforms (`scripts/analysis/build_waveform_celltype_labels.py`, one global
+> GMM(2) on trough-to-peak; pure feature/classification library
+> `src/visdetect/analysis/waveform_celltype.py`, fully unit-tested). Run over 28
+> QC-manifest sessions (24 had RawWaveforms on disk; 4 — 05092025/10092025/11092025/20082025
+> — had none and were skipped). **GMM: threshold=0.413 ms, narrow_mean=0.190 ms,
+> broad_mean=0.637 ms, delta_BIC=6982.5 (≫0 → strongly bimodal, gate passed),
+> n=4454 fit.** Labels: **4485 units, FSI 3769 / SPN 716**, written to the
+> subject-scoped `WAVEFORM_LABELS_PATH` = `data/<SUBJECT>/waveform_celltype_labels.csv`
+> (+ one-row stats at `FIGURES/qc/waveform_celltype_stats.csv`).
+>
+> **Always-NaN merge bug fixed:** `build_unit_table`'s waveform merge guarded on the
+> pre-rename `session_date` column, but `load_waveform_labels` normalizes to
+> `session_name`/`cell_type`, so the guard was always False → `celltype` was
+> structurally always-NaN. The merge now accepts either naming, drops any
+> pre-existing `celltype` (the waveform workstream owns that column), and
+> `fillna("unknown")` so unlabeled units get the P0 contract default. Regression
+> tests cover both the normalized and legacy column namings.
+>
+> **⚠️ Trust rule / caveat (NOT yet science-ready):** the global GMM is fit on
+> **every** `Unit*_RawSpikes.npy` in each RawWaveforms dir — i.e. ALL sorted
+> clusters (~180/session), NOT QC-filtered `good_and_stable_ids` (~100/session in
+> the unit table). The resulting **84% FSI / 16% SPN** split is biologically
+> inverted for striatum (canonical ≈ 95% SPN / 1–2% FSI; Hjorth/Snudda), almost
+> certainly because narrow MUA/noise-cluster waveforms swell the narrow (FSI) mode
+> and bias the threshold. This is harmless to the downstream join (build_unit_table
+> only surfaces `celltype` for units present in the GLT, i.e. good units), but the
+> labels themselves should **not** be used for cell-type-resolved biology until the
+> GMM is re-fit on QC-filtered units only. Recommended follow-up (out of M2 scope):
+> filter `session_unit_ids` to `good_and_stable_ids` before pooling T2P, then re-run.

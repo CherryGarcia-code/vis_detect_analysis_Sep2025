@@ -141,3 +141,52 @@ def test_build_unit_table_fills_track_verdict(tmp_path, monkeypatch):
     assert by_key[(2092025, 3)] == "trusted"     # 177 kept this session
     assert by_key[(1072025, 4)] == "suspect"     # 177, session dropped from subset
     assert by_key[(1072025, 5)] == "unknown"     # 9999 not in trimmed cohort
+
+
+def test_build_unit_table_populates_celltype(tmp_path, monkeypatch):
+    from visdetect.suite import loader as L
+
+    glt = pd.DataFrame({
+        "Session_Date": [1072025, 1072025],
+        "Cluster_ID": [3, 4],
+        "Global_UID": [10, 11],
+        "stage": ["Learning", "Learning"],
+        "session_idx": [0, 0],
+    })
+    monkeypatch.setattr(L, "load_glt", lambda qc_only=True: glt.copy())
+    monkeypatch.setattr(L, "load_all_lick_responsiveness", lambda: pd.DataFrame())
+    # load_waveform_labels returns the NORMALIZED columns (session_name/cell_type):
+    wf = pd.DataFrame({"session_name": [1072025], "cluster_id": [3], "cell_type": ["FSI"]})
+    monkeypatch.setattr(L, "load_waveform_labels", lambda path=None: wf.copy())
+    monkeypatch.setattr(L, "load_tf_responsiveness_detrended", lambda: pd.DataFrame())
+    monkeypatch.setattr(L, "load_tf_classification_detrended", lambda: pd.DataFrame())
+
+    df = L.build_unit_table(qc_only=True)
+    by_key = df.set_index(["Session_Date", "Cluster_ID"])["celltype"]
+    assert by_key[(1072025, 3)] == "FSI"          # matched label
+    assert by_key[(1072025, 4)] == "unknown"      # no label -> filled, not NaN
+
+
+def test_build_unit_table_populates_celltype_legacy_columns(monkeypatch):
+    # The merge must also accept the un-normalized session_date/celltype naming.
+    from visdetect.suite import loader as L
+
+    glt = pd.DataFrame({
+        "Session_Date": [1072025, 1072025],
+        "Cluster_ID": [3, 4],
+        "Global_UID": [10, 11],
+        "stage": ["Learning", "Learning"],
+        "session_idx": [0, 0],
+    })
+    monkeypatch.setattr(L, "load_glt", lambda qc_only=True: glt.copy())
+    monkeypatch.setattr(L, "load_all_lick_responsiveness", lambda: pd.DataFrame())
+    # Legacy (pre-normalization) column names: session_date / celltype.
+    wf = pd.DataFrame({"session_date": [1072025], "cluster_id": [4], "celltype": ["SPN"]})
+    monkeypatch.setattr(L, "load_waveform_labels", lambda path=None: wf.copy())
+    monkeypatch.setattr(L, "load_tf_responsiveness_detrended", lambda: pd.DataFrame())
+    monkeypatch.setattr(L, "load_tf_classification_detrended", lambda: pd.DataFrame())
+
+    df = L.build_unit_table(qc_only=True)
+    by_key = df.set_index(["Session_Date", "Cluster_ID"])["celltype"]
+    assert by_key[(1072025, 4)] == "SPN"          # matched via legacy naming
+    assert by_key[(1072025, 3)] == "unknown"      # no label -> filled, not NaN
