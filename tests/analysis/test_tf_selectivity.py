@@ -32,6 +32,21 @@ def test_per_pulse_rate_matrix_empty_pulses():
     assert mat.shape == (0, t_vec.size)
 
 
+def test_per_pulse_rate_matrix_order_insensitive():
+    # The searchsorted slicing sorts internally; an unsorted spike train must
+    # give the exact same matrix as a sorted one (binning is order-insensitive).
+    cfg = TFSelectivityConfig()
+    t_vec = _time_vector(cfg)
+    rng = np.random.default_rng(0)
+    spikes = rng.uniform(0.0, 500.0, size=20000)
+    pulses = np.array([100.0, 150.5, 222.2, 333.3, 401.0])
+    sorted_mat = _per_pulse_rate_matrix(np.sort(spikes), pulses, t_vec,
+                                        cfg.pulse.dt, cfg.pulse.sigma_ms)
+    shuffled_mat = _per_pulse_rate_matrix(spikes, pulses, t_vec,
+                                          cfg.pulse.dt, cfg.pulse.sigma_ms)
+    assert np.array_equal(sorted_mat, shuffled_mat)
+
+
 from visdetect.analysis.tf_selectivity import (
     _shared_baseline,
     compute_unit_selectivity,

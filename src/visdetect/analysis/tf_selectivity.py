@@ -85,18 +85,27 @@ def _per_pulse_rate_matrix(
     dt: float,
     sigma_ms: float,
 ) -> np.ndarray:
-    """(n_pulses, n_time) matrix of per-pulse Gaussian-smoothed rate in Hz."""
+    """(n_pulses, n_time) matrix of per-pulse Gaussian-smoothed rate in Hz.
+
+    Spikes are sorted once and each pulse window is sliced with searchsorted
+    (O(log n) per pulse) instead of scanning the whole train (O(n) per pulse) --
+    with ~3e5 spikes/unit that scan dominates runtime. Binning is order-
+    insensitive, so the result is identical to the naive mask.
+    """
     st = np.asarray(spike_times, dtype=float).ravel()
+    st = np.sort(st[np.isfinite(st)])
     pulse_times = np.asarray(pulse_times, dtype=float).ravel()
     pulse_times = pulse_times[np.isfinite(pulse_times)]
     if pulse_times.size == 0:
         return np.zeros((0, t_vec.size), dtype=float)
     sigma_bins = (sigma_ms / 1000.0) / dt
     lo, hi = float(t_vec[0]), float(t_vec[-1] + dt)
+    # st in [tp+lo, tp+hi) == rel in [lo, hi); searchsorted gives the slice.
+    i0 = np.searchsorted(st, pulse_times + lo, side="left")
+    i1 = np.searchsorted(st, pulse_times + hi, side="left")
     rows = np.empty((pulse_times.size, t_vec.size), dtype=float)
-    for k, tp in enumerate(pulse_times):
-        rel = st - tp
-        rel = rel[(rel >= lo) & (rel < hi)]
+    for k in range(pulse_times.size):
+        rel = st[i0[k]:i1[k]] - pulse_times[k]
         rows[k] = _smooth_binned_activity(rel, t_vec, sigma_bins) / dt
     return rows
 
@@ -226,12 +235,14 @@ def compute_unit_selectivity(spike_times, fast_times, slow_times, cfg=None, rng=
     n_total = combined.shape[0]
     post_mask = (t_vec >= p.post_window[0]) & (t_vec < p.post_window[1])
     null_peaks = np.empty(cfg.n_shuffles, dtype=float)
+    # Rate matrices are finite by construction, so plain mean (faster than
+    # nanmean) is exact here; this loop is the hot path of the whole pipeline.
     for s in range(cfg.n_shuffles):
         perm = rng.permutation(n_total)
-        f = np.nanmean(combined[perm[:n_fast]], axis=0)
-        sl = np.nanmean(combined[perm[n_fast:]], axis=0)
+        f = combined[perm[:n_fast]].mean(axis=0)
+        sl = combined[perm[n_fast:]].mean(axis=0)
         sel_s = (f - sl) / sd_b
-        null_peaks[s] = float(np.nanmax(np.abs(sel_s[post_mask]))) if np.any(post_mask) else np.nan
+        null_peaks[s] = float(np.max(np.abs(sel_s[post_mask]))) if np.any(post_mask) else np.nan
     null_peak_mean = float(np.nanmean(null_peaks))
     null_peak_sd = float(np.nanstd(null_peaks))
     obs = abs(sel_peak)

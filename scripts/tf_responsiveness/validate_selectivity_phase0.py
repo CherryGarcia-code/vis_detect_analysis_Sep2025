@@ -38,7 +38,8 @@ from visdetect.analysis.tf_selectivity import (
     compute_session_selectivity,
     unit_features,
 )
-from visdetect.analysis.constants import LOHSE_SENSORY_CD_WINDOW
+from visdetect.analysis.tf_pulse import TFRespPulseConfig
+from visdetect.analysis.constants import LOHSE_SENSORY_CD_WINDOW, TF_PULSE_TRACE_PRE
 
 _ROOT = Path(__file__).resolve().parents[2]
 _CACHE = _ROOT / "data" / "cache" / "tf_selectivity"
@@ -120,6 +121,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", required=True, help="e.g. BG_046_16092025 or 16092025")
     ap.add_argument("--n-shuffles", type=int, default=200)
+    ap.add_argument("--dt", type=float, default=0.001,
+                    help="trace bin (s); 0.004 is ~4x faster and fine for the gate")
     ap.add_argument("--top", type=int, default=15, help="# exemplar candidates to print")
     args = ap.parse_args()
 
@@ -130,7 +133,9 @@ def main():
     cluster_ids = get_good_cluster_ids(sess)
     print(f"[gate] {args.session}: {len(cluster_ids)} good-and-stable units")
 
-    cfg = TFSelectivityConfig(n_shuffles=args.n_shuffles)
+    cfg = TFSelectivityConfig(
+        pulse=TFRespPulseConfig(trace_pre=TF_PULSE_TRACE_PRE, dt=args.dt),
+        n_shuffles=args.n_shuffles)
     df = build_feature_table(sess, cluster_ids, cfg)
 
     sname = str(getattr(sess, "session_name", args.session))
