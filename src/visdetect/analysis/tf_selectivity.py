@@ -72,3 +72,30 @@ def _per_pulse_rate_matrix(
         rel = rel[(rel >= lo) & (rel < hi)]
         rows[k] = _smooth_binned_activity(rel, t_vec, sigma_bins) / dt
     return rows
+
+
+def _shared_baseline(
+    fast_hz: np.ndarray,
+    slow_hz: np.ndarray,
+    t_vec: np.ndarray,
+    pre_window: Tuple[float, float],
+    eps: float,
+) -> Tuple[float, float]:
+    """One (mu, sd) pooled over the pre-window bins of BOTH mean traces.
+
+    Using a single shared sigma for fast and slow is the fix for the old
+    circular separate-baseline z-scoring (CLAUDE.md "circular baseline").
+    """
+    pre_mask = (t_vec >= pre_window[0]) & (t_vec < pre_window[1])
+    if not np.any(pre_mask):
+        return 0.0, 1.0
+    pooled = np.concatenate([fast_hz[pre_mask], slow_hz[pre_mask]])
+    mu = float(np.nanmean(pooled))
+    sd = float(np.nanstd(pooled))
+    if not np.isfinite(sd) or sd <= eps:
+        sd = 1.0
+    return mu, sd
+
+
+def compute_unit_selectivity(spike_times, fast_times, slow_times, cfg=None, rng=None):
+    raise NotImplementedError  # full body lands in Task 5
