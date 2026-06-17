@@ -183,14 +183,17 @@ def _collect_pulses(session, cfg: TFRespPulseConfig, show_progress: bool = False
 
 
 def _smooth_binned_activity(spike_times_rel: np.ndarray, t_vec: np.ndarray, sigma_bins: float) -> np.ndarray:
-    """Bin spikes onto t_vec grid and smooth with Gaussian (legacy-compatible)."""
+    """Bin spikes onto t_vec grid and smooth with Gaussian (legacy-compatible).
+
+    Uses np.add.at so multiple spikes in the same dt-bin accumulate (a binary
+    0/1 train would undercount >=2 spikes/bin).
+    """
     if spike_times_rel.size == 0:
         return np.zeros_like(t_vec)
-    # Build 0/1 train on the grid
     train = np.zeros_like(t_vec)
     idx = np.searchsorted(t_vec, spike_times_rel)
     idx = idx[(idx >= 0) & (idx < train.size)]
-    train[idx] = 1.0
+    np.add.at(train, idx, 1.0)
     return gaussian_filter1d(train, sigma=sigma_bins)
 
 

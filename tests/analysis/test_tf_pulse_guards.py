@@ -58,3 +58,18 @@ def test_collect_pulses_constraints_reduce_count():
     # Guards can only remove pulses, never add them.
     assert fast_on.size <= fast_off.size
     assert slow_on.size <= slow_off.size
+
+
+import numpy as np
+from visdetect.analysis.tf_pulse import _smooth_binned_activity
+
+
+def test_smooth_counts_multiple_spikes_per_bin():
+    # Two spikes inside the SAME 1 ms bin, far from the trace edges so the
+    # Gaussian kernel sits fully inside (sum is conserved).
+    t_vec = np.arange(-0.5, 0.5, 0.001)
+    rel = np.array([0.0005, 0.00051])  # both fall in the bin at t=0
+    out = _smooth_binned_activity(rel, t_vec, sigma_bins=17.0)
+    # gaussian_filter1d preserves the integral -> two spikes must sum to ~2,
+    # not ~1 as the old binary 0/1 train produced.
+    assert np.isclose(out.sum(), 2.0, atol=1e-6), out.sum()
