@@ -122,6 +122,28 @@ def load_spikes(ks_path, good_ids=None):
         return None, None
 
 
+def write_curated_cluster_group(sess_out_dir):
+    """Rewrite cluster_group.tsv so 'good' == exactly the units we extracted.
+
+    UnitMatch's ``load_good_waveforms`` selects every row whose label column is
+    ``'good'`` and then loads that unit's ``Unit{ID}_RawSpikes.npy``. The
+    cluster_group.tsv copied straight from Kilosort labels the FULL KS 'good'
+    set (a superset of the good_and_stable units we extract, and of units that
+    had >=10 spikes), so UnitMatch would try to load files that don't exist and
+    crash (UnboundLocalError on the first missing unit). We therefore label as
+    'good' exactly the units that have a RawWaveforms file -- mirroring BG_046's
+    curated tsv (good-count == waveform-count). Returns the number of good rows.
+    """
+    from pathlib import Path as _P
+    wav_dir = _P(sess_out_dir) / "RawWaveforms"
+    ids = sorted(int(p.name[4:].split('_')[0])
+                 for p in wav_dir.glob("Unit*_RawSpikes.npy"))
+    lines = ["cluster_id\tKSLabel"] + [f"{i}\tgood" for i in ids]
+    # write_bytes => LF endings (file is consumed by UnitMatch on Linux/ceph)
+    (_P(sess_out_dir) / "cluster_group.tsv").write_bytes(("\n".join(lines) + "\n").encode())
+    return len(ids)
+
+
 def process_session(sess_info, output_root, n_workers=1, skip_existing=True):
     """
     Process a single session:
@@ -312,7 +334,10 @@ def process_session(sess_info, output_root, n_workers=1, skip_existing=True):
                   desc=f"  Units {sess_name}"))
 
     n_saved = len(list(wav_out_dir.glob('*.npy')))
-    print(f"  Finished {sess_name}: {n_saved} waveforms saved.")
+    # Curate cluster_group.tsv so UnitMatch's 'good' set == the units we saved.
+    n_good = write_curated_cluster_group(sess_out_dir)
+    print(f"  Finished {sess_name}: {n_saved} waveforms saved "
+          f"(cluster_group.tsv: {n_good} good).")
     # Completion marker for resumable re-runs (see skip_existing).
     (sess_out_dir / "_extraction_complete.txt").write_text(
         f"{n_saved} waveforms\n")

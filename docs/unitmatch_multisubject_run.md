@@ -129,7 +129,14 @@ editing the `--batch-size/--overlap` in the sbatch (e.g. `--batch-size 28
 - `scripts/analysis/prep_unitmatch_full_trial_waveforms.py` — added `--subject`;
   kilosort4-aware KS-output resolution; exact-folder match first (glob fallback
   keeps BG_046's bare-date manifest working); `.ap.meta` read from the probe
-  folder.
+  folder; **writes a curated `cluster_group.tsv`** labelling 'good' exactly the
+  units that have a RawWaveforms file (UnitMatch loads `Unit{ID}` for every
+  'good' row, so the raw KS label file — which lists a superset — makes it crash
+  on a missing file; see `fix_unitmatch_cluster_group.py` to fix already-extracted
+  dirs).
+- `scripts/analysis/fix_unitmatch_cluster_group.py` (new) — idempotently
+  rewrites `cluster_group.tsv` in existing input dirs to match the extracted
+  units. Run on both the local and ceph input roots.
 - `scripts/pipelines/tracking/run_unitmatch_all.py` — `parse_session_date` now
   tolerant of full-stem dir names (`BG_031_01042025`, 6-digit `BG_031_050325`,
   `…_v2`/`…_b` suffixes); BG_046 bare dates still parse.
