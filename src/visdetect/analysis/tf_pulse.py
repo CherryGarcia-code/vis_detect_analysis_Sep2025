@@ -135,7 +135,7 @@ def _collect_pulses(session, cfg: TFRespPulseConfig, show_progress: bool = False
     if pr is not None:
         pr.start()
 
-    for i, t in enumerate(trials, 1):
+    for i, t in enumerate(trials):
         bv = getattr(t, "baseline_values", None)
         if bv is None:
             continue
