@@ -522,16 +522,18 @@ def _make_selectivity_session(n_trials=40, base_rate=20.0, evoked_rate=140.0,
     """Synthetic session yielding BOTH fast and slow pulses.
 
     Each trial baseline (neutral TF=1) carries alternating fast (TF=2) and slow
-    (TF=0.5) samples at post-stride indices 40..150 (>=2.0 s, before the change
-    at +250 s). The injected cluster fires a regular base train everywhere plus
-    a high-rate burst after each FAST pulse only -> positive selectivity bump.
+    (TF=0.5) samples at post-stride indices 40..140 spaced 1.0 s apart (>=2.0 s,
+    before the change at +250 s). The 1.0 s spacing keeps a fast pulse's 0.15 s
+    burst tail out of the next slow pulse's [-0.4, 0] pre-window (no cross-pulse
+    contamination). The injected cluster fires a regular base train everywhere
+    plus a high-rate burst after each FAST pulse only -> positive selectivity bump.
     """
     base_on = (np.arange(n_trials) * 300.0).astype(float)
     change_on = base_on + 250.0
     trials, fast_t, slow_t = [], [], []
     for k in range(n_trials):
         bv = np.ones(3 * 200)
-        for j, idx in enumerate(range(40, 160, 10)):
+        for j, idx in enumerate(range(40, 160, 20)):
             val = 2.0 if (j % 2 == 0) else 0.5
             bv[3 * idx] = val
             t_abs = base_on[k] + idx * 0.05
@@ -563,9 +565,12 @@ def test_compute_unit_selectivity_detects_injected_unit():
     # injected fast-locked unit -> clearly positive selectivity peak
     assert sel.sel_peak > 3.0, sel.sel_peak
     assert 0.0 < sel.sel_peak_latency < 0.25
-    # baseline difference must be ~0 (common-mode base train cancels)
-    pre = (sel.t_vec >= cfg.pulse.pre_window[0]) & (sel.t_vec < cfg.pulse.pre_window[1])
-    assert np.nanmax(np.abs(sel.selectivity[pre])) < 1.0
+    # Common-mode (drift) must cancel in the baseline. Check away from t=0: the
+    # smoothed response legitimately smears ~50 ms back past the pulse (17 ms
+    # sigma), so exclude the last 50 ms of the pre-window -- that smear is a real
+    # effect, not leakage. Cancellation is essentially perfect in the rest.
+    clean = (sel.t_vec >= cfg.pulse.pre_window[0]) & (sel.t_vec < -0.05)
+    assert np.nanmax(np.abs(sel.selectivity[clean])) < 1.0
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
