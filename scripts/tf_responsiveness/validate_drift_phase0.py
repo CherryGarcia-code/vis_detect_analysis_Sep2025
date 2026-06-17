@@ -16,7 +16,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from visdetect.analysis.constants import TF_PULSE_PRE_WINDOW, TF_PULSE_POST_WINDOW
+from visdetect.analysis.constants import (
+    TF_PULSE_PRE_WINDOW, TF_PULSE_POST_WINDOW, TF_PULSE_TRACE_PRE,
+)
 from visdetect.analysis.tf_pulse import (
     _collect_pulses, _zscore_trace, TFRespPulseConfig,
 )
@@ -29,12 +31,16 @@ POST = TF_PULSE_POST_WINDOW
 DT = 0.005
 SIGMA_MS = 20.0
 BIN_S = 1.0
+# Extend the KDE support window well before the measurement window so the
+# Gaussian smoothing has full support at -0.4 s; the pre-pulse SLOPE is then
+# measured on the clean interior (PRE), not a boundary artifact at the edge.
+TRACE_START = TF_PULSE_TRACE_PRE  # -1.0 s
 
 
 def _raw_pulse_average_hz(spike_times, pulses):
     from visdetect.analysis.tf_pulse import _mean_activity_per_unit
     mean_fine, sem, t_vec = _mean_activity_per_unit(
-        spike_times, pulses, PRE, POST, DT, SIGMA_MS)
+        spike_times, pulses, PRE, POST, DT, SIGMA_MS, trace_start=TRACE_START)
     if mean_fine.size == 0:
         return mean_fine, t_vec
     return mean_fine / DT, t_vec
@@ -68,30 +74,36 @@ def run_units(session, cluster_ids, kernel_s=20.0, n_shuffles=100, out_png="phas
             ax = axes[r][col]
             raw_hz, t_vec = _raw_pulse_average_hz(st, pulses)
             det_hz, _, t_det = detrended_pulse_average(
-                st, pulses, PRE, POST, DT, SIGMA_MS, gt, dr, mr)
+                st, pulses, PRE, POST, DT, SIGMA_MS, gt, dr, mr,
+                trace_start=TRACE_START)
             if raw_hz.size == 0 or det_hz.size == 0:
                 ax.text(0.5, 0.5, "no pulses", ha="center", transform=ax.transAxes)
                 continue
             null_z, t_null = circular_shift_null(
                 st, pulses, PRE, POST, DT, SIGMA_MS, BIN_S, kernel_s,
-                session_dur=sess_dur, n_shuffles=n_shuffles, seed=0)
+                session_dur=sess_dur, n_shuffles=n_shuffles, seed=0,
+                trace_start=TRACE_START)
+            raw_z = _zscore_trace(raw_hz, t_vec, PRE)
             det_z = _zscore_trace(det_hz, t_det, PRE)
             lo = np.percentile(null_z, 5, axis=0)
             hi = np.percentile(null_z, 95, axis=0)
             ax.fill_between(t_null, lo, hi, color="0.75", alpha=0.5, lw=0,
                             label="null 5-95%")
-            ax.plot(t_det, _zscore_trace(raw_hz, t_vec, PRE), "k--", lw=1.0,
-                    label="raw")
+            ax.plot(t_det, raw_z, "k--", lw=1.0, label="raw")
             ax.plot(t_det, det_z, "k-", lw=1.6, label="detrended")
             ax.axvline(0, color="0.5", lw=0.7, ls=":")
             ax.axhline(0, color="0.6", lw=0.4)
+            ax.set_xlim(-0.55, POST[1])  # hide the extended KDE-support region
             ax.set_title(f"clu{cid} {label}", fontsize=9)
             if r == 0 and col == 0:
                 ax.legend(fontsize=6, loc="upper left")
+            post_mask = (t_det >= 0.0) & (t_det < POST[1])
             rows.append({
                 "cluster_id": int(cid), "direction": label.split()[0],
-                "slope_raw": prepulse_slope(_zscore_trace(raw_hz, t_vec, PRE), t_vec, PRE),
+                "slope_raw": prepulse_slope(raw_z, t_vec, PRE),
                 "slope_detrended": prepulse_slope(det_z, t_det, PRE),
+                "post_peak_raw": float(np.nanmax(np.abs(raw_z[post_mask]))) if post_mask.any() else float("nan"),
+                "post_peak_det": float(np.nanmax(np.abs(det_z[post_mask]))) if post_mask.any() else float("nan"),
             })
     fig.tight_layout()
     os.makedirs(os.path.dirname(os.path.abspath(out_png)), exist_ok=True)
