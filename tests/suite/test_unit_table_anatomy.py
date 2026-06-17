@@ -50,3 +50,37 @@ def test_build_unit_table_has_anatomy_columns(monkeypatch):
     # no anatomy file present -> defaults
     assert df.loc[0, "region_coarse"] == "unknown"
     assert df.loc[0, "loc_method"] == "none"
+
+
+def test_build_unit_table_deduplicates_anatomy(monkeypatch):
+    """Duplicate (session_name, cluster_id) rows in anatomy CSV must not multiply GLT rows."""
+    import pandas as pd
+    from visdetect.suite import loader as L
+    minimal = pd.DataFrame({
+        "Session_Date": [7072025], "Cluster_ID": [3],
+        "Global_UID": [1], "stage": ["Expert"], "session_idx": [0],
+    })
+    # Anatomy CSV has TWO rows for the same unit (simulates a bad CSV).
+    anat_dup = pd.DataFrame({
+        "session_name": [7072025, 7072025],
+        "cluster_id": [3, 3],
+        "peak_channel": [10, 11],   # different values; keep="last" should keep 11
+        "shank": [0, 0],
+        "depth_um": [100.0, 100.0],
+        "ccf_ap": [1.0, 1.0], "ccf_ml": [2.0, 2.0], "ccf_dv": [3.0, 3.0],
+        "region_acronym": ["CP", "CP"],
+        "region_name": ["Caudoputamen", "Caudoputamen"],
+        "region_coarse": ["CP", "CP"],
+        "region_confidence": [0.9, 0.9],
+        "loc_method": ["ccf", "ccf"],
+    })
+    monkeypatch.setattr(L, "load_glt", lambda qc_only=True: minimal.copy())
+    monkeypatch.setattr(L, "load_all_lick_responsiveness", lambda: pd.DataFrame())
+    monkeypatch.setattr(L, "load_waveform_labels",
+                        lambda path=None: (_ for _ in ()).throw(FileNotFoundError("none")))
+    monkeypatch.setattr(L, "load_tf_responsiveness_detrended", lambda: pd.DataFrame())
+    monkeypatch.setattr(L, "load_tf_classification_detrended", lambda: pd.DataFrame())
+    monkeypatch.setattr(L, "load_unit_anatomy", lambda path=None: anat_dup)
+    # Must not raise UnitTableContractError (which fires on duplicate key rows).
+    df = L.build_unit_table(qc_only=True, validate=True)
+    assert len(df) == 1, f"Expected 1 row, got {len(df)}"

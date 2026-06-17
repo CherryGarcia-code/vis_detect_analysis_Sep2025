@@ -19,7 +19,7 @@ KEY_COLUMNS: List[str] = ["Session_Date", "Cluster_ID"]
 # Identity / metadata columns expected from the GLT producer.
 IDENTITY_COLUMNS: List[str] = ["Global_UID", "stage", "session_idx"]
 
-# One label column per workstream + the default for not-yet-produced rows.
+# One or more label columns per workstream + the default for not-yet-produced rows.
 LABEL_DEFAULTS: Dict[str, object] = {
     "track_verdict": "unknown",        # tracking      -> trusted/review/suspect/unknown
     "celltype": "unknown",             # FSI/SPN waveform

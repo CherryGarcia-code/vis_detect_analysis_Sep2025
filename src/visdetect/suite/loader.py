@@ -540,6 +540,7 @@ def build_unit_table(qc_only: bool = True, validate: bool = True,
         anat_sub = anat[["session_name", "cluster_id"] + anat_cols].copy()
         anat_sub["session_name"] = anat_sub["session_name"].astype(int)
         anat_sub["cluster_id"] = anat_sub["cluster_id"].astype(int)
+        anat_sub = anat_sub.drop_duplicates(subset=["session_name", "cluster_id"], keep="last")
         glt = glt.drop(columns=anat_cols, errors="ignore")
         glt = glt.merge(
             anat_sub, left_on=["Session_Date", "Cluster_ID"],
