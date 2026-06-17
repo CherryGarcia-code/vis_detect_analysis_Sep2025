@@ -746,7 +746,7 @@ def test_region_confidence_monotonic():
     assert 0.0 <= region_confidence(30., 5.) <= 1.0
 
 def test_build_channel_atlas_columns_and_rows():
-    from tests.anatomy.test_channel_geometry import _np2_positions
+    from test_channel_geometry import _np2_positions  # bare: tests/anatomy on sys.path (prepend mode)
     from visdetect.anatomy.tracks import TrackArtifact
     from visdetect.anatomy.atlas import AllenAtlas
     pos = _np2_positions()
@@ -1150,7 +1150,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"
 from build_channel_atlas import build_subject_atlas
 from visdetect.anatomy.tracks import TrackArtifact, ShankTrack, save_track_artifact
 from visdetect.anatomy.atlas import AllenAtlas
-from tests.anatomy.test_channel_geometry import _np2_positions
+from test_channel_geometry import _np2_positions  # bare: tests/anatomy on sys.path (prepend mode)
 
 def _artifact():
     shanks = [ShankTrack(i, np.array([[5000., 1350.+250.*i, 3500.],
