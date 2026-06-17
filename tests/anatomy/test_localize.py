@@ -6,6 +6,7 @@ from visdetect.anatomy.localize import (
     place_channel_on_track, region_confidence, build_channel_atlas,
 )
 
+
 def _straight_shank(idx=0, ml=1600.0):
     # deepest at DV=3500 (tip, y=0), top at DV=2500 (y=1000); straight in DV
     return ShankTrack(
@@ -26,7 +27,7 @@ def test_place_extrapolates_above_with_growing_sigma():
     sh = _straight_shank()
     xyz, sig = place_channel_on_track(sh, 1200.0)  # 200 um above the top (y=1000)
     np.testing.assert_allclose(xyz, [5000., 1600., 2300.], atol=1e-6)
-    assert sig > 20.0  # grew by sigma_growth_k * 200
+    assert sig == pytest.approx(40.0)  # 20 + 0.1 * 200
 
 def test_region_confidence_monotonic():
     assert region_confidence(30., 5.) < region_confidence(30., 200.)
@@ -50,3 +51,33 @@ def test_build_channel_atlas_columns_and_rows():
         assert c in df.columns
     assert (df["chanmap_signature"] == "sigABC").all()
     assert set(df["shank"].unique()) == {0, 1, 2, 3}
+
+
+def test_place_at_tip():
+    sh = _straight_shank()
+    xyz, sig = place_channel_on_track(sh, 0.0)
+    np.testing.assert_allclose(xyz, [5000., 1600., 3500.], atol=1e-6)
+    assert sig == pytest.approx(20.0)
+
+
+def test_place_extrapolates_with_segment_direction_fallback():
+    sh = _straight_shank()
+    sh.planned_vector = None
+    xyz, sig = place_channel_on_track(sh, 1200.0)
+    np.testing.assert_allclose(xyz, [5000., 1600., 2300.], atol=1e-6)
+    assert sig == pytest.approx(40.0)
+
+
+def test_build_channel_atlas_raises_on_missing_shank():
+    from test_channel_geometry import _np2_positions
+    from visdetect.anatomy.tracks import TrackArtifact
+    from visdetect.anatomy.atlas import AllenAtlas
+    pos = _np2_positions()
+    art = TrackArtifact("BG_046", "allen_mouse_25um", "right", "forward",
+                        "test", "2026-06-17",
+                        [_straight_shank(i, ml=1350. + 250. * i) for i in range(3)])  # only 3 shanks
+    ann = np.ones((400, 200, 200), dtype=int)
+    atlas = AllenAtlas(annotation=ann, resolution_um=25.0,
+                       id_to_acronym={1: "CP"}, id_to_name={1: "Caudoputamen"})
+    with pytest.raises(KeyError, match="shank index 3"):
+        build_channel_atlas("BG_046", art, pos, "sig", atlas)

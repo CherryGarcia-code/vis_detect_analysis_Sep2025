@@ -40,7 +40,12 @@ def place_channel_on_track(track: ShankTrack, y_um: float) -> Tuple[np.ndarray, 
         direction = np.asarray(track.planned_vector, float)
     else:
         direction = seg[-1]
-    direction = direction / (np.linalg.norm(direction) + 1e-12)
+    norm = np.linalg.norm(direction)
+    if norm < 1e-9:
+        raise ValueError(
+            "cannot extrapolate above the polyline: zero-length direction "
+            "and no usable planned_vector")
+    direction = direction / norm
     xyz = poly[-1] + overshoot * direction
     sigma = track.sigma_along_um + track.sigma_growth_k * overshoot
     return xyz, sigma
@@ -61,6 +66,10 @@ def build_channel_atlas(subject: str, art: TrackArtifact, channel_positions: np.
     for ch in range(len(pos)):
         x_um, y_um = float(pos[ch, 0]), float(pos[ch, 1])
         sh = int(shank_of[ch])
+        if sh not in track_by_idx:
+            raise KeyError(
+                f"channel {ch}: shank index {sh} not in artifact "
+                f"(available shanks: {sorted(track_by_idx)})")
         track = track_by_idx[sh]
         xyz, sigma = place_channel_on_track(track, y_um)
         reg = atlas.region_at(xyz)
