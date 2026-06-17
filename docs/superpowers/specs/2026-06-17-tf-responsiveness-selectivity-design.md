@@ -14,7 +14,7 @@
 
 **The task signal.** During baseline, grating temporal frequency fluctuates iid every **50 ms** (log2 ~ N(0, 0.25²) octaves, **geomean ~1 Hz**). A "fast pulse" = a sample >+1 SD (= +0.25 log2); "slow" = <−1 SD. These pulses are the moment-to-moment sensory evidence (the rodent analog of motion-energy pulses).
 
-**Phase-0 killed the drift approach.** The 2026-06-15 design tried to *detrend* a slow firing-rate ramp out of the pulse-triggered average, then threshold. The Phase-0 gate (script `scripts/tf_responsiveness/validate_drift_phase0.py`, run on session 16092025) showed:
+**Phase-0 killed the drift approach.** The 2026-06-15 design tried to *detrend* a slow firing-rate ramp out of the pulse-triggered average, then threshold. The Phase-0 gate (the now-retired `validate_drift_phase0.py` + `tf_drift.py`, run on session 16092025; its findings are the record, captured here) showed:
 - After fixing a KDE edge artifact (extend trace to −1.0 s), the "drift-only" units have genuine large pre-pulse slopes (~6–8) that run **monotonically across the whole window** — a **within-trial temporal-expectation ramp**, not slow session drift.
 - This ramp lives at the **same timescale as the response**, so a continuous-train drift model can't separate them: a source-level kernel sweep (20 s → 0.25 s, fine bins) barely moved the slopes; a per-window linear detrend flattened the slope by construction but **injected huge fake post-pulse peaks** via extrapolation (post 2.8 → 14).
 - Lohse 2025 (sister study) names this ramp: striatal **task-state / temporal-expectation** activity is a dimension **orthogonal** to the sensory-evidence axis.
@@ -98,7 +98,7 @@ Shallow decision tree / logistic (inspectable, class-weighted). Loop: **seed** t
 
 **Library** (`src/visdetect/analysis/`): **`tf_selectivity.py`** (new — traces, shared-baseline selectivity, label-shuffle null, features); **`tf_responsiveness.py`** (TFLabel I/O, GUI render, active-learning queue, shallow model + LOSO). **Retired:** `tf_drift.py` + its tests.
 
-**Scripts** (`scripts/tf_responsiveness/`): `fit_tf_selectivity.py` (per-session/unit features → cache), `run_labeler_gui.py`, `calibrate_model.py`, `tag_units.py`, `validate.py`. Keep `validate_drift_phase0.py` as the record of the pivot.
+**Scripts** (`scripts/tf_responsiveness/`): `fit_tf_selectivity.py` (per-session/unit features → cache), `run_labeler_gui.py`, `calibrate_model.py`, `tag_units.py`, `validate.py`. The drift approach is fully retired — `tf_drift.py`, its test, and `validate_drift_phase0.py` are deleted (they were coupled by import); the record of the pivot lives in this spec's §1, the 2026-06-15 drift design/plan, and the memory note (all still in git history).
 
 **Data:** `data/labels/tf_responsive_labels.csv`; `data/cache/tf_selectivity/BG_046/*.npz`; `tf_responsive_tags.csv`.
 

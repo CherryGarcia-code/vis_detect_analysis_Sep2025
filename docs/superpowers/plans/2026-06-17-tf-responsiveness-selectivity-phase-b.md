@@ -1310,21 +1310,22 @@ EOF
 
 ## Task 10: Retire the dead drift module
 
-The drift approach is dead (killed by its own Phase-0 gate). Remove `tf_drift.py` and its test. Keep `scripts/tf_responsiveness/validate_drift_phase0.py` (the spec designates it the record of the pivot). Confirm the whole suite is green afterward.
+The drift approach is dead (killed by its own Phase-0 gate). Retire it as a unit: `validate_drift_phase0.py` **imports** `tf_drift`'s functions, so the two cannot be separated — keeping a runnable Phase-0 script while deleting `tf_drift.py` is impossible. The record of the pivot is the prose (spec §1, the 2026-06-15 drift design/plan, the memory note), all in git history — a runnable script adds nothing and a broken-import one is a landmine. So delete all three. (Spec §1 + §9 updated accordingly.)
 
 **Files:**
 - Delete: `src/visdetect/analysis/tf_drift.py`
 - Delete: `tests/analysis/test_tf_drift.py`
+- Delete: `scripts/tf_responsiveness/validate_drift_phase0.py`
 
-- [ ] **Step 1: Confirm nothing imports `tf_drift` except its own test**
+- [ ] **Step 1: Confirm what imports `tf_drift`**
 
-Run: `grep -rn "tf_drift" src/ scripts/ tests/ analysis_suite/ 2>/dev/null`
-Expected: matches only in `tests/analysis/test_tf_drift.py` (and possibly a comment in `validate_drift_phase0.py`). If any *library/script* code imports `tf_drift`, STOP and report — do not delete.
+Run: `grep -rn "import.*tf_drift\|from.*tf_drift" src/ scripts/ tests/`
+Expected: `tests/analysis/test_tf_drift.py` and `scripts/tf_responsiveness/validate_drift_phase0.py` (both being deleted). If any OTHER library/script code imports `tf_drift`, STOP and report.
 
 - [ ] **Step 2: Delete the retired files**
 
 ```bash
-git rm src/visdetect/analysis/tf_drift.py tests/analysis/test_tf_drift.py
+git rm src/visdetect/analysis/tf_drift.py tests/analysis/test_tf_drift.py scripts/tf_responsiveness/validate_drift_phase0.py
 ```
 
 - [ ] **Step 3: Run the full test suite to verify no regressions**
@@ -1335,12 +1336,14 @@ Expected: PASS (no collection errors from the deleted module; all TF tests green
 - [ ] **Step 4: Commit**
 
 ```bash
+git add -A
 git commit -m "$(cat <<'EOF'
-chore(tf): retire dead tf_drift module
+chore(tf): retire dead drift approach (module, test, Phase-0 script)
 
 The source-level drift-detrend approach was killed by its Phase-0 gate
-(within-trial temporal-expectation ramp can't be modelled out). Replaced
-by tf_selectivity. validate_drift_phase0.py kept as the pivot record.
+(within-trial temporal-expectation ramp can't be modelled out). tf_drift,
+its test, and validate_drift_phase0.py (which imported it) are removed
+together. Pivot record lives in the spec/plan/memory prose + git history.
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 EOF
