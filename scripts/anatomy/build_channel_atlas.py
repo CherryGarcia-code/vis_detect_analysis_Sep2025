@@ -55,10 +55,13 @@ def build_subject_atlas(subject, artifact_path, raw_wf_root, session_names: List
     sig_rows, atlas_by_sig = [], {}
     for name in session_names:
         token = session_token(name)
-        sess_dir = resolve_session_dir(raw_wf_root, token) or name
+        sess_dir = resolve_session_dir(raw_wf_root, token)
+        if sess_dir is None:
+            print(f"  {name}: no session directory found, skipping")
+            continue
         pos = load_channel_positions(raw_wf_root, sess_dir)
         if pos is None:
-            print(f"  {name}: no channel_positions, skipping")
+            print(f"  {name}: no channel_positions in {sess_dir}, skipping")
             continue
         sig = chanmap_signature(pos)
         sig_rows.append({"session_name": token, "chanmap_signature": sig})
@@ -68,7 +71,10 @@ def build_subject_atlas(subject, artifact_path, raw_wf_root, session_names: List
     atlas_df = (pd.concat(atlas_by_sig.values(), ignore_index=True)
                 if atlas_by_sig else pd.DataFrame())
     atlas_df.to_csv(out_dir / f"{subject}_channel_atlas.csv", index=False)
-    pd.DataFrame(sig_rows).to_csv(out_dir / f"{subject}_session_signatures.csv", index=False)
+    sig_df = pd.DataFrame(sig_rows)
+    if not sig_df.empty:
+        sig_df["session_name"] = sig_df["session_name"].astype(str)
+    sig_df.to_csv(out_dir / f"{subject}_session_signatures.csv", index=False)
     print(f"{subject}: {len(atlas_by_sig)} unique chanmap(s), "
           f"{len(sig_rows)} sessions -> {out_dir}")
     return atlas_df
@@ -86,6 +92,9 @@ def main():
 
     raw_root = args.raw_wf_root or os.path.join("data", "unit_match", "input", args.subject)
     artifact = args.artifact or os.path.join("data", "anatomy", f"{args.subject}_shank_tracks.json")
+    if not os.path.isdir(raw_root):
+        print(f"{args.subject}: raw-wf root not found: {raw_root}")
+        raise SystemExit(1)
     sessions = sorted(d for d in os.listdir(raw_root)
                       if os.path.isdir(os.path.join(raw_root, d)))
     atlas = AllenAtlas()  # real Allen atlas (downloads/caches on first use)

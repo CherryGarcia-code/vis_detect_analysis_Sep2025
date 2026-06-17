@@ -30,8 +30,9 @@ def test_build_subject_atlas_writes_files(tmp_path):
     out = tmp_path / "anatomy"
     df = build_subject_atlas("BG_046", art_p, raw, ["01072025", "02072025"], atlas, out)
     assert (out / "BG_046_channel_atlas.csv").exists()
-    sig_map = pd.read_csv(out / "BG_046_session_signatures.csv")
+    sig_map = pd.read_csv(out / "BG_046_session_signatures.csv", dtype={"session_name": str})
     assert sig_map["chanmap_signature"].nunique() == 1  # shared bank
+    assert set(sig_map["session_name"].astype(str)) == {"01072025", "02072025"}
     assert df["region_coarse"].eq("CP").all()
 
 def test_session_token_and_resolve(tmp_path):
