@@ -152,6 +152,39 @@ def _post_metrics(
     return peak, latency, auc, half_width
 
 
+def _split_half_r(
+    mat_fast: np.ndarray,
+    mat_slow: np.ndarray,
+    t_vec: np.ndarray,
+    pre_window: Tuple[float, float],
+    post_window: Tuple[float, float],
+    eps: float,
+    rng: np.random.Generator,
+) -> float:
+    """Correlate post-window selectivity computed from two random halves."""
+    nf, ns = mat_fast.shape[0], mat_slow.shape[0]
+    if nf < 4 or ns < 4:
+        return np.nan
+    fi = rng.permutation(nf)
+    si = rng.permutation(ns)
+    fh1, fh2 = fi[: nf // 2], fi[nf // 2:]
+    sh1, sh2 = si[: ns // 2], si[ns // 2:]
+
+    def _sel(mf, ms):
+        fhz = np.nanmean(mf, axis=0)
+        shz = np.nanmean(ms, axis=0)
+        _, sd = _shared_baseline(fhz, shz, t_vec, pre_window, eps)
+        return (fhz - shz) / sd
+
+    s1 = _sel(mat_fast[fh1], mat_slow[sh1])
+    s2 = _sel(mat_fast[fh2], mat_slow[sh2])
+    post_mask = (t_vec >= post_window[0]) & (t_vec < post_window[1])
+    a, b = s1[post_mask], s2[post_mask]
+    if np.std(a) <= eps or np.std(b) <= eps:
+        return np.nan
+    return float(np.corrcoef(a, b)[0, 1])
+
+
 def compute_unit_selectivity(spike_times, fast_times, slow_times, cfg=None, rng=None) -> TFUnitSelectivity:
     if cfg is None:
         cfg = TFSelectivityConfig()
@@ -203,8 +236,8 @@ def compute_unit_selectivity(spike_times, fast_times, slow_times, cfg=None, rng=
     sel_z_vs_null = (obs - null_peak_mean) / null_peak_sd if null_peak_sd > cfg.eps else np.nan
     shuffle_p = float((1 + np.sum(null_peaks >= obs)) / (1 + cfg.n_shuffles))
 
-    # split-half filled in Task 7
-    split_half_r = np.nan
+    split_half_r = _split_half_r(mat_fast, mat_slow, t_vec, p.pre_window,
+                                 p.post_window, cfg.eps, rng)
 
     return TFUnitSelectivity(
         cluster_id=-1, t_vec=t_vec, fast_hz=fast_hz, slow_hz=slow_hz,

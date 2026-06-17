@@ -161,3 +161,27 @@ def test_null_separates_injected_from_random():
     sel_neg = compute_unit_selectivity(sess_neg.clusters[0].spike_times, fast_t2, slow_t2, cfg2)
     # no fast/slow difference (only common-mode) -> stays in the null
     assert sel_neg.shuffle_p > 0.05, sel_neg.shuffle_p
+
+
+def test_split_half_high_for_injected_unit():
+    cfg = TFSelectivityConfig(n_shuffles=50, seed=3)
+    sess, fast_t, slow_t = _make_selectivity_session(inject=True, seed=3)
+    sel = compute_unit_selectivity(sess.clusters[0].spike_times, fast_t, slow_t, cfg)
+    assert sel.split_half_r > 0.5, sel.split_half_r
+
+
+def test_insufficient_pulses_flagged():
+    cfg = TFSelectivityConfig(n_shuffles=10, min_pulses_per_label=1000)
+    sess, fast_t, slow_t = _make_selectivity_session(inject=True, seed=4)
+    sel = compute_unit_selectivity(sess.clusters[0].spike_times, fast_t, slow_t, cfg)
+    assert sel.sufficient is False  # far fewer than 1000 pulses per label
+
+
+def test_silent_unit_does_not_crash():
+    cfg = TFSelectivityConfig(n_shuffles=10, seed=5)
+    sess, fast_t, slow_t = _make_selectivity_session(inject=True, seed=5)
+    sel = compute_unit_selectivity(np.array([]), fast_t, slow_t, cfg)
+    # no spikes -> zero traces, finite (guarded) selectivity, no exception
+    assert sel.n_fast > 0 and sel.n_slow > 0
+    assert np.all(np.isfinite(sel.selectivity))
+    assert np.allclose(sel.selectivity, 0.0)
