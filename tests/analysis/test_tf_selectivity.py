@@ -146,3 +146,18 @@ def test_compute_unit_selectivity_detects_injected_unit():
     # effect, not leakage. Cancellation is essentially perfect in the rest.
     clean = (sel.t_vec >= cfg.pulse.pre_window[0]) & (sel.t_vec < -0.05)
     assert np.nanmax(np.abs(sel.selectivity[clean])) < 1.0
+
+
+def test_null_separates_injected_from_random():
+    cfg = TFSelectivityConfig(n_shuffles=200, seed=1)
+    sess_pos, fast_t, slow_t = _make_selectivity_session(inject=True, seed=1)
+    sel_pos = compute_unit_selectivity(sess_pos.clusters[0].spike_times, fast_t, slow_t, cfg)
+    # injected unit clears the null
+    assert sel_pos.shuffle_p < 0.05, sel_pos.shuffle_p
+    assert sel_pos.sel_z_vs_null > 3.0, sel_pos.sel_z_vs_null
+
+    cfg2 = TFSelectivityConfig(n_shuffles=200, seed=2)
+    sess_neg, fast_t2, slow_t2 = _make_selectivity_session(inject=False, seed=2)
+    sel_neg = compute_unit_selectivity(sess_neg.clusters[0].spike_times, fast_t2, slow_t2, cfg2)
+    # no fast/slow difference (only common-mode) -> stays in the null
+    assert sel_neg.shuffle_p > 0.05, sel_neg.shuffle_p

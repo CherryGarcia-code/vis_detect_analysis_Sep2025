@@ -185,11 +185,25 @@ def compute_unit_selectivity(spike_times, fast_times, slow_times, cfg=None, rng=
     fast_peak, _, _, _ = _post_metrics(fast_z, t_vec, p.post_window)
     slow_peak, _, _, _ = _post_metrics(slow_z, t_vec, p.post_window)
 
-    # Label-shuffle null + split-half are filled in Task 6/7.
-    null_peak_mean = np.nan
-    null_peak_sd = np.nan
-    sel_z_vs_null = np.nan
-    shuffle_p = np.nan
+    # Label-shuffle null: permute fast/slow labels (counts fixed), keeping the
+    # ramp/drift intact; destroys only the TF assignment.
+    combined = np.vstack([mat_fast, mat_slow])
+    n_total = combined.shape[0]
+    post_mask = (t_vec >= p.post_window[0]) & (t_vec < p.post_window[1])
+    null_peaks = np.empty(cfg.n_shuffles, dtype=float)
+    for s in range(cfg.n_shuffles):
+        perm = rng.permutation(n_total)
+        f = np.nanmean(combined[perm[:n_fast]], axis=0)
+        sl = np.nanmean(combined[perm[n_fast:]], axis=0)
+        sel_s = (f - sl) / sd_b
+        null_peaks[s] = float(np.nanmax(np.abs(sel_s[post_mask]))) if np.any(post_mask) else np.nan
+    null_peak_mean = float(np.nanmean(null_peaks))
+    null_peak_sd = float(np.nanstd(null_peaks))
+    obs = abs(sel_peak)
+    sel_z_vs_null = (obs - null_peak_mean) / null_peak_sd if null_peak_sd > cfg.eps else np.nan
+    shuffle_p = float((1 + np.sum(null_peaks >= obs)) / (1 + cfg.n_shuffles))
+
+    # split-half filled in Task 7
     split_half_r = np.nan
 
     return TFUnitSelectivity(
