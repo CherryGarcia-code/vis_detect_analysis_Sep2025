@@ -40,3 +40,26 @@ def test_validate_raises_on_nonmonotonic():
     out[2].ccf_polyline[0, 1] = 1000.0  # break monotonicity
     with pytest.raises(TrackArtifactError, match="monoton|spacing"):
         validate_shank_order(_art(out))
+
+def test_wrong_shank_count_raises():
+    shanks = [_shank_at_ml(ml) for ml in (1350, 1600, 1850)]  # only 3
+    with pytest.raises(TrackArtifactError, match="shank"):
+        assign_probe_shank_indices(shanks, "forward", "right")
+
+def test_forward_left_reverses():
+    shanks = [_shank_at_ml(ml) for ml in (1350, 1600, 1850, 2100)]
+    out = assign_probe_shank_indices(shanks, "forward", "left")
+    mls = [s.ccf_polyline[0, 1] for s in out]
+    assert mls == sorted(mls, reverse=True)  # left flips -> index 0 = most lateral
+
+def test_backward_left_double_flip_increasing():
+    shanks = [_shank_at_ml(ml) for ml in (1850, 1600, 2100, 1350)]
+    out = assign_probe_shank_indices(shanks, "backward", "left")
+    mls = [s.ccf_polyline[0, 1] for s in out]
+    assert mls == sorted(mls)  # both flips cancel -> increasing
+
+def test_validate_raises_on_bad_spacing():
+    shanks = [_shank_at_ml(ml) for ml in (1350, 1350 + 800, 1350 + 1600, 1350 + 2400)]
+    out = assign_probe_shank_indices(shanks, "forward", "right")
+    with pytest.raises(TrackArtifactError, match="spacing"):
+        validate_shank_order(_art(out))

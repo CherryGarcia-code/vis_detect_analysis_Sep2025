@@ -27,8 +27,19 @@ def _index_increasing_with_ml(barcode_orientation: str, hemisphere: str) -> bool
 
 def assign_probe_shank_indices(shanks: List[ShankTrack], barcode_orientation: str,
                                hemisphere: str, n_shanks: int = 4) -> List[ShankTrack]:
+    """Assign probe_shank_index (0-based) to each ShankTrack based on ML position.
+
+    The index convention follows ``_index_increasing_with_ml``: forward+right
+    gives index 0 = most medial (smallest ML); each of {backward, left} flips
+    the direction.
+
+    Mutates the input ShankTrack objects in place (sets probe_shank_index) and
+    returns them sorted by probe_shank_index.
+
+    Raises TrackArtifactError if ``len(shanks) != n_shanks``.
+    """
     if len(shanks) != n_shanks:
-        raise ValueError(f"expected {n_shanks} shanks, got {len(shanks)}")
+        raise TrackArtifactError(f"expected {n_shanks} shanks, got {len(shanks)}")
     ml = np.array([s.ccf_polyline[0, 1] for s in shanks])  # tip ML
     order = np.argsort(ml)  # medial(small ML) -> lateral(large ML)
     if not _index_increasing_with_ml(barcode_orientation, hemisphere):
@@ -38,6 +49,7 @@ def assign_probe_shank_indices(shanks: List[ShankTrack], barcode_orientation: st
         s = shanks[src]
         s.probe_shank_index = int(new_idx)
         out.append(s)
+    # Sort for explicitness; indices are already assigned 0..n-1 in order above.
     return sorted(out, key=lambda s: s.probe_shank_index)
 
 
