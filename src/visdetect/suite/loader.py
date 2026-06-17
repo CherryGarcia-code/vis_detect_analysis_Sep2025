@@ -393,6 +393,19 @@ def load_waveform_labels(path: Optional[str] = None) -> pd.DataFrame:
     return df
 
 
+# ── Per-unit anatomical localization ────────────────────────────────
+
+def load_unit_anatomy(path: Optional[str] = None) -> pd.DataFrame:
+    """Per-unit anatomical localization (produced by scripts/anatomy/localize_units.py).
+
+    Returns an empty DataFrame if the file does not exist yet.
+    """
+    p = path or os.path.join(ROOT, "data", "anatomy", "unit_anatomy.csv")
+    if not os.path.exists(p):
+        return pd.DataFrame()
+    return pd.read_csv(p)
+
+
 # ── Convenience: merged unit table ───────────────────────────────────
 
 def build_unit_table(qc_only: bool = True, validate: bool = True,
@@ -517,6 +530,28 @@ def build_unit_table(qc_only: bool = True, validate: bool = True,
             resolve_row_verdict(u, s, kept_map, verd_map)
             for u, s in zip(glt["Global_UID"], glt["Session_Date"])
         ]
+
+    # Merge anatomical localization (peak channel -> CCF + region).
+    anat = load_unit_anatomy()
+    anat_cols = ["peak_channel", "shank", "depth_um", "ccf_ap", "ccf_ml", "ccf_dv",
+                 "region_acronym", "region_name", "region_coarse",
+                 "region_confidence", "loc_method"]
+    if not anat.empty and {"session_name", "cluster_id"}.issubset(anat.columns):
+        anat_sub = anat[["session_name", "cluster_id"] + anat_cols].copy()
+        anat_sub["session_name"] = anat_sub["session_name"].astype(int)
+        anat_sub["cluster_id"] = anat_sub["cluster_id"].astype(int)
+        glt = glt.drop(columns=anat_cols, errors="ignore")
+        glt = glt.merge(
+            anat_sub, left_on=["Session_Date", "Cluster_ID"],
+            right_on=["session_name", "cluster_id"], how="left",
+        )
+        glt.drop(columns=["session_name", "cluster_id"], errors="ignore", inplace=True)
+        # Unmatched rows (sessions without a track artifact yet) get clean defaults,
+        # mirroring the celltype merge. CCF coords / confidence stay NaN.
+        for c, dflt in (("region_acronym", "unknown"), ("region_name", "unknown"),
+                        ("region_coarse", "unknown"), ("loc_method", "none"),
+                        ("peak_channel", -1), ("shank", -1)):
+            glt[c] = glt[c].fillna(dflt)
 
     # ── Add not-yet-produced contract columns with their defaults ──
     from .unit_table_schema import add_label_defaults, validate_unit_table
