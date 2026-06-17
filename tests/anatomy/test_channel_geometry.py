@@ -33,3 +33,14 @@ def test_signature_changes_with_y_offset():
     a = _np2_positions(1515.0)
     b = _np2_positions(765.0)
     assert chanmap_signature(a) != chanmap_signature(b)
+
+def test_signature_invariant_to_subum_jitter():
+    base = _np2_positions()
+    jittered = base + 0.3            # < 0.5 um -> same integer-um -> same signature
+    assert chanmap_signature(base) == chanmap_signature(jittered)
+
+def test_signature_changes_at_1um_shift():
+    base = _np2_positions()
+    shifted = base.copy()
+    shifted[:, 1] = shifted[:, 1] + 1.0   # +1 um in y -> different signature
+    assert chanmap_signature(base) != chanmap_signature(shifted)

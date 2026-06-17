@@ -15,7 +15,6 @@ def assign_shanks(channel_positions: np.ndarray, n_shanks: int = 4,
     pitch ~250 um, within-shank column spacing ~32 um).
     """
     x = np.asarray(channel_positions, float)[:, 0]
-    order = np.argsort(np.unique(x))
     ux = np.unique(x)
     # group unique x values into shanks by gaps
     group_of_ux = np.zeros(len(ux), dtype=int)
@@ -32,8 +31,8 @@ def assign_shanks(channel_positions: np.ndarray, n_shanks: int = 4,
 
 
 def chanmap_signature(channel_positions: np.ndarray) -> str:
-    """Order-independent hex hash of the (x,y) site set, rounded to 1 um."""
-    pos = np.round(np.asarray(channel_positions, float), 1)
+    """Order-independent, version-stable hex hash of the (x,y) site set, rounded to 1 um."""
+    pos = np.round(np.asarray(channel_positions, float)).astype(int)  # 1 um resolution
     rows = sorted(map(tuple, pos.tolist()))
-    h = hashlib.sha1(repr(rows).encode("utf-8")).hexdigest()
-    return h[:16]
+    payload = ";".join(f"{x},{y}" for x, y in rows)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
