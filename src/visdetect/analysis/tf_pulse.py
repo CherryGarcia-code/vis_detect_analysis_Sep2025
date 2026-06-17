@@ -147,7 +147,8 @@ def _collect_pulses(session, cfg: TFRespPulseConfig, show_progress: bool = False
         if cfg.baseline_stride > 1:
             arr = arr[:: cfg.baseline_stride]
         n_seen = getattr(t, "n_seen", None)
-        if isinstance(n_seen, (int, np.integer)) and n_seen is not None and n_seen > 0:
+        has_n_seen = isinstance(n_seen, (int, np.integer)) and n_seen is not None and n_seen > 0
+        if has_n_seen:
             arr = arr[: int(n_seen)]
         # Compute log2 TF and identify fast/slow bins
         log2_tf = _safe_log2(arr)
@@ -155,6 +156,12 @@ def _collect_pulses(session, cfg: TFRespPulseConfig, show_progress: bool = False
         t0 = float(base_by_trial[i]) if i < len(base_by_trial) and np.isfinite(base_by_trial[i]) else None
         t_change = float(change_by_trial[i]) if i < len(change_by_trial) and np.isfinite(change_by_trial[i]) else None
         t_outcome = _outcome_time_for_trial(t, t0)
+        # Leakage guard: with constraints on, if nothing bounds the baseline
+        # window (no n_seen truncation, no change time, no outcome lick time),
+        # the full baseline_values vector can run past the real end of the
+        # trial. Skip such unbounded trials rather than scan the whole vector.
+        if cfg.use_constraints and not has_n_seen and t_change is None and t_outcome is None:
+            continue
 
         for bin_idx, l2 in enumerate(log2_tf):
             if not np.isfinite(l2):

@@ -62,6 +62,35 @@ def test_collect_pulses_constraints_reduce_count():
 
 import numpy as np
 from visdetect.analysis.tf_pulse import _smooth_binned_activity
+from visdetect.core.session import Session
+
+
+def test_unbounded_trial_skipped_when_no_bounds():
+    # n_seen=None, abort with NaN Change_ON and no usable lick time -> cannot
+    # bound the baseline window -> the whole trial must be skipped.
+    bv = np.ones(3 * 400)
+    bv[3 * 100] = 2.0  # a fast sample at post-stride idx 100 -> +5.0 s
+    t = Trial(trialoutcome="abort", reactiontimes={}, change_size=1.0,
+              change_time=None, baseline_values=bv, n_seen=None)
+    ni = {"Baseline_ON": np.array([0.0]), "Change_ON": np.array([np.nan])}
+    sess = Session(trials=[t], clusters=[], ni_events=ni, session_name="X")
+    fast, slow = _collect_pulses(sess, TFRespPulseConfig(use_constraints=True))
+    assert fast.size == 0 and slow.size == 0
+
+
+def test_outcome_bounded_trial_keeps_early_pulses():
+    # fa lick at 5.0 s bounds the window (guard 2 s -> cutoff 3.0 s):
+    # the +2.0 s pulse is kept; the +10.0 s pulse is dropped; trial NOT skipped.
+    bv = np.ones(3 * 400)
+    bv[3 * 40] = 2.0   # fast at +2.0 s
+    bv[3 * 200] = 2.0  # fast at +10.0 s
+    t = Trial(trialoutcome="fa", reactiontimes={"fa": 5.0}, change_size=1.0,
+              change_time=None, baseline_values=bv, n_seen=None)
+    ni = {"Baseline_ON": np.array([0.0]), "Change_ON": np.array([np.nan])}
+    sess = Session(trials=[t], clusters=[], ni_events=ni, session_name="X")
+    fast, slow = _collect_pulses(sess, TFRespPulseConfig(use_constraints=True))
+    assert np.any(np.isclose(fast, 2.0, atol=0.051)), np.sort(fast)
+    assert not np.any(np.isclose(fast, 10.0, atol=0.051)), np.sort(fast)
 
 
 def test_smooth_counts_multiple_spikes_per_bin():
