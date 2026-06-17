@@ -16,7 +16,7 @@ COARSE_MAP: Dict[str, str] = {
     "CP": "CP",            # caudoputamen (dorsal striatum, the target)
     "ACB": "VS",           # nucleus accumbens (ventral striatum)
     "GPe": "GPe", "GPi": "GPe",
-    "VL": "VS", "V3": "VS", "VS": "VS",   # ventricles
+    "VL": "VS", "V3": "VS", "VS": "VS",   # ventricles + ventral striatum -> VS (non-target, pooled)
     "root": "out", "": "out",
 }
 # prefix fallbacks (longest match wins)
@@ -81,6 +81,8 @@ class AllenAtlas:
         if not self._in_bounds(vox):
             return 0.0
         rid = int(self.annotation[vox])
+        if coarse_region(self.id_to_acronym.get(rid, "")) == "out":
+            return 0.0
         r_vox = int(np.ceil(max_search_um / self.resolution_um))
         for r in range(1, r_vox + 1):
             for ax in range(3):

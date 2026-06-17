@@ -21,6 +21,7 @@ def test_region_at_other_half():
     a = _toy_atlas()
     r = a.region_at((50., 50., 200.))  # dv index 8 -> id 2 -> GPe
     assert r["acronym"] == "GPe"
+    assert r["coarse"] == "GPe"
 
 def test_out_of_volume_is_out():
     a = _toy_atlas()
@@ -32,7 +33,23 @@ def test_border_distance_small_near_boundary():
     near = a.border_distance_um((50., 50., 112.))   # dv ~ index 4.5, near 4/5 border
     far = a.border_distance_um((50., 50., 12.))      # dv index 0, deep in region 1
     assert near < far
+    assert near == 25.0
 
 def test_coarse_map_has_core_classes():
     for acr in ("CP", "GPe"):
         assert acr in COARSE_MAP
+
+def test_coarse_region_prefix_and_default():
+    from visdetect.anatomy.atlas import coarse_region
+    assert coarse_region("VISp") == "CTX"
+    assert coarse_region("cc") == "WM"
+    assert coarse_region("ACB") == "VS"
+    assert coarse_region("ZZZ") == "other"
+
+def test_border_distance_zero_for_out_voxel():
+    import numpy as np
+    from visdetect.anatomy.atlas import AllenAtlas
+    ann = np.zeros((10, 10, 10), dtype=int)  # all id 0 -> root -> "out"
+    a = AllenAtlas(annotation=ann, resolution_um=25.0,
+                   id_to_acronym={0: "root"}, id_to_name={0: "root"})
+    assert a.border_distance_um((50., 50., 50.)) == 0.0
