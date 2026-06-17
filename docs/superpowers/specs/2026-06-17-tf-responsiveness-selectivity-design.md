@@ -129,6 +129,37 @@ selectivity = (fast_hz - slow_hz)/σ_b  +  label-shuffle null   → features →
 
 ---
 
+## 13. Phase-B gate verdict (2026-06-17) — session 16092025 (Expert/Sept)
+
+Ran `validate_selectivity_phase0.py` on 16092025 (223 good-and-stable units; 5852 fast / 5947 slow corrected pulses; dt=0.004; 200 label shuffles). **NO-GO as-is.**
+
+- **Population yield ≈ chance.** Post-window [0, 0.5]: 13/223 significant (5.8%). Tightened to [0, 0.25]: 14/223 (6.3%). Both indistinguishable from the 5% per-unit null FPR (binomial expectation 11.2 ± 3.3). **Zero units survive BH-FDR** (smallest p≈0.0099; top-of-223 threshold ≈0.0002).
+- **`max|selectivity|` over a window is the wrong statistic — edge pathology.** The peak-latency pile-up sits at the *window edge* and **moves with it** (≈0.496 s at [0,0.5]; ≈0.248 s at [0,0.25]). It captures slow, non-sensory structure (residual uncancelled drift whose magnitude grows with lag), not a localized sensory bump. The mean significant trace is flat; significant units blend into the null cloud.
+- **Eyeball of the 3 best non-edge candidates (227, 558, 261) — none convincing.** Fast vs slow pulse-triggered PSTHs essentially overlap; selectivity traces wander *within* the ±2SD label-shuffle null band, with 0.12–0.15 s excursions no larger than their own pre-pulse baseline wandering. By eye, none is a TF responder. (Figure: `figures/tf_responsiveness/16092025_candidates_eyeball.png`.)
+
+**Conclusion:** session 16092025 shows **no convincing short-latency TF-selective population** — at the group level (chance yield, no FDR survivors) and by eye on the best candidates. The gate did its job: it stopped us building the GUI/tagger on noise. **Re-picked exemplars: none defensible.**
+
+### 13a. Bug verified + cross-subject batch (2026-06-17, extends the verdict)
+
+A user challenge ("how did the buggy version show responders?") forced a deeper, fully independent audit:
+
+- **The off-by-one fix is PROVEN correct (not circular).** Independent ground truth = the TF actually on screen at each pulse time (looked up by which trial's baseline window the time falls in). FIXED labels: fast pulses are **100%** on genuinely-high TF (median log2 +0.355). BUGGY (`enumerate,1`): only **16%** (median +0.002 ≈ chance). Consecutive-trial TF sequences are independent (corr −0.003). So the bug stamped trial k's TF labels onto trial k+1's timeline = random labels; the old "responders" were artifacts (the old metric also flagged the common-mode/temporal-expectation ramp, not fast−slow selectivity). Data-structure note: `baseline_values` is a fixed 1800-sample (~30 s) *planned* buffer, truncated by outcome (early lick/abort); `n_seen` is **None** in these pkls, so truncation is respected via the outcome-time guards (the fixed pulses are 100% in genuinely-shown baseline).
+- **Units are alive but motor-dominated.** Change_ON response: 72–88% of units (z up to 69). But a hit-vs-miss dissociation shows the large response is the **late motor/lick ramp** (hit≫miss); the motor-free short-latency (miss) sensory component is **weak** and per-unit inconsistent.
+- **Cross-session/cross-subject batch (`batch_responsiveness.py`).** 27 BG_046 QC sessions (Learning→Expert) + 7 well-performing BG_031 sessions (good Impulsive/StimSens), ~5000 units, all pulses (~12k/unit):
+  - **baseline-pulse responsiveness (subtle, motor-free): median 0.5% BG_046 / 0.0% BG_031, always ≤2.2%, flat across learning, both subjects → robust NULL.**
+  - hit-late motor: ~74–79%. miss short-lat sensory: ~20% (soft, noise-inflated by few miss events).
+
+**Final Phase-B conclusion:** BG_046 **and** BG_031 medial-striatum units do **not** encode moment-to-moment baseline TF evidence (clean motor-free probe) — robustly, across learning, in two subjects. They are decision/action-dominated with at most weak clean sensory drive. Consistent with DMS as associative/action-selection (Lohse's evidence-encoders were posterior-sensory, ~3.3%). **Implication:** the downstream premise of a baseline-evidence "TF-responsive" population does not hold here; pivot "responsive" toward change/decision coding (where signal exists) rather than baseline-pulse evidence tuning. GUI/model (Phases C–F) remain **on hold** — there is no responder population to tag.
+
+**Caveats / open before any global conclusion:**
+1. **One Expert session ≠ all of BG_046.** The learning story lives in earlier (Learning) stages; responders may exist/emerge there. A Learning-stage session should be gated before concluding BG_046 has no TF coding.
+2. **Detection statistic needs replacing** (spec-level correction): swap `max|selectivity|`-over-window for an **early-localized** statistic (mean/AUC or matched-filter against a sensory template in a *fixed* ~0.05–0.20 s window) with the label-shuffle null on that statistic. Removes the edge pile-up; concentrates power where sensory responses live. Do this before a fair multi-session screen.
+3. Phases C–F (GUI/model/tag-all) **on hold** pending (1)+(2).
+
+Artifacts: `figures/tf_responsiveness/16092025_selectivity_gate{,_w050}.png`, `data/cache/tf_selectivity/16092025_features{,_w050}.csv`.
+
+---
+
 ## 12. References
 
 - Lohse et al. 2025 (sister study, identical task) — `paper_references/Lohse et et al., Frontal cortex gates striatal dynamics ... 071025.pdf`. Methods: ±1 SD fast/slow pulse detection; guards 1 s/1 s/2 s; 40 ms FWHM smoothing; z-score to common baseline; fast-minus-slow selectivity peak `>7.5` → 109 evidence-encoders (3.3%, posterior-biased).

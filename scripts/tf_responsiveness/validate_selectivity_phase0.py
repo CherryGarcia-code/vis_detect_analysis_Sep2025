@@ -123,6 +123,9 @@ def main():
     ap.add_argument("--n-shuffles", type=int, default=200)
     ap.add_argument("--dt", type=float, default=0.001,
                     help="trace bin (s); 0.004 is ~4x faster and fine for the gate")
+    ap.add_argument("--post-end", type=float, default=0.5,
+                    help="post-window end (s) for the selectivity peak; tighten to "
+                         "~0.25 to keep late drift out of the max|sel| statistic")
     ap.add_argument("--top", type=int, default=15, help="# exemplar candidates to print")
     args = ap.parse_args()
 
@@ -134,8 +137,11 @@ def main():
     print(f"[gate] {args.session}: {len(cluster_ids)} good-and-stable units")
 
     cfg = TFSelectivityConfig(
-        pulse=TFRespPulseConfig(trace_pre=TF_PULSE_TRACE_PRE, dt=args.dt),
+        pulse=TFRespPulseConfig(trace_pre=TF_PULSE_TRACE_PRE, dt=args.dt,
+                                post_window=(0.0, args.post_end)),
         n_shuffles=args.n_shuffles)
+    print(f"[gate] post-window = (0.0, {args.post_end}) s, dt={args.dt}, "
+          f"n_shuffles={args.n_shuffles}")
     df = build_feature_table(sess, cluster_ids, cfg)
 
     sname = str(getattr(sess, "session_name", args.session))
