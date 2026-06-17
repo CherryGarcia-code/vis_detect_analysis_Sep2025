@@ -32,3 +32,21 @@ def test_localize_units_joins_via_peak_channel(tmp_path):
     assert row["region_coarse"] == "CP"
     assert row["depth_um"] == 300.0
     assert row["ccf_dv"] == 3200.0
+
+
+def test_append_unit_anatomy_upsert(tmp_path):
+    import pandas as pd
+    from localize_units import append_unit_anatomy, UNIT_COLS
+    out = tmp_path / "unit_anatomy.csv"
+    row1 = pd.DataFrame([{c: 0 for c in UNIT_COLS}])
+    row1.loc[0, "session_name"] = 1072025
+    row1.loc[0, "cluster_id"] = 42
+    row1.loc[0, "peak_channel"] = 5
+    append_unit_anatomy(row1, out)
+    row2 = row1.copy()
+    row2.loc[0, "peak_channel"] = 9          # same key, new value
+    append_unit_anatomy(row2, out)
+    df = pd.read_csv(out)
+    sub = df[(df["session_name"] == 1072025) & (df["cluster_id"] == 42)]
+    assert len(sub) == 1                       # upserted, not duplicated
+    assert sub.iloc[0]["peak_channel"] == 9    # keep="last"

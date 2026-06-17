@@ -7,6 +7,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import gc
 import os
 from pathlib import Path
 from typing import Dict, List
@@ -35,7 +36,7 @@ def localize_subject_units(subject, atlas_csv, sig_csv, raw_wf_root,
         signature = sig.get(token)
         if signature is None:
             continue
-        sess_dir = resolve_session_dir(raw_wf_root, token) or str(sess)
+        sess_dir = resolve_session_dir(raw_wf_root, token) or token
         chans = atlas[atlas["chanmap_signature"] == signature].set_index("channel")
         for cid in cluster_ids:
             pc = unit_peak_channel(raw_wf_root, sess_dir, cid)
@@ -84,6 +85,7 @@ def _units_by_session_for_subject(subject) -> Dict[str, List[int]]:
         ids = sess.good_and_stable_ids or [c.cluster_id for c in sess.clusters]
         out[token] = [int(i) for i in ids]
         del sess
+        gc.collect()
     return out
 
 
