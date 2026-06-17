@@ -45,6 +45,33 @@ class TFSelectivityConfig:
     min_pulses_per_label: int = 20
 
 
+@dataclass
+class TFUnitSelectivity:
+    cluster_id: int
+    t_vec: np.ndarray
+    fast_hz: np.ndarray
+    slow_hz: np.ndarray
+    selectivity: np.ndarray
+    fast_z: np.ndarray
+    slow_z: np.ndarray
+    baseline_mu: float
+    baseline_sd: float
+    sel_peak: float            # signed; selectivity value at |peak| in post window
+    sel_peak_latency: float    # s
+    sel_auc: float             # signed area under selectivity in post window
+    sel_half_width: float      # s; width at half-max around the peak
+    fast_peak: float           # signed fast_z post-window peak (sub-typing)
+    slow_peak: float           # signed slow_z post-window peak (sub-typing)
+    n_fast: int
+    n_slow: int
+    null_peak_mean: float
+    null_peak_sd: float
+    sel_z_vs_null: float
+    shuffle_p: float
+    split_half_r: float
+    sufficient: bool
+
+
 def _time_vector(cfg: TFSelectivityConfig) -> np.ndarray:
     p = cfg.pulse
     full0 = p.trace_pre if p.trace_pre is not None else p.pre_window[0]
@@ -97,5 +124,80 @@ def _shared_baseline(
     return mu, sd
 
 
-def compute_unit_selectivity(spike_times, fast_times, slow_times, cfg=None, rng=None):
-    raise NotImplementedError  # full body lands in Task 5
+def _post_metrics(
+    trace: np.ndarray,
+    t_vec: np.ndarray,
+    post_window: Tuple[float, float],
+) -> Tuple[float, float, float, float]:
+    """Signed peak, peak latency (s), signed AUC, and half-width (s) in post."""
+    post_mask = (t_vec >= post_window[0]) & (t_vec < post_window[1])
+    if not np.any(post_mask):
+        return np.nan, np.nan, np.nan, np.nan
+    seg = trace[post_mask]
+    tt = t_vec[post_mask]
+    if not np.any(np.isfinite(seg)):
+        return np.nan, np.nan, np.nan, np.nan
+    i_peak = int(np.nanargmax(np.abs(seg)))
+    peak = float(seg[i_peak])
+    latency = float(tt[i_peak])
+    auc = float(np.trapz(seg, tt))
+    half = abs(peak) / 2.0
+    lo = i_peak
+    while lo > 0 and abs(seg[lo - 1]) >= half:
+        lo -= 1
+    hi = i_peak
+    while hi < seg.size - 1 and abs(seg[hi + 1]) >= half:
+        hi += 1
+    half_width = float(tt[hi] - tt[lo])
+    return peak, latency, auc, half_width
+
+
+def compute_unit_selectivity(spike_times, fast_times, slow_times, cfg=None, rng=None) -> TFUnitSelectivity:
+    if cfg is None:
+        cfg = TFSelectivityConfig()
+    if rng is None:
+        rng = np.random.default_rng(cfg.seed)
+    p = cfg.pulse
+    t_vec = _time_vector(cfg)
+    mat_fast = _per_pulse_rate_matrix(spike_times, fast_times, t_vec, p.dt, p.sigma_ms)
+    mat_slow = _per_pulse_rate_matrix(spike_times, slow_times, t_vec, p.dt, p.sigma_ms)
+    n_fast, n_slow = mat_fast.shape[0], mat_slow.shape[0]
+    sufficient = (n_fast >= cfg.min_pulses_per_label) and (n_slow >= cfg.min_pulses_per_label)
+
+    if n_fast == 0 or n_slow == 0:
+        nan = np.full(t_vec.size, np.nan)
+        return TFUnitSelectivity(
+            cluster_id=-1, t_vec=t_vec, fast_hz=nan.copy(), slow_hz=nan.copy(),
+            selectivity=nan.copy(), fast_z=nan.copy(), slow_z=nan.copy(),
+            baseline_mu=np.nan, baseline_sd=np.nan, sel_peak=np.nan,
+            sel_peak_latency=np.nan, sel_auc=np.nan, sel_half_width=np.nan,
+            fast_peak=np.nan, slow_peak=np.nan, n_fast=n_fast, n_slow=n_slow,
+            null_peak_mean=np.nan, null_peak_sd=np.nan, sel_z_vs_null=np.nan,
+            shuffle_p=np.nan, split_half_r=np.nan, sufficient=False)
+
+    fast_hz = np.nanmean(mat_fast, axis=0)
+    slow_hz = np.nanmean(mat_slow, axis=0)
+    mu_b, sd_b = _shared_baseline(fast_hz, slow_hz, t_vec, p.pre_window, cfg.eps)
+    selectivity = (fast_hz - slow_hz) / sd_b
+    fast_z = (fast_hz - mu_b) / sd_b
+    slow_z = (slow_hz - mu_b) / sd_b
+    sel_peak, sel_lat, sel_auc, sel_hw = _post_metrics(selectivity, t_vec, p.post_window)
+    fast_peak, _, _, _ = _post_metrics(fast_z, t_vec, p.post_window)
+    slow_peak, _, _, _ = _post_metrics(slow_z, t_vec, p.post_window)
+
+    # Label-shuffle null + split-half are filled in Task 6/7.
+    null_peak_mean = np.nan
+    null_peak_sd = np.nan
+    sel_z_vs_null = np.nan
+    shuffle_p = np.nan
+    split_half_r = np.nan
+
+    return TFUnitSelectivity(
+        cluster_id=-1, t_vec=t_vec, fast_hz=fast_hz, slow_hz=slow_hz,
+        selectivity=selectivity, fast_z=fast_z, slow_z=slow_z,
+        baseline_mu=mu_b, baseline_sd=sd_b, sel_peak=sel_peak,
+        sel_peak_latency=sel_lat, sel_auc=sel_auc, sel_half_width=sel_hw,
+        fast_peak=fast_peak, slow_peak=slow_peak, n_fast=n_fast, n_slow=n_slow,
+        null_peak_mean=null_peak_mean, null_peak_sd=null_peak_sd,
+        sel_z_vs_null=sel_z_vs_null, shuffle_p=shuffle_p,
+        split_half_r=split_half_r, sufficient=sufficient)

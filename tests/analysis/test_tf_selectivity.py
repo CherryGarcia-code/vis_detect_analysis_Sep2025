@@ -71,3 +71,78 @@ def test_selectivity_uses_shared_sigma():
     pre = (t_vec >= cfg.pulse.pre_window[0]) & (t_vec < cfg.pulse.pre_window[1])
     assert np.allclose(selectivity[pre], 0.0)
     assert selectivity[post].max() > 0
+
+
+from visdetect.analysis.tf_selectivity import _post_metrics
+
+
+def test_post_metrics_signed_peak_and_latency():
+    cfg = TFSelectivityConfig()
+    t_vec = _time_vector(cfg)
+    trace = np.zeros_like(t_vec)
+    post = (t_vec >= 0.0) & (t_vec < 0.5)
+    # a positive bump centred at ~0.10 s
+    idx = np.argmin(np.abs(t_vec - 0.10))
+    trace[idx - 20: idx + 20] = 5.0
+    peak, lat, auc, hw = _post_metrics(trace, t_vec, cfg.pulse.post_window)
+    assert np.isclose(peak, 5.0)
+    assert abs(lat - 0.10) < 0.03
+    assert auc > 0
+    assert 0.0 < hw < 0.1
+
+
+def _make_selectivity_session(n_trials=40, base_rate=20.0, evoked_rate=140.0,
+                              evoked_dur=0.15, seed=0, inject=True):
+    """Synthetic session yielding BOTH fast and slow pulses.
+
+    Each trial baseline (neutral TF=1) carries alternating fast (TF=2) and slow
+    (TF=0.5) samples at post-stride indices 40..140 spaced 1.0 s apart (>=2.0 s,
+    before the change at +250 s). The 1.0 s spacing keeps a fast pulse's 0.15 s
+    burst tail out of the next slow pulse's [-0.4, 0] pre-window, so there is no
+    common-mode contamination of the baseline. The injected cluster fires a
+    regular base train everywhere plus a high-rate burst after each FAST pulse
+    only -> positive selectivity bump.
+    """
+    base_on = (np.arange(n_trials) * 300.0).astype(float)
+    change_on = base_on + 250.0
+    trials, fast_t, slow_t = [], [], []
+    for k in range(n_trials):
+        bv = np.ones(3 * 200)
+        for j, idx in enumerate(range(40, 160, 20)):
+            val = 2.0 if (j % 2 == 0) else 0.5
+            bv[3 * idx] = val
+            t_abs = base_on[k] + idx * 0.05
+            (fast_t if val == 2.0 else slow_t).append(t_abs)
+        trials.append(Trial(trialoutcome="Hit", reactiontimes={"RT": 0.3},
+                            change_size=2.0, change_time=250.0,
+                            baseline_values=bv, n_seen=None))
+    fast_t = np.array(fast_t); slow_t = np.array(slow_t)
+    t_end = float(change_on[-1] + 10.0)
+    spikes = [np.arange(0.0, t_end, 1.0 / base_rate)]
+    if inject:
+        for tp in fast_t:
+            spikes.append(np.arange(tp + 0.005, tp + 0.005 + evoked_dur, 1.0 / evoked_rate))
+    spikes = np.sort(np.concatenate(spikes))
+    clusters = [Cluster(cluster_id=0, spike_times=spikes, quality="good")]
+    ni = {"Baseline_ON": base_on, "Change_ON": change_on}
+    sess = Session(trials=trials, clusters=clusters, subject="SYN",
+                   session_name="SEL", good_cluster_ids=[0], ni_events=ni)
+    return sess, fast_t, slow_t
+
+
+def test_compute_unit_selectivity_detects_injected_unit():
+    cfg = TFSelectivityConfig(n_shuffles=50)
+    sess, fast_t, slow_t = _make_selectivity_session(inject=True)
+    st = sess.clusters[0].spike_times
+    sel = compute_unit_selectivity(st, fast_t, slow_t, cfg)
+    assert sel.n_fast > 0 and sel.n_slow > 0
+    assert sel.sufficient
+    # injected fast-locked unit -> clearly positive selectivity peak
+    assert sel.sel_peak > 3.0, sel.sel_peak
+    assert 0.0 < sel.sel_peak_latency < 0.25
+    # Common-mode (drift) must cancel in the baseline. Check away from t=0: the
+    # smoothed response legitimately smears ~50 ms back past the pulse (17 ms
+    # sigma), so exclude the last 50 ms of the pre-window -- that smear is a real
+    # effect, not leakage. Cancellation is essentially perfect in the rest.
+    clean = (sel.t_vec >= cfg.pulse.pre_window[0]) & (sel.t_vec < -0.05)
+    assert np.nanmax(np.abs(sel.selectivity[clean])) < 1.0
