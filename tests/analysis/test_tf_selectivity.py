@@ -185,3 +185,24 @@ def test_silent_unit_does_not_crash():
     assert sel.n_fast > 0 and sel.n_slow > 0
     assert np.all(np.isfinite(sel.selectivity))
     assert np.allclose(sel.selectivity, 0.0)
+
+
+from visdetect.analysis.tf_selectivity import unit_features, compute_session_selectivity
+
+EXPECTED_FEATURE_KEYS = {
+    "cluster_id", "sel_peak", "sel_peak_latency", "sel_auc", "sel_half_width",
+    "fast_peak", "slow_peak", "sel_z_vs_null", "shuffle_p", "split_half_r",
+    "n_fast", "n_slow", "baseline_sd", "sufficient",
+}
+
+
+def test_unit_features_keys_and_session_driver():
+    cfg = TFSelectivityConfig(n_shuffles=20, seed=6)
+    sess, fast_t, slow_t = _make_selectivity_session(inject=True, seed=6)
+    sels = compute_session_selectivity(sess, [0], fast_t, slow_t, cfg)
+    assert len(sels) == 1
+    assert sels[0].cluster_id == 0
+    feats = unit_features(sels[0])
+    assert set(feats.keys()) == EXPECTED_FEATURE_KEYS
+    assert feats["cluster_id"] == 0
+    assert feats["n_fast"] > 0 and feats["n_slow"] > 0

@@ -248,3 +248,47 @@ def compute_unit_selectivity(spike_times, fast_times, slow_times, cfg=None, rng=
         null_peak_mean=null_peak_mean, null_peak_sd=null_peak_sd,
         sel_z_vs_null=sel_z_vs_null, shuffle_p=shuffle_p,
         split_half_r=split_half_r, sufficient=sufficient)
+
+
+def unit_features(sel: TFUnitSelectivity) -> Dict[str, float]:
+    """Flat per-unit feature row for the model/cache (all-trials, Phase B)."""
+    return {
+        "cluster_id": int(sel.cluster_id),
+        "sel_peak": sel.sel_peak,
+        "sel_peak_latency": sel.sel_peak_latency,
+        "sel_auc": sel.sel_auc,
+        "sel_half_width": sel.sel_half_width,
+        "fast_peak": sel.fast_peak,
+        "slow_peak": sel.slow_peak,
+        "sel_z_vs_null": sel.sel_z_vs_null,
+        "shuffle_p": sel.shuffle_p,
+        "split_half_r": sel.split_half_r,
+        "n_fast": int(sel.n_fast),
+        "n_slow": int(sel.n_slow),
+        "baseline_sd": sel.baseline_sd,
+        "sufficient": bool(sel.sufficient),
+    }
+
+
+def compute_session_selectivity(
+    session,
+    cluster_ids: List[int],
+    fast_times: np.ndarray,
+    slow_times: np.ndarray,
+    cfg: Optional[TFSelectivityConfig] = None,
+) -> List[TFUnitSelectivity]:
+    """Per-unit selectivity for the given clusters (one shared RNG)."""
+    if cfg is None:
+        cfg = TFSelectivityConfig()
+    rng = np.random.default_rng(cfg.seed)
+    by_id = {int(c.cluster_id): np.asarray(c.spike_times, dtype=float).ravel()
+             for c in session.clusters}
+    out: List[TFUnitSelectivity] = []
+    for cid in cluster_ids:
+        st = by_id.get(int(cid))
+        if st is None:
+            continue
+        sel = compute_unit_selectivity(st, fast_times, slow_times, cfg, rng)
+        sel.cluster_id = int(cid)
+        out.append(sel)
+    return out
