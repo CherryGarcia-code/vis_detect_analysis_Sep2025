@@ -140,7 +140,9 @@ def _post_metrics(
     i_peak = int(np.nanargmax(np.abs(seg)))
     peak = float(seg[i_peak])
     latency = float(tt[i_peak])
-    auc = float(np.trapz(seg, tt))
+    # np.trapezoid (NumPy >= 2.0) supersedes the deprecated np.trapz.
+    _trapz = getattr(np, "trapezoid", np.trapz)
+    auc = float(_trapz(seg, tt))
     half = abs(peak) / 2.0
     lo = i_peak
     while lo > 0 and abs(seg[lo - 1]) >= half:
