@@ -7,8 +7,12 @@ Phase 1 measures these directly from behaviour, split by the mouse's mood
 (Impulsive vs StimSens), across learning. No model fitting here.
 """
 from __future__ import annotations
+import glob
 import os
 import pandas as pd
+
+from visdetect.analysis.behavior import compute_session_performance
+from visdetect.analysis.config import parse_session_date  # DDMMYYYY parser
 
 MAIN_MOODS = ("Impulsive", "StimSens")
 SEPARATE_MOODS = ("Disengaged",)
@@ -30,3 +34,37 @@ def load_state_labels(session_name, subject="BG_046", tag_dir=None):
             df["trial_idx"] = df["trial_idx"].astype(int)
             return df.set_index("trial_idx")[["state_label", "state_confidence"]]
     raise FileNotFoundError(f"No state-tag file for {session_name} under {base}")
+
+
+def enumerate_valid_sessions(subject="BG_046", tag_dir=None, min_total_trials=50):
+    """Tier-1 integrity floor: sessions with a digit-named tag CSV passing a
+    minimum total-trial count, sorted chronologically (DDMMYYYY ids)."""
+    base = os.path.join(tag_dir or _DEFAULT_TAG_DIR, subject)
+    sessions = []
+    for path in glob.glob(os.path.join(base, "*.csv")):
+        sname = os.path.splitext(os.path.basename(path))[0]
+        if not sname.isdigit():               # skip _tag_summary.csv etc.
+            continue
+        n = sum(1 for _ in open(path)) - 1     # rows minus header (Tier-1 floor)
+        if n >= min_total_trials:
+            sessions.append(sname)
+    return sorted(sessions, key=parse_session_date)
+
+
+def session_dprime(session):
+    """Per-session d′ (Tier-2 continuous covariate)."""
+    # NOTE: the key is "d_prime" (NOT "dprime") — confirmed in behavior.py; wrong key = silent NaN
+    return float(compute_session_performance(session).get("d_prime", float("nan")))
+
+
+def assign_comprehension_flags(dprime_by_session, threshold=0.5):
+    """First chronological session with d′ ≥ threshold marks the pre→post
+    boundary; every session from there on is "post". (threshold=0.5 is the
+    low "knows-the-rule" bar, distinct from the QC 0.8 gate; spec §7.)"""
+    ordered = sorted(dprime_by_session, key=parse_session_date)
+    flags, comprehended = {}, False
+    for s in ordered:
+        if (dprime_by_session[s] or 0) >= threshold:
+            comprehended = True
+        flags[s] = "post" if comprehended else "pre"
+    return flags
