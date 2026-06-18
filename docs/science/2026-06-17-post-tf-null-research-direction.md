@@ -1,7 +1,9 @@
 # Research direction after the TF-responsiveness null (June 17, 2026)
 
 **Status:** brainstorm synthesis (BG / Claude discussion). For meetings, presentations, and as the anchor for the next phase of analysis.
-**Context:** the clean-slate TF-responsiveness redesign returned a robust **null** — medial-striatum units in BG_046 *and* BG_031 do not encode the moment-to-moment baseline TF evidence (≈0% responsive across 34 sessions / 2 subjects; the off-by-one fix was *proven* correct, so the old "responders" were artifacts). The neurons are decision/action-dominated. This document is the redirection that follows.
+**Context:** a clean-slate TF-responsiveness redesign returned a robust **null on *single-pulse-triggered (instantaneous)* TF responsiveness** — ≈0% of units cross a per-unit threshold across BG_046 DMS, BG_031 striatum, BG_039 cortex, and BG_038 GPe (the off-by-one fix was *proven* correct, so the old "responders" were artifacts; units are decision/action-dominated, 72–83% change-responsive). This document is the redirection that follows.
+
+> **⚠️ Scope of the null (corrected after the 4-region survey):** the null is specifically on *instantaneous single-pulse* responsiveness, which is a **blunt** readout — it under-detects the *integrated* (~250 ms) and *graded* TF code that Khilkevich/Lohse actually measure (a single ±1 SD/50 ms pulse leaves the 250 ms-integrated evidence only ≈+0.2 SD, ~5× diluted). **Four regions including cortex all at ≈0% ⇒ the floor reflects the metric, not the biology.** So **graded/integrated TF coding is *untested*** (needs a per-neuron GLM with a temporal kernel and/or a population decoder). The pivot below stands on its own merits — the robust signal is decision/motor/state, which *is* the project's question — **not** on a claim that "there is no TF coding."
 
 ---
 
