@@ -252,3 +252,66 @@ def count_vector(trials, spike_times, design: DesignMatrix) -> np.ndarray:
         edges = design.bin_edges[mask]
         y[mask] = bin_spike_counts(spike_times, edges)
     return y
+
+
+# ---------------------------------------------------------------------------
+# Task 6: Ridge-Poisson fit with trial-blocked nested 10-fold CV
+# ---------------------------------------------------------------------------
+
+from sklearn.linear_model import PoissonRegressor
+
+
+@dataclass
+class FitResult:
+    pred: np.ndarray
+    fold_ids: np.ndarray
+    coef_by_fold: List[np.ndarray]
+    best_lambdas: List[float]
+
+
+def make_trial_folds(trial_index: np.ndarray, n_folds: int, seed: int) -> np.ndarray:
+    trials = np.unique(trial_index)
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(trials.size)
+    fold_of_trial = {int(trials[perm[k]]): k % n_folds for k in range(trials.size)}
+    return np.array([fold_of_trial[int(t)] for t in trial_index])
+
+
+def _fit_one(Xtr, ytr, lam):
+    m = PoissonRegressor(alpha=lam, fit_intercept=True, max_iter=300, tol=1e-6)
+    m.fit(Xtr, ytr)
+    return m
+
+
+def fit_poisson_cv(X, y, cfg: TFGLMConfig, fold_ids=None) -> FitResult:
+    X = np.asarray(X, float); y = np.asarray(y, float)
+    n = y.size
+    if fold_ids is None:
+        fold_ids = np.repeat(np.arange(cfg.n_folds), int(np.ceil(n / cfg.n_folds)))[:n]
+    pred = np.full(n, np.nan)
+    coefs, best_lams = [], []
+    for f in range(cfg.n_folds):
+        te = fold_ids == f
+        tr = ~te
+        if te.sum() == 0 or tr.sum() == 0:
+            continue
+        # inner CV over lambda on the training rows (split by inner folds)
+        inner = fold_ids[tr]
+        best_lam, best_score = cfg.lambdas[0], -np.inf
+        for lam in cfg.lambdas:
+            scores = []
+            for g in np.unique(inner):
+                itr = inner != g; ite = inner == g
+                if ite.sum() == 0 or itr.sum() == 0:
+                    continue
+                m = _fit_one(X[tr][itr], y[tr][itr], lam)
+                mu = m.predict(X[tr][ite])
+                # Poisson held-out log-likelihood (up to const)
+                scores.append(np.sum(y[tr][ite] * np.log(mu + 1e-9) - mu))
+            s = np.mean(scores) if scores else -np.inf
+            if s > best_score:
+                best_score, best_lam = s, lam
+        m = _fit_one(X[tr], y[tr], best_lam)
+        pred[te] = m.predict(X[te])
+        coefs.append(m.coef_.copy()); best_lams.append(best_lam)
+    return FitResult(pred=pred, fold_ids=fold_ids, coef_by_fold=coefs, best_lambdas=best_lams)
