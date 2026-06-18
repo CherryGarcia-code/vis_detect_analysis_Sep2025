@@ -10,7 +10,7 @@ matplotlib.use("Agg"); import matplotlib.pyplot as plt
 from visdetect.suite.plotting import setup_style          # styling only
 from visdetect.analysis.behavior import compute_session_performance
 from visdetect.suite.loader import load_session
-from visdetect.analysis.config import ROOT, SUBJECT
+from visdetect.analysis.config import ROOT, SUBJECT, parse_session_date
 setup_style()
 FIG_DIR = os.path.join(ROOT, "FIGURES", "decision_latents", SUBJECT); os.makedirs(FIG_DIR, exist_ok=True)
 CACHE_DIR = os.path.join(ROOT, "data", "cache", "decision_latents"); os.makedirs(CACHE_DIR, exist_ok=True)
@@ -29,7 +29,10 @@ for f in sorted(glob.glob("data/cache/state_tags/BG_046/*.csv")):
                  **{m: props.get(m, 0.0) for m in
                     ["Impulsive", "StimSens", "Disengaged", "Abort"]}})
     del sess; gc.collect()
-tab = pd.DataFrame(rows).sort_values("session")
+# Session ids are DDMMYYYY: a plain string sort is by day-of-month, NOT chronological.
+# Sort by the canonical (year, month, day) key so the x-axis truly runs naive -> expert.
+tab = pd.DataFrame(rows)
+tab = tab.sort_values("session", key=lambda s: s.map(parse_session_date)).reset_index(drop=True)
 
 fig, axes = plt.subplots(1, 2, figsize=(13, 4))
 axes[0].scatter(tab["dprime"], tab["mean_conf"])
