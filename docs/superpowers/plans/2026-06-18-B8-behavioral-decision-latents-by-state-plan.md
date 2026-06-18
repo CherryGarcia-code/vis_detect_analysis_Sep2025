@@ -4,7 +4,7 @@
 
 **Goal:** Build the *descriptive* layer of B8 — per-(session×mood) decision-dial scores (sharpness/itchiness/timing) over the learning axis, a clean censored survival-hazard, and a cached per-trial descriptive latent table + presentation-ready figures — so the science question ("which dial does learning turn / which dial do states load on") is answered on robust ground before any generative model.
 
-**Architecture:** A new behavior-only library module `visdetect.analysis.decision_latents` holds all reusable logic (state-label accessor, two-tier session selection, per-trial table builder, censored hazard, the three dial-score functions, table assembler). A thin `analysis_suite` script orchestrates it into figures + a cached table. Everything reuses `visdetect.analysis.behavior` (SDT/psychometrics) and `visdetect.analysis.ddm.build_trial_evidence` (per-trial evidence trace); nothing is duplicated. TDD throughout with synthetic fixtures.
+**Architecture:** A new behavior-only library module `visdetect.analysis.decision_latents` holds all reusable logic (state-label accessor, two-tier session selection, per-trial table builder, censored hazard, the three dial-score functions, table assembler). A thin script under `scripts/analysis/decision_latents/` orchestrates it into figures (top-level `FIGURES/`) + a cached table (`data/cache/`). Everything reuses `visdetect.analysis.behavior` (SDT/psychometrics) and `visdetect.analysis.ddm.build_trial_evidence` (per-trial evidence trace); nothing is duplicated. TDD throughout with synthetic fixtures.
 
 **Tech Stack:** Python 3.10 (`.venv`, invoke via `py`), numpy, pandas, scipy, matplotlib (Agg), pytest. No new dependencies (pyddm already present from B0 but **not used in Phase 1**).
 
@@ -24,7 +24,8 @@ _Every task implicitly includes these (copied from the spec/CLAUDE.md):_
 - **State source = the new labeler tags** at `data/cache/state_tags/BG_046/{session}.csv`, behind one accessor. **Main fits: Impulsive vs StimSens. Disengaged: reported separately. Abort: excluded** (labeler-state `Abort` ≠ trial-outcome `abort`; both dropped).
 - **Sessions: two-tier filter, no d′ gate.** Tier 1 = data-integrity floor (valid task recording + min total trials + tag file exists). Tier 2 = d′ as a continuous covariate + `comprehension_flag` as a label. Keep the `load_staging_manifest(qc_only=True)` subset only for a robustness comparison.
 - **Trial typing by `change_size`** (go > 1.0; catch ≈ 1.0). `fa` label = anticipatory lick ≠ SDT-FA (catch-trial `hit`).
-- **Every analysis step saves a presentation-ready figure** via `visdetect.suite.plotting.save_figure(fig, name, "01_behavior")` after `setup_style()`, with a **plain-language title + caption** (`memory/feedback_plain_language_and_save_figures`). Glossary used in captions: *sharpness = how clearly the mouse tells the change happened; itchiness = how trigger-happy it is before evidence; timing = how strongly it expects the change now.*
+- **Repo structure (new convention, `memory/feedback_repo_structure_scripts_figures`):** scripts live in **`scripts/analysis/decision_latents/`** (NOT `analysis_suite/`); figures in top-level **`FIGURES/decision_latents/BG_046/`**; caches in **`data/cache/decision_latents/`**. Library code stays in `src/visdetect/`. **Do not use `suite.plotting.save_figure`** (it writes to `analysis_suite/figures`); reuse `suite.plotting.setup_style` for *styling only* and save with the local `save_fig()` helper defined in Task 1.9.
+- **Every analysis step saves a presentation-ready figure** to `FIGURES/decision_latents/BG_046/` after `setup_style()`, with a **plain-language title + caption** (`memory/feedback_plain_language_and_save_figures`). Glossary used in captions: *sharpness = how clearly the mouse tells the change happened; itchiness = how trigger-happy it is before evidence; timing = how strongly it expects the change now.*
 - **Memory hygiene:** `del sess; gc.collect()` after each session in loops.
 - **TDD + frequent commits.** Each task ends green and committed. Commit messages end with:
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
@@ -36,9 +37,10 @@ _Every task implicitly includes these (copied from the spec/CLAUDE.md):_
 - **Create** `src/visdetect/analysis/decision_latents.py` — all Phase-1 library logic. One responsibility: turn raw behavior + state tags into per-(session×mood) dial scores and a per-trial descriptive table. Functions (signatures locked in Task interfaces): `load_state_labels`, `MAIN_MOODS`/`SEPARATE_MOODS`/`EXCLUDED_MOODS`, `enumerate_valid_sessions`, `session_dprime`, `assign_comprehension_flags`, `build_trial_table`, `censored_hazard`, `sharpness_scores`, `itchiness_scores`, `timing_scores`, `descriptive_cell_table`, `descriptive_latent_table`.
 - **Create** `tests/analysis/test_decision_latents.py` — unit tests (synthetic fixtures; no real data).
 - **Create** `tests/analysis/conftest.py` *(if absent)* — shared synthetic fixtures (a tagged synthetic session).
-- **Create** `analysis_suite/01_behavior/i_decision_latents_by_state.py` — orchestration: build the all-sessions table (cached), emit figures F1–F5 + F-summary, write the descriptive latent table + stats CSV.
+- **Create** `scripts/analysis/decision_latents/run_decision_latents_by_state.py` — orchestration: build the all-sessions table (cached), emit figures F1–F5 + F-summary, write the descriptive latent table + stats CSV.
+- **Create** `scripts/analysis/decision_latents/_tf_sampling_check.py`, `scripts/analysis/decision_latents/_label_reliability.py` — Phase-0 diagnostics.
 - **Modify** `docs/science/QUESTION_INDEX.md` — bump B8 status `spec-draft` → `plan-draft` and add the plan link (final task).
-- **Outputs (gitignored):** `analysis_suite/cache/decision_latents_by_state.csv` (per-trial table), `analysis_suite/cache/decision_latents_cell_scores.csv`, `figures/01_behavior/fig_b8_*.png`, `figures/01_behavior/decision_latents_stats.csv`.
+- **Outputs (gitignored):** `data/cache/decision_latents/decision_latents_by_state.csv` (per-trial table), `data/cache/decision_latents/decision_latents_cell_scores.csv`; figures `FIGURES/decision_latents/BG_046/fig_b8_*.png`; stats `FIGURES/decision_latents/BG_046/decision_latents_stats.csv`.
 
 ---
 
@@ -67,7 +69,7 @@ Run (Git Bash; junctions avoid duplicating ~GBs of pkls):
 WT="$(pwd)"; PRIMARY="E:/python_analysis/git_repos/vis_detect_analysis_Sep2025"
 mkdir -p "$WT/data/pkls"
 cmd //c mklink /J "$(cygpath -w "$WT/data/pkls/BG_046")" "$(cygpath -w "$PRIMARY/data/pkls/BG_046")"
-# state tags: COPY (Task 0.2 writes new ones; keep them isolated in the worktree)
+# state tags: COPY the FULL set (the user tags all sessions externally in primary, see below)
 mkdir -p "$WT/data/cache/state_tags"
 cp -r "$PRIMARY/data/cache/state_tags/BG_046" "$WT/data/cache/state_tags/BG_046"
 cp "$PRIMARY/data/BG_046_staging_manifest.csv" "$WT/data/" 2>/dev/null || true
@@ -88,14 +90,14 @@ Expected: prints a positive trial count and a tag-file count (~27). If `load_ses
 
 - [ ] **Step 4: Record the environment recipe**
 
-Append a short `## Worktree run recipe` block (the two commands above) to the top of `analysis_suite/01_behavior/i_decision_latents_by_state.py`'s module docstring later (Task 1.9). No commit yet (no tracked change).
+Append a short `## Worktree run recipe` block (the two commands above) to the top of `scripts/analysis/decision_latents/run_decision_latents_by_state.py`'s module docstring later (Task 1.9). No commit yet (no tracked change).
 
 ---
 
 ### Task 0.1: Verify the 50 ms TF update period (resolve the `BASELINE_STRIDE` doubt)
 
 **Files:**
-- Create: `analysis_suite/01_behavior/_b8_tf_sampling_check.py` (diagnostic; saves a figure).
+- Create: `scripts/analysis/decision_latents/_tf_sampling_check.py` (diagnostic; saves a figure).
 
 **Interfaces:**
 - Produces: an empirical answer "what is the real per-sample period of `trial.baseline_values`?" → confirms `dt = 0.05` and whether striding is needed (it must **not** be, per `memory/tf_fluctuation_50ms_vs_constant`).
@@ -113,8 +115,11 @@ silently sub-sample every 3rd value.
 import os, sys, numpy as np, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 from visdetect.suite.loader import load_staging_manifest, load_session
-from visdetect.suite.plotting import setup_style, save_figure
+from visdetect.suite.plotting import setup_style          # styling only
+from visdetect.analysis.config import ROOT, SUBJECT
 setup_style()
+FIG_DIR = os.path.join(ROOT, "FIGURES", "decision_latents", SUBJECT)
+os.makedirs(FIG_DIR, exist_ok=True)
 
 rows = []
 man = load_staging_manifest(qc_only=True)
@@ -137,19 +142,19 @@ ax.axvline(50, color="r", ls="--", label="50 ms (expected)")
 ax.set_xlabel("implied TF sample period (ms)"); ax.set_ylabel("trials")
 ax.set_title("B8 prereq — TF baseline sample period\n(should peak at 50 ms)")
 ax.legend(frameon=False)
-save_figure(fig, "fig_b8_prereq_tf_sample_period", "01_behavior")
+fig.savefig(os.path.join(FIG_DIR, "fig_b8_prereq_tf_sample_period.png"), dpi=300, bbox_inches="tight")
 print(f"median implied period: {np.median(periods)*1000:.1f} ms  (n={periods.size})")
 ```
 
 - [ ] **Step 2: Run it and read the result**
 
-Run: `PYTHONPATH="$(pwd)/src" py analysis_suite/01_behavior/_b8_tf_sampling_check.py`
+Run: `PYTHONPATH="$(pwd)/src" py scripts/analysis/decision_latents/_tf_sampling_check.py`
 Expected: median implied period ≈ **50 ms**; figure peak at 50 ms. **Decision rule:** if ≈50 ms → use `dt=0.05` with **no striding** (one `baseline_values` sample per 50 ms bin). If materially different, STOP and reconcile with `n_seen` semantics before continuing (record the finding in the plan).
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add analysis_suite/01_behavior/_b8_tf_sampling_check.py
+git add scripts/analysis/decision_latents/_tf_sampling_check.py
 git commit -m "feat(b8): TF baseline sample-period diagnostic (confirm 50 ms grid)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -157,24 +162,24 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-### Task 0.2: Extend the state labeler to the ~18 untagged sessions + reliability check
+### Task 0.2: Label-reliability check (tagging done externally — see Prerequisite)
+
+**Prerequisite (done by the user in the *primary* repo, NOT a step in this plan):** all BG_046 sessions are state-tagged via `tag_sessions.py` with the full session list passed explicitly to bypass the QC-manifest default:
+```bash
+py scripts/state_labeling/tag_sessions.py \
+  --sessions $(py -c "from visdetect.suite.loader import list_pkl_sessions; print(' '.join(list_pkl_sessions()))") \
+  --figures --fig-dir FIGURES/state_labeler/BG_046
+```
+This task only **verifies** coverage and sanity-checks the out-of-distribution naive-session labels (spec §7).
 
 **Files:**
-- Create: `analysis_suite/01_behavior/_b8_label_coverage.py` (runs the existing labeler over untagged sessions; saves a reliability figure).
+- Create: `scripts/analysis/decision_latents/_label_reliability.py` (saves a reliability figure + coverage CSV).
 
 **Interfaces:**
-- Consumes: existing labeler in `scripts/state_labeling/` + `visdetect.analysis.state_labeling` / `state_provider`.
-- Produces: state-tag CSVs for the untagged sessions in the worktree's `data/cache/state_tags/BG_046/`, and a reliability figure.
+- Consumes: the state-tag CSVs in `data/cache/state_tags/BG_046/`; `visdetect.analysis.behavior.compute_session_performance`.
+- Produces: a reliability figure (`FIGURES/decision_latents/BG_046/`) + `data/cache/decision_latents/b8_label_coverage.csv`.
 
-- [ ] **Step 1: Identify untagged sessions and run the trained labeler on them**
-
-Inspect `scripts/state_labeling/run_state_labeler.py` for the exact entry point/CLI, then label the untagged sessions. Plain English: the labeler is already trained; we just apply it to the early sessions it never saw. Example (adapt to the real CLI found):
-```bash
-PYTHONPATH="$(pwd)/src" py scripts/state_labeling/run_state_labeler.py --subject BG_046 --all-untagged
-```
-Expected: new `{session}.csv` files appear in `data/cache/state_tags/BG_046/` so coverage reaches ~45.
-
-- [ ] **Step 2: Write the reliability check (mood proportions + confidence per session)**
+- [ ] **Step 1: Write the reliability check (mood proportions + confidence per session)**
 
 ```python
 """B8 prereq: sanity-check state labels, esp. on newly-labeled naive sessions.
@@ -186,10 +191,13 @@ labeler is. Low confidence on the new sessions = treat their moods as shaky.
 """
 import os, glob, numpy as np, pandas as pd, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
-from visdetect.suite.plotting import setup_style, save_figure
+from visdetect.suite.plotting import setup_style          # styling only
 from visdetect.analysis.behavior import compute_session_performance
 from visdetect.suite.loader import load_session
+from visdetect.analysis.config import ROOT, SUBJECT
 setup_style()
+FIG_DIR = os.path.join(ROOT, "FIGURES", "decision_latents", SUBJECT); os.makedirs(FIG_DIR, exist_ok=True)
+CACHE_DIR = os.path.join(ROOT, "data", "cache", "decision_latents"); os.makedirs(CACHE_DIR, exist_ok=True)
 
 rows = []
 for f in sorted(glob.glob("data/cache/state_tags/BG_046/*.csv")):
@@ -216,21 +224,21 @@ for m, c in [("Impulsive", "#d62728"), ("StimSens", "#1f77b4"),
     bottom += tab[m].values
 axes[1].set_xlabel("session (chronological)"); axes[1].set_ylabel("mood fraction")
 axes[1].set_title("Mood composition per session"); axes[1].legend(frameon=False, fontsize=7)
-save_figure(fig, "fig_b8_prereq_label_reliability", "01_behavior")
-tab.to_csv("analysis_suite/cache/b8_label_coverage.csv", index=False)
+fig.savefig(os.path.join(FIG_DIR, "fig_b8_prereq_label_reliability.png"), dpi=300, bbox_inches="tight")
+tab.to_csv(os.path.join(CACHE_DIR, "b8_label_coverage.csv"), index=False)
 print(tab.to_string(index=False))
 ```
 
-- [ ] **Step 3: Run it; eyeball the reliability**
+- [ ] **Step 2: Run it; eyeball the reliability**
 
-Run: `PYTHONPATH="$(pwd)/src" py analysis_suite/01_behavior/_b8_label_coverage.py`
+Run: `PYTHONPATH="$(pwd)/src" py scripts/analysis/decision_latents/_label_reliability.py`
 Expected: coverage table for ~45 sessions + figure. **Gate:** if newly-labeled naive sessions show pathological label confidence (e.g. mean_conf collapses, or 100% one mood with low confidence), note it — Phase 1 will then treat those sessions at coarse (no-mood) level (spec §7). This is a judgment checkpoint, not an automated pass/fail.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add analysis_suite/01_behavior/_b8_label_coverage.py
-git commit -m "feat(b8): label-coverage extension + reliability check on naive sessions
+git add scripts/analysis/decision_latents/_label_reliability.py
+git commit -m "feat(b8): label-reliability check on (out-of-distribution) naive sessions
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ```
@@ -927,11 +935,11 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ### Task 1.9: Orchestration script — figures F1–F5 + summary, cached table, stats
 
 **Files:**
-- Create: `analysis_suite/01_behavior/i_decision_latents_by_state.py`
+- Create: `scripts/analysis/decision_latents/run_decision_latents_by_state.py`
 
 **Interfaces:**
-- Consumes: everything in `decision_latents`; `visdetect.suite.loader.load_session`; `visdetect.suite.plotting.{setup_style,save_figure}`.
-- Produces: `analysis_suite/cache/decision_latents_by_state.csv`, `analysis_suite/cache/decision_latents_cell_scores.csv`, `figures/01_behavior/fig_b8_*.png`, `figures/01_behavior/decision_latents_stats.csv`.
+- Consumes: everything in `decision_latents`; `visdetect.suite.loader.load_session`; `visdetect.suite.plotting.setup_style` (styling only); `visdetect.analysis.config.{ROOT,SUBJECT}`.
+- Produces: `data/cache/decision_latents/decision_latents_by_state.csv`, `data/cache/decision_latents/decision_latents_cell_scores.csv`, `FIGURES/decision_latents/BG_046/fig_b8_*.png`, `FIGURES/decision_latents/BG_046/decision_latents_stats.csv`.
 
 - [ ] **Step 1: Write the builder (cached) and run it on tagged sessions**
 
@@ -944,15 +952,23 @@ change now) — split by mood (Impulsive vs StimSens), across learning, and
 saves them as figures + a per-trial table.
 
 Worktree run recipe:
-  WT=$(pwd); PYTHONPATH="$WT/src" py analysis_suite/01_behavior/i_decision_latents_by_state.py
+  WT=$(pwd); PYTHONPATH="$WT/src" py scripts/analysis/decision_latents/run_decision_latents_by_state.py
 """
 import os, sys, gc, numpy as np, pandas as pd, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 from visdetect.suite.loader import load_session
-from visdetect.suite.plotting import setup_style, save_figure
+from visdetect.suite.plotting import setup_style          # styling only
+from visdetect.analysis.config import ROOT, SUBJECT
 from visdetect.analysis import decision_latents as dl
 setup_style()
-CACHE = "analysis_suite/cache/decision_latents_by_state.csv"
+FIG_DIR = os.path.join(ROOT, "FIGURES", "decision_latents", SUBJECT)
+CACHE_DIR = os.path.join(ROOT, "data", "cache", "decision_latents")
+os.makedirs(FIG_DIR, exist_ok=True); os.makedirs(CACHE_DIR, exist_ok=True)
+CACHE = os.path.join(CACHE_DIR, "decision_latents_by_state.csv")
+
+def save_fig(fig, name):                       # writes to top-level FIGURES/, not analysis_suite/
+    p = os.path.join(FIG_DIR, f"{name}.png"); fig.savefig(p, dpi=300, bbox_inches="tight")
+    plt.close(fig); return p
 
 def build(force=False):
     if os.path.exists(CACHE) and not force:
@@ -972,19 +988,18 @@ def build(force=False):
         tab["session_dprime"] = dprime[sname]; tab["comprehension_flag"] = flags[sname]
         frames.append(tab)
     all_trials = pd.concat(frames, ignore_index=True)
-    os.makedirs("analysis_suite/cache", exist_ok=True)
     all_trials.to_csv(CACHE, index=False)
     return all_trials
 ```
 
 - [ ] **Step 2: Run the build; sanity-check shape**
 
-Run: `PYTHONPATH="$(pwd)/src" py -c "import sys; sys.argv=['x']; import importlib.util as u; m=u.spec_from_file_location('b8','analysis_suite/01_behavior/i_decision_latents_by_state.py'); mod=u.module_from_spec(m); m.loader.exec_module(mod); df=mod.build(force=True); print(df.shape, df['state_label'].value_counts().to_dict())"`
+Run: `PYTHONPATH="$(pwd)/src" py -c "import sys; sys.argv=['x']; import importlib.util as u; m=u.spec_from_file_location('b8','scripts/analysis/decision_latents/run_decision_latents_by_state.py'); mod=u.module_from_spec(m); m.loader.exec_module(mod); df=mod.build(force=True); print(df.shape, df['state_label'].value_counts().to_dict())"`
 Expected: a few-thousand-row table; `state_label` counts show Impulsive/StimSens/Disengaged, **no Abort**.
 
 - [ ] **Step 3: Add the figure functions (F1–F5 + summary) and `__main__`**
 
-Append plain-language-captioned panels. Each uses `save_figure(fig, name, "01_behavior")`:
+Append plain-language-captioned panels. Each uses the local `save_fig(fig, name)` helper (writes to `FIGURES/decision_latents/BG_046/`):
 ```python
 def fig_sharpness(cells):                 # F1
     fig, ax = plt.subplots(1, 2, figsize=(12, 4))
@@ -1000,7 +1015,7 @@ def fig_sharpness(cells):                 # F1
                    cells.sort_values("session_dprime")[rt_cols].mean(axis=1), "o-")
         ax[1].set_title("F2  RT variability shrinks with learning")
         ax[1].set_xlabel("session d′"); ax[1].set_ylabel("mean RT CV (across change sizes)")
-    return save_figure(fig, "fig_b8_F1_F2_sharpness", "01_behavior")
+    return save_fig(fig, "fig_b8_F1_F2_sharpness")
 
 def fig_itchiness(cells):                 # F3
     fig, ax = plt.subplots(figsize=(7, 4))
@@ -1010,7 +1025,7 @@ def fig_itchiness(cells):                 # F3
     ax.set_xlabel("criterion c  (low = trigger-happy)"); ax.set_ylabel("FA rate")
     ax.set_title("F3  Itchiness separates the moods\n(Impulsive = liberal criterion, more early licks)")
     ax.legend(frameon=False)
-    return save_figure(fig, "fig_b8_F3_itchiness", "01_behavior")
+    return save_fig(fig, "fig_b8_F3_itchiness")
 
 def fig_timing(all_trials):               # F4
     fig, ax = plt.subplots(figsize=(8, 4))
@@ -1021,7 +1036,7 @@ def fig_timing(all_trials):               # F4
     ax.set_xlim(0, 12); ax.set_xlabel("time from baseline on (s)"); ax.set_ylabel("hazard (norm.)")
     ax.set_title("F4  Temporal expectation\n(does licking line up with when the change actually comes?)")
     ax.legend(frameon=False)
-    return save_figure(fig, "fig_b8_F4_timing", "01_behavior")
+    return save_fig(fig, "fig_b8_F4_timing")
 
 def fig_bias_not_gain(cells):             # F5
     fig, ax = plt.subplots(figsize=(7, 4))
@@ -1031,33 +1046,32 @@ def fig_bias_not_gain(cells):             # F5
     ax.set_xlabel("psychometric slope"); ax.set_ylabel("d′ (true sensitivity)")
     ax.set_title("F5  Bias-not-gain test\n(Impulsive looks eager but d′ should NOT be higher)")
     ax.legend(frameon=False)
-    return save_figure(fig, "fig_b8_F5_bias_not_gain", "01_behavior")
+    return save_fig(fig, "fig_b8_F5_bias_not_gain")
 
 if __name__ == "__main__":
     force = "--force" in sys.argv
     all_trials = build(force=force)
     cells = dl.descriptive_cell_table(all_trials)
     lat = dl.descriptive_latent_table(all_trials, cells)
-    os.makedirs("analysis_suite/cache", exist_ok=True)
-    cells.to_csv("analysis_suite/cache/decision_latents_cell_scores.csv", index=False)
+    cells.to_csv(os.path.join(CACHE_DIR, "decision_latents_cell_scores.csv"), index=False)
     lat.to_csv(CACHE, index=False)
     fig_sharpness(cells); fig_itchiness(cells); fig_timing(all_trials); fig_bias_not_gain(cells)
     # F-summary: which dial moves with learning / which separates moods
     summ = cells.groupby("state_label")[["psy_slope", "dprime", "criterion_c",
                                           "fa_rate", "lick_hazard_peak_time"]].mean()
-    summ.to_csv("figures/01_behavior/decision_latents_stats.csv")
+    summ.to_csv(os.path.join(FIG_DIR, "decision_latents_stats.csv"))
     print(summ)
 ```
 
 - [ ] **Step 4: Run end-to-end; eyeball the figures**
 
-Run: `PYTHONPATH="$(pwd)/src" py analysis_suite/01_behavior/i_decision_latents_by_state.py --force`
-Expected: writes `fig_b8_F1_F2_sharpness.png`, `fig_b8_F3_itchiness.png`, `fig_b8_F4_timing.png`, `fig_b8_F5_bias_not_gain.png` to `figures/01_behavior/`, plus the two cache CSVs and the stats CSV; prints the summary table. **Eyeball:** F5 — Impulsive should not show higher d′ than StimSens (bias-not-gain). Record observations (these are presentation figures).
+Run: `PYTHONPATH="$(pwd)/src" py scripts/analysis/decision_latents/run_decision_latents_by_state.py --force`
+Expected: writes `fig_b8_F1_F2_sharpness.png`, `fig_b8_F3_itchiness.png`, `fig_b8_F4_timing.png`, `fig_b8_F5_bias_not_gain.png` + `decision_latents_stats.csv` to `FIGURES/decision_latents/BG_046/`, plus the two cache CSVs in `data/cache/decision_latents/`; prints the summary table. **Eyeball:** F5 — Impulsive should not show higher d′ than StimSens (bias-not-gain). Record observations (these are presentation figures).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add analysis_suite/01_behavior/i_decision_latents_by_state.py
+git add scripts/analysis/decision_latents/run_decision_latents_by_state.py
 git commit -m "feat(b8): Step-1 orchestration script (figures F1-F5 + table + stats)
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -1095,6 +1109,8 @@ To be written as `docs/superpowers/plans/2026-06-…-B8-phase2-generative-latent
 
 **Spec coverage (Phase-1 scope):** §0 working-style → Global Constraints + figure-per-step (Tasks 0.1–1.9). §3 two-tier sessions + labeling prerequisite → Tasks 0.0, 0.2, 1.2. §3 state accessor (Abort/Disengaged, zfill) → Tasks 1.1, 1.3. §4 Step 1 three dials → Tasks 1.5–1.7. §4 two hazards (censored) → Task 1.4, 1.7. §5 latent-table schema (Step-1 columns + comprehension_flag + trial_in_session) → Tasks 1.3, 1.8. §7 confounds (within-session position, label reliability, comprehension split) → Tasks 0.2, 1.2, 1.3. §8 hazard reimplementation (not the old script) → Task 1.4. §10 deliverables (module/tests/script/figures/index) → all tasks. **Step 2 (§4 Step-2, §6 anchoring, §9 recovery) is intentionally deferred to the Phase-2 plan** — flagged above. TF-sampling resolve-at-planning (§11) → Task 0.1.
 
-**Placeholder scan:** No "TBD/handle edge cases/similar to Task N". Each code step shows real code; each run step shows the command + expected output. The one adapt-to-reality step (Task 0.2 Step 1, the labeler CLI) explicitly says to read `run_state_labeler.py` for the entry point — flagged, not hand-waved.
+**Placeholder scan:** No "TBD/handle edge cases/similar to Task N". Each code step shows real code; each run step shows the command + expected output. The external tagging prerequisite (Task 0.2) is given as a verbatim `tag_sessions.py` command, not a hand-wave.
+
+**Structure check (post-revision):** no task writes to `analysis_suite/` — scripts under `scripts/analysis/decision_latents/`, figures under `FIGURES/decision_latents/BG_046/`, caches under `data/cache/decision_latents/`; `save_figure` replaced by the local `save_fig` helper; `setup_style` reused for styling only (`memory/feedback_repo_structure_scripts_figures`).
 
 **Type consistency:** `load_state_labels` → DataFrame indexed by `trial_idx` with `state_label`/`state_confidence` (used identically in 1.3). `build_trial_table` columns consumed unchanged by 1.5–1.8 (`change_size`, `lick`, `outcome`, `decision_time`, `change_time_planned`, `change_reached`, `state_label`). `censored_hazard` 3-tuple signature reused by 1.6/1.7. `descriptive_cell_table` keys (`session_name`,`state_label`) match the merge in `descriptive_latent_table`. Score-dict keys (`psy_slope`,`dprime`,`criterion_c`,`fa_rate`,`lick_hazard_peak_time`) are produced in 1.5–1.7 and consumed in 1.8/1.9.

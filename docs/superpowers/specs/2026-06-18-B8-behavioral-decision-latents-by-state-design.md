@@ -16,7 +16,7 @@
 
 Two standing requirements for this work (and a general user preference, [[feedback-plain-language-and-save-figures]]):
 - **Explain in plain language alongside the formal terms.** Keep the jargon for rigor, but every concept — in this spec, the plan, code docstrings, and figure captions — also gets a one-line plain-English gloss (e.g. *drift / "sharpness" = how clearly the mouse can tell the change happened; criterion / start-point / "itchiness" = how trigger-happy it is before real evidence; urgency / "timing" = how strongly it expects the change right now*). The author should be able to read any output and explain it in a talk without decoding notation.
-- **Every analysis step saves an inspectable figure.** No step is internal-only: each computation (the three descriptive dials, the two hazards, RT-variability, the bias-not-gain test, parameter recovery, latent distributions) writes a **labelled, presentation-ready PNG via `save_figure()` with a plain-language title + caption**, so results can be eyeballed and dropped straight into presentations. Figures are enumerated per-step in §10.
+- **Every analysis step saves an inspectable figure.** No step is internal-only: each computation (the three descriptive dials, the two hazards, RT-variability, the bias-not-gain test, parameter recovery, latent distributions) writes a **labelled, presentation-ready PNG with a plain-language title + caption**, saved to top-level **`FIGURES/decision_latents/BG_046/`** (the repo's library figure convention, **not** `analysis_suite/`; see §10 and `memory/feedback_repo_structure_scripts_figures`), so results can be eyeballed and dropped straight into presentations. Figures are enumerated per-step in §10.
 
 ## 1. Scientific question & hypothesis
 
@@ -119,7 +119,7 @@ evidence_integral_at_decision, expected_change_time, lick_minus_expected,
 sharpness_psy_slope, rt_cv_by_cs, criterion_c, fa_rate_cell, hazard_peak_cell
 ```
 
-Cached to `analysis_suite/cache/decision_latents_by_state.csv` (the regressor set the neural phase consumes).
+Cached to `data/cache/decision_latents/decision_latents_by_state.csv` (the regressor set the neural phase consumes).
 
 ## 6. Anchoring strategy (expert-first, backtrack) — §6 step 2 of the direction
 
@@ -157,11 +157,11 @@ The per-session *descriptive* computation is order-independent, but the expert a
 
 - **Library:** `src/visdetect/analysis/decision_latents.py` — Step-1 axis computations (reusing `behavior.py`), the censored change-onset + lick hazards, the constrained regression-accumulator + recovery, the latent-table assembler, and the pluggable new-labeler state accessor. Imports reusable helpers from `ddm.py`; does **not** mutate B0.
 - **Tests:** `tests/analysis/test_decision_latents.py` — long-baseline parameter recovery (primary); lick-hazard survival correctness (censoring, `1−Π(1−hₜ)`); descriptive-readout sanity; regression cross-check vs the old GLM's temporal hazard.
-- **Script:** `analysis_suite/01_behavior/i_decision_latents_by_state.py` — stats CSV + cached latent table (§5) + a **set of saved, presentation-ready figures** (every step writes one; plain-language title + caption, §0):
+- **Script:** `scripts/analysis/decision_latents/run_decision_latents_by_state.py` — stats CSV + cached latent table (§5) + a **set of saved, presentation-ready figures** (every step writes one; plain-language title + caption, §0):
   - **Step 1:** *F1 Sharpness over learning* (psychometric curves by mood & learning, d′ trajectory, large-changes-first); *F2 RT & its variability* (Hit-RT mean + CV per change-size over learning); *F3 Itchiness over learning* (criterion *c*, FA-rate, baseline hazard, by mood); *F4 Temporal expectation* (lick-hazard vs censored change-onset hazard, migration over learning; FA- & hit-time distributions); *F5 Bias-not-gain test* (Impulsive vs StimSens psychometrics — apparent hypersensitivity, d′ flat, no leftward shift); *F-summary which-dial-moves / which-dial-separates-moods table*.
   - **Step 2:** *F6 parameter recovery* (recovered vs true, long-baseline regime); *F7 per-trial latent distributions* (the three dials by mood & learning); *F8 construct validity* (generative latents vs Step-1 descriptive scores).
 - **Index:** add the **B8** row to `docs/science/QUESTION_INDEX.md` (status `spec-draft`).
-- Conventions: constants from `constants.py`; **iterate all state-tagged sessions** (not `load_staging_manifest` — kept only for the robustness subset); new-labeler state accessor; `setup_style()`/`save_figure()` for every figure; `del sess; gc.collect()` in session loops; canonical `visdetect.*` imports.
+- Conventions: constants from `constants.py`; **iterate all state-tagged sessions** (not `load_staging_manifest` — kept only for the robustness subset); new-labeler state accessor; **scripts in `scripts/analysis/decision_latents/`, figures to `FIGURES/decision_latents/BG_046/`, caches to `data/cache/decision_latents/`** (NOT `analysis_suite/`; reuse `setup_style()` for styling + a local `save_fig` helper, `memory/feedback_repo_structure_scripts_figures`); `del sess; gc.collect()` in session loops; canonical `visdetect.*` imports.
 
 ## 11. To resolve at planning time (writing-plans)
 
