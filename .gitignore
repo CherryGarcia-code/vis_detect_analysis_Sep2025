@@ -108,3 +108,4 @@ analysis_suite/*_output.txt
 .superpowers/
 .claudeignore
 staging_log.txt
+sdd/
