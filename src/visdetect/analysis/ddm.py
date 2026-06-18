@@ -113,9 +113,16 @@ def build_trial_evidence(session, tf_base: float = None, dt: float = DT) -> pd.D
 
 import warnings
 
-import pyddm
-from pyddm import (Model, Drift, NoiseConstant, BoundConstant, ICPointRatio,
-                   OverlayNonDecision, Sample)
+try:
+    import pyddm
+    from pyddm import (Model, Drift, NoiseConstant, BoundConstant, ICPointRatio,
+                       OverlayNonDecision, Sample)
+    _HAS_PYDDM = True
+except ImportError:                                     # geometry (build_trial_evidence) is pyddm-free
+    pyddm = None                                        # noqa: F811
+    Drift = NoiseConstant = BoundConstant = ICPointRatio = object
+    Model = OverlayNonDecision = Sample = object
+    _HAS_PYDDM = False
 
 CHOICE_NAMES = ("lick", "nolick")   # value 1 -> upper(lick), 0 -> lower(nolick)
 
@@ -186,7 +193,10 @@ def simulate_sample(evmap, conds, params, R="halfwave", urgency="rising",
     return pd.DataFrame(rows)
 
 
-from pyddm import Fittable, fit_adjust_model, LossRobustLikelihood
+if _HAS_PYDDM:
+    from pyddm import Fittable, fit_adjust_model, LossRobustLikelihood
+else:                                                   # geometry-only consumers don't need fitting
+    Fittable = fit_adjust_model = LossRobustLikelihood = None
 
 # pyddm reports fitted-parameter names as ['v','u','B','x0']; map to canonical B0 names.
 _PARAM_NAME_MAP = {"v": "v", "u": "u", "B": "a", "x0": "z"}

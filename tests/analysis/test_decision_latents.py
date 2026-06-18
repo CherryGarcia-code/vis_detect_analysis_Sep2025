@@ -27,3 +27,17 @@ def test_assign_comprehension_flags_marks_boundary():
     flags = dl.assign_comprehension_flags(dprime, threshold=0.5)
     assert flags["30062025"] == "pre" and flags["01072025"] == "pre"
     assert flags["02072025"] == "post" and flags["03072025"] == "post"
+
+
+def test_build_trial_table_filters_and_columns(synth_session, synth_state_labels):
+    from visdetect.analysis import decision_latents as dl
+    tab = dl.build_trial_table(synth_session, synth_state_labels, "07072025", dt=0.05)
+    assert "Abort" not in tab["state_label"].values          # mood Abort dropped
+    assert {"sharpness", "itchiness"}.isdisjoint(tab.columns) # not here yet
+    for col in ["session_name", "trial_idx", "outcome", "change_size",
+                "change_time_planned", "change_reached", "decision_time",
+                "lick", "censored", "state_label", "trial_in_session"]:
+        assert col in tab.columns
+    # change_reached True only for hit/miss
+    assert (tab.loc[tab["change_reached"], "outcome"].isin(["hit", "miss"])).all()
+    assert tab["trial_in_session"].is_monotonic_increasing

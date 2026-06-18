@@ -9,8 +9,10 @@ Phase 1 measures these directly from behaviour, split by the mouse's mood
 from __future__ import annotations
 import glob
 import os
+import numpy as np
 import pandas as pd
 
+from visdetect.analysis import ddm
 from visdetect.analysis.behavior import compute_session_performance
 from visdetect.analysis.config import parse_session_date  # DDMMYYYY parser
 
@@ -68,3 +70,38 @@ def assign_comprehension_flags(dprime_by_session, threshold=0.5):
             comprehended = True
         flags[s] = "post" if comprehended else "pre"
     return flags
+
+
+def build_trial_table(session, state_labels, session_name, dt=0.05):
+    """One row per usable trial: behavioral geometry + the trial's mood.
+
+    Reuses ``ddm.build_trial_evidence`` ONLY for trial geometry (it lowercases
+    outcome and excludes outcome ``abort``/``ref``). Trials whose labeler mood
+    is in ``EXCLUDED_MOODS`` (the labeler-state ``Abort``, distinct from the
+    trial-outcome ``abort``) are dropped. The evidence array itself is discarded
+    here (its TF indexing is a Phase-2 concern); only ``n_bins = len(evidence)``
+    is kept. ``trial_in_session`` is assigned after sorting so it is monotonic.
+    """
+    ev = ddm.build_trial_evidence(session, dt=dt)   # trial_uid, outcome, change_size,
+                                                    # change_time, decision_time, lick, censored, evidence
+    rows = []
+    for _, r in ev.iterrows():
+        uid = int(r["trial_uid"])
+        mood = state_labels["state_label"].get(uid)
+        conf = state_labels["state_confidence"].get(uid)
+        if mood in EXCLUDED_MOODS:                  # drop labeler 'Abort'
+            continue
+        outcome = str(r["outcome"]).lower()
+        rows.append({
+            "session_name": session_name, "trial_idx": uid, "outcome": outcome,
+            "change_size": float(r["change_size"]),
+            "change_time_planned": float(r["change_time"]),
+            "change_reached": outcome in ("hit", "miss"),
+            "decision_time": float(r["decision_time"]),
+            "lick": int(r["lick"]), "censored": bool(r["censored"]),
+            "state_label": mood, "state_confidence": conf,
+            "n_bins": int(len(r["evidence"])),
+        })
+    tab = pd.DataFrame(rows).sort_values("trial_idx").reset_index(drop=True)
+    tab["trial_in_session"] = np.arange(len(tab))   # within-session position (satiety covariate)
+    return tab
