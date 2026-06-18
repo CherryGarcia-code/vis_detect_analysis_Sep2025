@@ -28,6 +28,11 @@ class Trial:
     change_time: Optional[float] = None
     baseline_values: Optional[Any] = None
     n_seen: Optional[int] = None
+    # Per-frame stimulus log (added 2026-06; for the TF-encoding GLM).
+    # All None on legacy pkls until backfilled from raw trials.json.
+    stim_phase: Optional[Any] = None    # (n_frames, 2) grating phase per flip
+    stim_tf_disp: Optional[Any] = None  # (n_frames,)  displayed TF per flip
+    stim_vbl: Optional[Any] = None      # (n_frames,)  Psychtoolbox vbl flip times
 
 @dataclass
 class Cluster:
