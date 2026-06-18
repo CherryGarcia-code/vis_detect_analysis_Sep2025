@@ -90,16 +90,31 @@ def _per_trial_event_times(session, key: str) -> np.ndarray:
 
 
 def _outcome_time_for_trial(trial, baseline_t: Optional[float]) -> Optional[float]:
+    """Absolute time of a baseline lick (fa/abort/ref), or None.
+
+    Case-insensitive on both the outcome label and the reaction-time key,
+    so lowercase ('fa') or capitalised ('Abort') data are handled uniformly.
+    Hit response licks are post-change and not returned here (the change-onset
+    guard already removes pulses near them).
+    """
     out = getattr(trial, "trialoutcome", None)
     rts = getattr(trial, "reactiontimes", {}) or {}
-    if out in ("FA", "abort") and baseline_t is not None:
-        val = rts.get(out, np.nan)
-        try:
-            fv = float(val)
-        except Exception:
-            return None
-        if np.isfinite(fv):
-            return float(baseline_t + fv)
+    if baseline_t is None or out is None:
+        return None
+    out_l = str(out).lower()
+    if out_l not in ("fa", "abort", "ref"):
+        return None
+    val = np.nan
+    for k, v in rts.items():
+        if str(k).lower() == out_l:
+            val = v
+            break
+    try:
+        fv = float(val)
+    except (TypeError, ValueError):
+        return None
+    if np.isfinite(fv):
+        return float(baseline_t + fv)
     return None
 
 
@@ -120,7 +135,7 @@ def _collect_pulses(session, cfg: TFRespPulseConfig, show_progress: bool = False
     if pr is not None:
         pr.start()
 
-    for i, t in enumerate(trials, 1):
+    for i, t in enumerate(trials):
         bv = getattr(t, "baseline_values", None)
         if bv is None:
             continue
@@ -132,7 +147,8 @@ def _collect_pulses(session, cfg: TFRespPulseConfig, show_progress: bool = False
         if cfg.baseline_stride > 1:
             arr = arr[:: cfg.baseline_stride]
         n_seen = getattr(t, "n_seen", None)
-        if isinstance(n_seen, (int, np.integer)) and n_seen is not None and n_seen > 0:
+        has_n_seen = isinstance(n_seen, (int, np.integer)) and n_seen is not None and n_seen > 0
+        if has_n_seen:
             arr = arr[: int(n_seen)]
         # Compute log2 TF and identify fast/slow bins
         log2_tf = _safe_log2(arr)
@@ -140,6 +156,12 @@ def _collect_pulses(session, cfg: TFRespPulseConfig, show_progress: bool = False
         t0 = float(base_by_trial[i]) if i < len(base_by_trial) and np.isfinite(base_by_trial[i]) else None
         t_change = float(change_by_trial[i]) if i < len(change_by_trial) and np.isfinite(change_by_trial[i]) else None
         t_outcome = _outcome_time_for_trial(t, t0)
+        # Leakage guard: with constraints on, if nothing bounds the baseline
+        # window (no n_seen truncation, no change time, no outcome lick time),
+        # the full baseline_values vector can run past the real end of the
+        # trial. Skip such unbounded trials rather than scan the whole vector.
+        if cfg.use_constraints and not has_n_seen and t_change is None and t_outcome is None:
+            continue
 
         for bin_idx, l2 in enumerate(log2_tf):
             if not np.isfinite(l2):
@@ -168,14 +190,17 @@ def _collect_pulses(session, cfg: TFRespPulseConfig, show_progress: bool = False
 
 
 def _smooth_binned_activity(spike_times_rel: np.ndarray, t_vec: np.ndarray, sigma_bins: float) -> np.ndarray:
-    """Bin spikes onto t_vec grid and smooth with Gaussian (legacy-compatible)."""
+    """Bin spikes onto t_vec grid and smooth with Gaussian (legacy-compatible).
+
+    Uses np.add.at so multiple spikes in the same dt-bin accumulate (a binary
+    0/1 train would undercount >=2 spikes/bin).
+    """
     if spike_times_rel.size == 0:
         return np.zeros_like(t_vec)
-    # Build 0/1 train on the grid
     train = np.zeros_like(t_vec)
     idx = np.searchsorted(t_vec, spike_times_rel)
     idx = idx[(idx >= 0) & (idx < train.size)]
-    train[idx] = 1.0
+    np.add.at(train, idx, 1.0)
     return gaussian_filter1d(train, sigma=sigma_bins)
 
 
