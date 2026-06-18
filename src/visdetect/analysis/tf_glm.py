@@ -53,3 +53,53 @@ def bin_spike_counts(spike_times: np.ndarray, bin_edges: np.ndarray) -> np.ndarr
     full = np.append(bin_edges, bin_edges[-1] + bin_s)
     counts, _ = np.histogram(st, bins=full)
     return counts.astype(float)
+
+
+def _lag_offsets(win: Tuple[float, float], bin_s: float) -> np.ndarray:
+    """Integer bin offsets for a kernel window [lo, hi) in bin_s steps."""
+    lo, hi = win
+    n = int(round((hi - lo) / bin_s))
+    return np.arange(int(round(lo / bin_s)), int(round(lo / bin_s)) + max(n, 0))
+
+
+def fir_event(event_times, bin_edges, win, bin_s) -> np.ndarray:
+    """(n_bins, n_lags) FIR design for point events.
+
+    Column j (lag = offsets[j]*bin_s): a 1 in bin b means an event occurred
+    `lag` seconds before the start of bin b (i.e. event fell in bin b-offset).
+    """
+    n_bins = bin_edges.size
+    offs = _lag_offsets(win, bin_s)
+    X = np.zeros((n_bins, offs.size), dtype=float)
+    ev = np.asarray(event_times, dtype=float).ravel()
+    ev = ev[np.isfinite(ev)]
+    if n_bins == 0 or ev.size == 0 or offs.size == 0:
+        return X
+    # bin index containing each event
+    idx = np.floor((ev - bin_edges[0]) / bin_s + 1e-9).astype(int)
+    idx = idx[(idx >= 0) & (idx < n_bins)]
+    for j, off in enumerate(offs):
+        b = idx + off
+        b = b[(b >= 0) & (b < n_bins)]
+        X[b, j] = 1.0
+    return X
+
+
+def fir_continuous(signal, win, bin_s) -> np.ndarray:
+    """(n_bins, n_lags) lagged copies of a per-bin continuous signal.
+
+    Column j is `signal` shifted so that row b holds signal[b - offset]
+    (causal positive lags look back in time), zero-filled at the edges.
+    """
+    sig = np.asarray(signal, dtype=float).ravel()
+    n_bins = sig.size
+    offs = _lag_offsets(win, bin_s)
+    X = np.zeros((n_bins, offs.size), dtype=float)
+    for j, off in enumerate(offs):
+        if off == 0:
+            X[:, j] = sig
+        elif off > 0:
+            X[off:, j] = sig[: n_bins - off]
+        else:
+            X[:n_bins + off, j] = sig[-off:]
+    return X
