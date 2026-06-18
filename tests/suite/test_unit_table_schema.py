@@ -24,6 +24,18 @@ def _valid_df():
         "opto_tag": ["D1", "none"],
         "tf_class": ["Splitter", "unclassified"],
         "is_lick_responsive": [True, False],
+        # anatomy columns (Task 7)
+        "peak_channel": [-1, -1],
+        "shank": [-1, -1],
+        "depth_um": [float("nan"), float("nan")],
+        "ccf_ap": [float("nan"), float("nan")],
+        "ccf_ml": [float("nan"), float("nan")],
+        "ccf_dv": [float("nan"), float("nan")],
+        "region_acronym": ["unknown", "unknown"],
+        "region_name": ["unknown", "unknown"],
+        "region_coarse": ["unknown", "unknown"],
+        "region_confidence": [float("nan"), float("nan")],
+        "loc_method": ["none", "none"],
     })
 
 
@@ -64,11 +76,16 @@ def test_validate_raises_on_bad_categorical():
 
 
 def test_add_label_defaults_fills_missing_columns():
+    import math
     df = pd.DataFrame({"Session_Date": [1], "Cluster_ID": [1]})
     out = add_label_defaults(df)
     for col, default in LABEL_DEFAULTS.items():
         assert col in out.columns
-        assert (out[col] == default).all()
+        # NaN defaults cannot use == (NaN != NaN); use isna() instead.
+        if isinstance(default, float) and math.isnan(default):
+            assert out[col].isna().all(), f"Expected NaN default for {col!r}"
+        else:
+            assert (out[col] == default).all(), f"Expected default {default!r} for {col!r}"
 
 
 def test_add_label_defaults_preserves_existing():
