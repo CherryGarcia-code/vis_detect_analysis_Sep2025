@@ -258,6 +258,7 @@ def count_vector(trials, spike_times, design: DesignMatrix) -> np.ndarray:
 # Task 6: Ridge-Poisson fit with trial-blocked nested 10-fold CV
 # ---------------------------------------------------------------------------
 
+from scipy import stats as _stats
 from sklearn.linear_model import PoissonRegressor
 
 
@@ -315,3 +316,157 @@ def fit_poisson_cv(X, y, cfg: TFGLMConfig, fold_ids=None) -> FitResult:
         pred[te] = m.predict(X[te])
         coefs.append(m.coef_.copy()); best_lams.append(best_lam)
     return FitResult(pred=pred, fold_ids=fold_ids, coef_by_fold=coefs, best_lambdas=best_lams)
+
+
+# ---------------------------------------------------------------------------
+# Task 7: TF-responsive identification (C1 + C2) + kernel peak/FWHM
+# ---------------------------------------------------------------------------
+
+def pulse_times_from_tf(design: DesignMatrix, cfg: TFGLMConfig):
+    """Bin-center times of fast/slow baseline-TF pulses (+/- sd_pulse*SD).
+
+    tf_bins are linear TF (geom-mean 1 Hz); convert to log2 octaves so the SD
+    matches the task's log2 N(0,0.25) baseline.  If tf_bins already contain
+    negative values (log2-encoded test fixtures), the conversion is skipped."""
+    tf = np.asarray(design.tf_bins, float)
+    bs = design.bin_edges[1] - design.bin_edges[0] if design.bin_edges.size > 1 else cfg.bin_s
+    centers = design.bin_edges + bs / 2.0
+    # Detect encoding: real linear TF is always > 0; log2 fixtures may be negative.
+    if np.any(tf < 0):
+        # Already log2-encoded (test fixture or pre-converted input)
+        log2tf = tf.copy()
+        valid = tf != 0.0
+    else:
+        with np.errstate(divide="ignore"):
+            log2tf = np.where(tf > 0, np.log2(np.where(tf > 0, tf, 1.0)), np.nan)
+        valid = np.isfinite(log2tf) & (tf > 0)
+    if valid.sum() < 2:
+        return np.zeros(0), np.zeros(0)
+    sd = np.nanstd(log2tf[valid])
+    if sd < 1e-9:
+        return np.zeros(0), np.zeros(0)
+    thr = cfg.sd_pulse * sd
+    fast = centers[valid & (log2tf >= thr)]
+    slow = centers[valid & (log2tf <= -thr)]
+    return fast, slow
+
+
+def tf_pulse_peth(values_per_bin, bin_edges, pulse_times, win, bin_s,
+                  trial_index=None):
+    """Event-triggered average of a per-bin signal around pulse_times.
+
+    ``bin_edges`` is the stitched per-trial bin-left-edge array produced by
+    ``assemble_design``; it is NOT uniformly spaced -- there are inter-trial
+    gaps at trial boundaries.  Absolute ``pulse_times`` are therefore mapped to
+    bin indices with ``searchsorted`` (which honours the gaps) rather than by
+    uniform arithmetic from ``bin_edges[0]`` (that scrambled every trial after
+    the first).  When ``trial_index`` is supplied, lag windows are clipped so
+    they never bleed across a trial boundary."""
+    v = np.asarray(values_per_bin, float)
+    offs = _lag_offsets(win, bin_s)
+    t_axis = offs * bin_s
+    be = np.asarray(bin_edges, float)
+    pulses = np.asarray(pulse_times, float)
+    if be.size == 0 or pulses.size == 0:
+        return t_axis, np.full(offs.size, np.nan)
+    # Map each absolute pulse time to its bin via the (non-uniform) edges.
+    idx = np.searchsorted(be, pulses, side="right") - 1
+    ti = None if trial_index is None else np.asarray(trial_index)
+    rows = []
+    for p in idx:
+        if p < 0 or p >= v.size:
+            continue
+        cols = p + offs
+        ok = (cols >= 0) & (cols < v.size)
+        if ti is not None:
+            # keep only lags that stay within the same trial as the pulse bin
+            ok = ok & (ti[np.clip(cols, 0, v.size - 1)] == ti[p])
+        row = np.full(offs.size, np.nan)
+        row[ok] = v[cols[ok]]
+        rows.append(row)
+    if not rows:
+        return t_axis, np.full(offs.size, np.nan)
+    return t_axis, np.nanmean(np.vstack(rows), axis=0)
+
+
+def _tf_kernel(full_fit, design, cfg):
+    """Mean TF FIR kernel (Hz-weight per lag) averaged across folds."""
+    sl = design.col_groups.get("tf")
+    if sl is None or not full_fit.coef_by_fold:
+        return None
+    K = np.vstack([c[sl] for c in full_fit.coef_by_fold])
+    return K.mean(axis=0)
+
+
+def identify_tf_responsive(design, y, full_fit, reduced_fit, cfg: TFGLMConfig) -> dict:
+    fast, slow = pulse_times_from_tf(design, cfg)
+    bs = cfg.bin_s
+    win = cfg.pulse_eval_win
+    ti = design.trial_index
+
+    def diff_peth(values):
+        _, pf = tf_pulse_peth(values, design.bin_edges, fast, win, bs, trial_index=ti)
+        _, ps = tf_pulse_peth(values, design.bin_edges, slow, win, bs, trial_index=ti)
+        return pf - ps
+
+    # C1: Pearson r between the full-model-predicted fast-slow PETH and the
+    #     actual fast-slow PETH.  full_fit.pred holds the held-out
+    #     (cross-validated) prediction for *every* bin -- each bin is a test
+    #     sample in exactly one fold -- so pooling across all bins simply uses
+    #     the cross-validated prediction.  This is the correct, low-noise
+    #     estimate of the predicted PETH shape; masking the PETH to one fold's
+    #     held-out rows left far too few pulses per fold to estimate it stably.
+    d_act = diff_peth(y)
+    d_pred = diff_peth(full_fit.pred)
+    good = np.isfinite(d_pred) & np.isfinite(d_act)
+    if good.sum() >= 3 and np.std(d_pred[good]) > 1e-9 and np.std(d_act[good]) > 1e-9:
+        c1_r = float(np.corrcoef(d_pred[good], d_act[good])[0, 1])
+    else:
+        c1_r = np.nan
+
+    # C2: one-sided t-test, across folds, that the full model beats the reduced
+    #     model on the fast-slow PETH shape.  For each fold we restrict the
+    #     held-out prediction/actual to that fold's rows, form the fast-slow
+    #     PETH, and take the squared-error improvement (reduced err - full err);
+    #     >0 means the full model captures the TF response better.  (Same
+    #     definition as before -- it was only ever broken by the bin-indexing
+    #     bug in tf_pulse_peth, now fixed.)
+    resid = []
+    for f in np.unique(full_fit.fold_ids):
+        m = full_fit.fold_ids == f
+        pred_full = np.where(m, full_fit.pred, np.nan)
+        pred_red = np.where(m, reduced_fit.pred, np.nan)
+        act = np.where(m, y, np.nan)
+        d_pred_f = diff_peth(pred_full)
+        d_red_f = diff_peth(pred_red)
+        d_act_f = diff_peth(act)
+        gg = np.isfinite(d_pred_f) & np.isfinite(d_red_f) & np.isfinite(d_act_f)
+        if gg.sum() >= 3:
+            err_full = np.nansum((d_act_f[gg] - d_pred_f[gg]) ** 2)
+            err_red = np.nansum((d_act_f[gg] - d_red_f[gg]) ** 2)
+            resid.append(err_red - err_full)   # >0 means full predicts TF better
+    if len(resid) >= 3:
+        t, p_two = _stats.ttest_1samp(resid, 0.0)
+        c2_p = p_two / 2.0 if t > 0 else 1.0 - p_two / 2.0
+    else:
+        c2_p = np.nan
+    is_resp = bool((c1_r > cfg.c1_r_thresh) and (c2_p < cfg.c2_p_thresh))
+
+    # kernel metrics
+    kpeak_t, kfwhm = np.nan, np.nan
+    K = _tf_kernel(full_fit, design, cfg)
+    if K is not None and K.size:
+        lags = _lag_offsets(cfg.kern["tf"], bs) * bs
+        ip = int(np.argmax(np.abs(K)))
+        kpeak_t = float(lags[ip])
+        half = abs(K[ip]) / 2.0
+        lo = ip
+        while lo > 0 and abs(K[lo - 1]) >= half:
+            lo -= 1
+        hi = ip
+        while hi < K.size - 1 and abs(K[hi + 1]) >= half:
+            hi += 1
+        kfwhm = float(lags[hi] - lags[lo])
+    return {"c1_r": c1_r, "c2_p": c2_p, "is_responsive": is_resp,
+            "n_fast": int(fast.size), "n_slow": int(slow.size),
+            "kernel_peak_t": kpeak_t, "kernel_fwhm": kfwhm}
