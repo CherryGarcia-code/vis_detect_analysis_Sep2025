@@ -59,7 +59,8 @@ def _lag_offsets(win: Tuple[float, float], bin_s: float) -> np.ndarray:
     """Integer bin offsets for a kernel window [lo, hi) in bin_s steps."""
     lo, hi = win
     n = int(round((hi - lo) / bin_s))
-    return np.arange(int(round(lo / bin_s)), int(round(lo / bin_s)) + max(n, 0))
+    start = int(round(lo / bin_s))  # Fix 3: compute once, reuse
+    return np.arange(start, start + max(n, 0))
 
 
 def fir_event(event_times, bin_edges, win, bin_s) -> np.ndarray:
@@ -75,9 +76,10 @@ def fir_event(event_times, bin_edges, win, bin_s) -> np.ndarray:
     ev = ev[np.isfinite(ev)]
     if n_bins == 0 or ev.size == 0 or offs.size == 0:
         return X
-    # bin index containing each event
+    # bin index containing each event (keep all finite events; inner b-clip bounds writes)
     idx = np.floor((ev - bin_edges[0]) / bin_s + 1e-9).astype(int)
-    idx = idx[(idx >= 0) & (idx < n_bins)]
+    # Fix 2: do NOT pre-filter idx to in-window here — events outside the window
+    # may still contribute at shifted lags; the inner b-clip handles all bounds.
     for j, off in enumerate(offs):
         b = idx + off
         b = b[(b >= 0) & (b < n_bins)]
@@ -101,5 +103,9 @@ def fir_continuous(signal, win, bin_s) -> np.ndarray:
         elif off > 0:
             X[off:, j] = sig[: n_bins - off]
         else:
+            # Fix 1: guard against off < -n_bins where n_bins+off <= 0 causes
+            # a shape mismatch (LHS selects 0 or 1 rows while RHS is empty).
+            if n_bins + off <= 0:
+                continue
             X[:n_bins + off, j] = sig[-off:]
     return X
