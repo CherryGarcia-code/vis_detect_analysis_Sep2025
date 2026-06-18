@@ -109,3 +109,146 @@ def fir_continuous(signal, win, bin_s) -> np.ndarray:
                 continue
             X[:n_bins + off, j] = sig[-off:]
     return X
+
+
+# ---------------------------------------------------------------------------
+# Task 5: Trial regressor container + full FIR design-matrix assembly
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TrialRegressors:
+    t_start: float
+    t_end: float
+    change_time: float          # neural-clock change onset; NaN if change not reached
+    change_size: float          # 1.0 (catch), 1.25, 1.35, 1.5, 2, 4
+    tf_bins: np.ndarray         # (n_bins,) baseline TF per bin (0 outside baseline)
+    lick_times: np.ndarray      # neural-clock lick-bout onset times
+    reward_time: float          # neural-clock; NaN if none
+    abort_time: float           # neural-clock; NaN if none
+    wheel_bins: np.ndarray      # (n_bins,) wheel speed per bin
+    phase_bins: Optional[np.ndarray] = None  # (n_bins,) phase degrees [0,360) or None
+
+
+@dataclass
+class DesignMatrix:
+    X: np.ndarray
+    col_groups: Dict[str, slice]
+    bin_edges: np.ndarray
+    trial_index: np.ndarray
+    tf_bins: np.ndarray
+
+
+CHANGE_SIZES = (1.0, 1.25, 1.35, 1.5, 2.0, 4.0)
+
+
+def _phase_indicator(phase_deg: np.ndarray, n_bins_circ: int = 12) -> np.ndarray:
+    """(n_rows, n_bins_circ) one-hot of phase into n_bins_circ angular bins."""
+    out = np.zeros((phase_deg.size, n_bins_circ), dtype=float)
+    valid = np.isfinite(phase_deg)
+    b = np.floor((phase_deg[valid] % 360) / (360.0 / n_bins_circ)).astype(int)
+    out[np.where(valid)[0], np.clip(b, 0, n_bins_circ - 1)] = 1.0
+    return out
+
+
+def _resize(a, n, fill=0.0):
+    a = np.asarray(a, dtype=float).ravel()
+    if a.size == n:
+        return a
+    out = np.full(n, fill)
+    m = min(a.size, n)
+    out[:m] = a[:m]
+    return out
+
+
+def _ramp_col(tr, edges, bs):
+    """Seconds since baseline start, zero before 1 s and after change onset."""
+    t = edges - tr.t_start
+    ramp = np.where(t >= 1.0, t, 0.0)
+    if np.isfinite(tr.change_time):
+        ramp[edges >= tr.change_time] = 0.0
+    return ramp.reshape(-1, 1)
+
+
+def _blockwise(trials, per_edges, fn):
+    blocks = [fn(tr, e) for tr, e in zip(trials, per_edges)]
+    ncol = max((b.shape[1] for b in blocks), default=0)
+    blocks = [b if b.shape[1] == ncol else np.zeros((b.shape[0], ncol)) for b in blocks]
+    return np.concatenate(blocks, axis=0) if blocks else np.zeros((0, ncol))
+
+
+def assemble_design(trials: List["TrialRegressors"], cfg: TFGLMConfig) -> DesignMatrix:
+    bs = cfg.bin_s
+    # Per-trial bin edges and concatenation bookkeeping
+    per_edges, per_n, tf_all, wheel_all, phase_all = [], [], [], [], []
+    for ti, tr in enumerate(trials):
+        edges = trial_bin_edges(tr.t_start, tr.t_end, bs)
+        per_edges.append(edges); per_n.append(edges.size)
+        tf_all.append(_resize(tr.tf_bins, edges.size))
+        wheel_all.append(_resize(tr.wheel_bins, edges.size))
+        if cfg.include_phase and tr.phase_bins is not None:
+            phase_all.append(_resize(tr.phase_bins, edges.size, fill=np.nan))
+        else:
+            phase_all.append(np.full(edges.size, np.nan))
+    bin_edges = np.concatenate(per_edges) if per_edges else np.zeros(0)
+    trial_index = np.concatenate([np.full(n, i) for i, n in enumerate(per_n)]) \
+        if per_n else np.zeros(0, dtype=int)
+    tf_bins = np.concatenate(tf_all) if tf_all else np.zeros(0)
+    wheel_bins = np.concatenate(wheel_all) if wheel_all else np.zeros(0)
+    phase_bins = np.concatenate(phase_all) if phase_all else np.zeros(0)
+    N = bin_edges.size
+
+    cols: List[np.ndarray] = []
+    groups: Dict[str, slice] = {}
+
+    def _add(name, block):
+        start = sum(c.shape[1] for c in cols)
+        cols.append(block)
+        groups[name] = slice(start, start + block.shape[1])
+
+    # 1) TF (continuous, per-bin, lagged) — built per-trial then stacked so lags
+    #    do not bleed across trial boundaries.
+    _add("tf", _blockwise(trials, per_edges, lambda tr, e: fir_continuous(
+        _resize(tr.tf_bins, e.size), cfg.kern["tf"], bs)))
+    # 2) trial start event
+    _add("trial_start", _blockwise(trials, per_edges, lambda tr, e: fir_event(
+        np.array([tr.t_start]), e, cfg.kern["trial_start"], bs)))
+    # 3) time-in-baseline ramp (single graded column: seconds since t_start, 0
+    #    after change; >=1 s region per the paper)
+    _add("time_in_base", _blockwise(trials, per_edges, lambda tr, e:
+        _ramp_col(tr, e, bs)))
+    # 4-9) six change onsets by change size
+    for cs in CHANGE_SIZES:
+        _add(f"change_{cs}", _blockwise(trials, per_edges, lambda tr, e, cs=cs:
+            fir_event(np.array([tr.change_time]) if (np.isfinite(tr.change_time)
+                      and tr.change_size == cs) else np.zeros(0),
+                      e, cfg.kern["change"], bs)))
+    # 10) lick prep, 11) lick exec
+    _add("lick_prep", _blockwise(trials, per_edges, lambda tr, e: fir_event(
+        tr.lick_times, e, cfg.kern["lick_prep"], bs)))
+    _add("lick_exec", _blockwise(trials, per_edges, lambda tr, e: fir_event(
+        tr.lick_times, e, cfg.kern["lick_exec"], bs)))
+    # 13) reward, 14) abort
+    _add("reward", _blockwise(trials, per_edges, lambda tr, e: fir_event(
+        np.array([tr.reward_time]), e, cfg.kern["reward"], bs)))
+    _add("abort", _blockwise(trials, per_edges, lambda tr, e: fir_event(
+        np.array([tr.abort_time]), e, cfg.kern["abort"], bs)))
+    # 18) wheel (continuous)
+    _add("wheel", _blockwise(trials, per_edges, lambda tr, e: fir_continuous(
+        _resize(tr.wheel_bins, e.size), cfg.kern["wheel"], bs)))
+    # 15-16) phase (optional)
+    if cfg.include_phase:
+        _add("phase", _phase_indicator(phase_bins))
+
+    X = np.concatenate(cols, axis=1) if cols else np.zeros((N, 0))
+    return DesignMatrix(X=X, col_groups=groups, bin_edges=bin_edges,
+                        trial_index=trial_index, tf_bins=tf_bins)
+
+
+def count_vector(trials, spike_times, design: DesignMatrix) -> np.ndarray:
+    y = np.zeros(design.bin_edges.size, dtype=float)
+    bs = design.bin_edges[1] - design.bin_edges[0] if design.bin_edges.size > 1 else 0.05
+    for i in range(len(trials)):
+        mask = design.trial_index == i
+        edges = design.bin_edges[mask]
+        y[mask] = bin_spike_counts(spike_times, edges)
+    return y
