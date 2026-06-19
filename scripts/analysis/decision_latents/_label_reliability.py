@@ -10,7 +10,7 @@ matplotlib.use("Agg"); import matplotlib.pyplot as plt
 from visdetect.suite.plotting import setup_style          # styling only
 from visdetect.analysis.behavior import compute_session_performance
 from visdetect.suite.loader import load_session
-from visdetect.analysis.config import ROOT, SUBJECT, parse_session_date
+from visdetect.analysis.config import ROOT, SUBJECT, parse_session_date, STATE_LABEL_COLORS
 setup_style()
 FIG_DIR = os.path.join(ROOT, "FIGURES", "decision_latents", SUBJECT); os.makedirs(FIG_DIR, exist_ok=True)
 CACHE_DIR = os.path.join(ROOT, "data", "cache", "decision_latents"); os.makedirs(CACHE_DIR, exist_ok=True)
@@ -39,8 +39,8 @@ axes[0].scatter(tab["dprime"], tab["mean_conf"])
 axes[0].set_xlabel("session d′"); axes[0].set_ylabel("mean label confidence")
 axes[0].set_title("Label confidence vs performance\n(low-d′ naive sessions = watch here)")
 bottom = np.zeros(len(tab))
-for m, c in [("Impulsive", "#d62728"), ("StimSens", "#1f77b4"),
-             ("Disengaged", "#9488bf"), ("Abort", "#7f7f7f")]:
+for m in ["Impulsive", "StimSens", "Disengaged", "Abort"]:
+    c = STATE_LABEL_COLORS.get(m, "#999999")   # canonical labeler palette (Abort -> grey fallback)
     axes[1].bar(range(len(tab)), tab[m], bottom=bottom, label=m, color=c)
     bottom += tab[m].values
 axes[1].set_xlabel("session (chronological)"); axes[1].set_ylabel("mood fraction")
