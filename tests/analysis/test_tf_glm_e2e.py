@@ -41,3 +41,4 @@ def test_flat_neuron_not_responsive():
     red = fit_poisson_cv(Xr, y, cfg, folds)
     out = identify_tf_responsive(design, y, full, red, cfg)
     assert not out["is_responsive"]
+    assert out["c1_r"] < 0.2

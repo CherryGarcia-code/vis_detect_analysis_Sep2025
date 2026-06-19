@@ -11,12 +11,21 @@ def test_tf_pulse_peth_triggers():
     assert peth[np.argmin(np.abs(t - 0.0))] == 5.0
 
 def test_pulse_times_split_by_sd():
-    # fabricate a design with tf_bins having a clear +/- excursion
-    edges = np.arange(0.0, 1.0, 0.05)
-    tf = np.zeros(edges.size); tf[5] = 1.0; tf[15] = -1.0   # +4SD, -4SD if SD~0.25
+    # Real ±0.5-SD split test with enough valid bins to clear the >=10-valid guard.
+    # tf_bins are log2-encoded (negatives present -> taken as log2 directly).
+    # 6 clearly-positive bins (early) and 6 clearly-negative bins (late), plus
+    # filler nonzero bins so >=12 are valid. With ~symmetric +/-1.0 excursions the
+    # baseline log2 SD ~1.0 and threshold ~0.5 -> all +1.0 are fast, all -1.0 slow.
+    edges = np.arange(0.0, 2.0, 0.05)            # 40 bins
+    tf = np.zeros(edges.size)
+    tf[2:8] = 1.0                                 # 6 fast bins (early)
+    tf[20:26] = -1.0                              # 6 slow bins (late)
+    tf[10:16] = 0.05                              # filler nonzero (within +/-0.5SD)
     d = DesignMatrix(X=np.zeros((edges.size, 0)), col_groups={}, bin_edges=edges,
                      trial_index=np.zeros(edges.size, int), tf_bins=tf)
     cfg = TFGLMConfig()
     fast, slow = pulse_times_from_tf(d, cfg)
-    assert fast.size == 1 and slow.size == 1
-    assert fast[0] < slow[0]
+    assert fast.size > 0 and slow.size > 0
+    assert fast.size == 6 and slow.size == 6
+    # all fast pulses precede all slow pulses
+    assert fast.max() < slow.min()

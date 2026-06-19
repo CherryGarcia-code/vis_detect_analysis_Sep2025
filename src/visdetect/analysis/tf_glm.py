@@ -30,6 +30,7 @@ class TFGLMConfig:
     })
     sd_pulse: float = 0.5               # fast/slow = +/-0.5 SD of baseline TF
     pulse_eval_win: Tuple[float, float] = (-0.15, 0.75)  # PETH window around pulses
+    min_pulses_per_label: int = 50      # min fast/slow pulses to attempt C1/C2
     n_folds: int = 10
     lambdas: Tuple[float, ...] = (1e-3, 1e-2, 1e-1, 1.0, 10.0, 100.0)
     c1_r_thresh: float = 0.2
@@ -240,6 +241,24 @@ def assemble_design(trials: List["TrialRegressors"], cfg: TFGLMConfig) -> Design
         _add("phase", _phase_indicator(phase_bins))
 
     X = np.concatenate(cols, axis=1) if cols else np.zeros((N, 0))
+
+    # Spec §4: standardize the continuous regressors (tf, wheel) to unit
+    # variance; leave event/ramp/phase indicators as-is (0/1). Guard against
+    # zero-variance columns (e.g. all-zero TF lags) — leave them unchanged.
+    # NOTE: design.tf_bins is left RAW on purpose — pulse_times_from_tf reads it
+    # for ±SD pulse detection and must see the raw linear-TF signal.
+    for grp in ("tf", "wheel"):
+        sl = groups.get(grp)
+        if sl is None:
+            continue
+        block = X[:, sl]
+        mu = block.mean(axis=0)
+        sd = block.std(axis=0)
+        keep = sd >= 1e-8
+        if np.any(keep):
+            block[:, keep] = (block[:, keep] - mu[keep]) / sd[keep]
+            X[:, sl] = block
+
     return DesignMatrix(X=X, col_groups=groups, bin_edges=bin_edges,
                         trial_index=trial_index, tf_bins=tf_bins)
 
@@ -340,7 +359,7 @@ def pulse_times_from_tf(design: DesignMatrix, cfg: TFGLMConfig):
         with np.errstate(divide="ignore"):
             log2tf = np.where(tf > 0, np.log2(np.where(tf > 0, tf, 1.0)), np.nan)
         valid = np.isfinite(log2tf) & (tf > 0)
-    if valid.sum() < 2:
+    if valid.sum() < 10:
         return np.zeros(0), np.zeros(0)
     sd = np.nanstd(log2tf[valid])
     if sd < 1e-9:
@@ -405,52 +424,58 @@ def identify_tf_responsive(design, y, full_fit, reduced_fit, cfg: TFGLMConfig) -
     ti = design.trial_index
 
     def diff_peth(values):
-        _, pf = tf_pulse_peth(values, design.bin_edges, fast, win, bs, trial_index=ti)
-        _, ps = tf_pulse_peth(values, design.bin_edges, slow, win, bs, trial_index=ti)
+        # nanmean over an all-NaN PETH row (no pulses landed in that lag) is a
+        # legitimate "undefined" -> NaN; suppress the RuntimeWarning narrowly.
+        with np.errstate(invalid="ignore"):
+            _, pf = tf_pulse_peth(values, design.bin_edges, fast, win, bs, trial_index=ti)
+            _, ps = tf_pulse_peth(values, design.bin_edges, slow, win, bs, trial_index=ti)
         return pf - ps
 
-    # C1: Pearson r between the full-model-predicted fast-slow PETH and the
-    #     actual fast-slow PETH.  full_fit.pred holds the held-out
-    #     (cross-validated) prediction for *every* bin -- each bin is a test
-    #     sample in exactly one fold -- so pooling across all bins simply uses
-    #     the cross-validated prediction.  This is the correct, low-noise
-    #     estimate of the predicted PETH shape; masking the PETH to one fold's
-    #     held-out rows left far too few pulses per fold to estimate it stably.
-    d_act = diff_peth(y)
-    d_pred = diff_peth(full_fit.pred)
-    good = np.isfinite(d_pred) & np.isfinite(d_act)
-    if good.sum() >= 3 and np.std(d_pred[good]) > 1e-9 and np.std(d_act[good]) > 1e-9:
-        c1_r = float(np.corrcoef(d_pred[good], d_act[good])[0, 1])
+    # Pulse-count gate (Fix 3): too few fast/slow pulses -> the PETHs are
+    # untrustworthy; report C1/C2 as NaN (not responsive) but still populate
+    # n_fast/n_slow and the kernel metrics below.
+    if fast.size < cfg.min_pulses_per_label or slow.size < cfg.min_pulses_per_label:
+        c1_r, c2_p, is_resp = np.nan, np.nan, False
     else:
-        c1_r = np.nan
+        # C1 (per-fold mean) and C2 (across-fold ablation t-test) share ONE pass
+        # over folds.  For each held-out fold we restrict the predicted/actual
+        # signals to that fold's rows (np.where(m, ..., nan)) so both criteria
+        # use the same held-out masking.
+        #   C1: Pearson r between the full-model-PREDICTED fast-minus-slow PETH
+        #       and the ACTUAL fast-minus-slow PETH on that fold; c1_r is the
+        #       nanmean of the per-fold r's (spec §2.2-C1).
+        #   C2: one-sided t-test, across folds, that the full model beats the
+        #       reduced model on the fast-minus-slow PETH shape (per-fold
+        #       reduced-err minus full-err > 0).
+        folds_r, resid = [], []
+        for f in np.unique(full_fit.fold_ids):
+            m = full_fit.fold_ids == f
+            pred_full = np.where(m, full_fit.pred, np.nan)
+            pred_red = np.where(m, reduced_fit.pred, np.nan)
+            act = np.where(m, y, np.nan)
+            d_pred_f = diff_peth(pred_full)
+            d_red_f = diff_peth(pred_red)
+            d_act_f = diff_peth(act)
 
-    # C2: one-sided t-test, across folds, that the full model beats the reduced
-    #     model on the fast-slow PETH shape.  For each fold we restrict the
-    #     held-out prediction/actual to that fold's rows, form the fast-slow
-    #     PETH, and take the squared-error improvement (reduced err - full err);
-    #     >0 means the full model captures the TF response better.  (Same
-    #     definition as before -- it was only ever broken by the bin-indexing
-    #     bug in tf_pulse_peth, now fixed.)
-    resid = []
-    for f in np.unique(full_fit.fold_ids):
-        m = full_fit.fold_ids == f
-        pred_full = np.where(m, full_fit.pred, np.nan)
-        pred_red = np.where(m, reduced_fit.pred, np.nan)
-        act = np.where(m, y, np.nan)
-        d_pred_f = diff_peth(pred_full)
-        d_red_f = diff_peth(pred_red)
-        d_act_f = diff_peth(act)
-        gg = np.isfinite(d_pred_f) & np.isfinite(d_red_f) & np.isfinite(d_act_f)
-        if gg.sum() >= 3:
-            err_full = np.nansum((d_act_f[gg] - d_pred_f[gg]) ** 2)
-            err_red = np.nansum((d_act_f[gg] - d_red_f[gg]) ** 2)
-            resid.append(err_red - err_full)   # >0 means full predicts TF better
-    if len(resid) >= 3:
-        t, p_two = _stats.ttest_1samp(resid, 0.0)
-        c2_p = p_two / 2.0 if t > 0 else 1.0 - p_two / 2.0
-    else:
-        c2_p = np.nan
-    is_resp = bool((c1_r > cfg.c1_r_thresh) and (c2_p < cfg.c2_p_thresh))
+            # C1 for this fold: predicted-vs-actual fast-slow PETH correlation
+            gc = np.isfinite(d_pred_f) & np.isfinite(d_act_f)
+            if gc.sum() >= 3 and np.std(d_pred_f[gc]) > 1e-9 and np.std(d_act_f[gc]) > 1e-9:
+                folds_r.append(float(np.corrcoef(d_pred_f[gc], d_act_f[gc])[0, 1]))
+
+            # C2 for this fold: squared-error improvement (reduced - full)
+            gg = np.isfinite(d_pred_f) & np.isfinite(d_red_f) & np.isfinite(d_act_f)
+            if gg.sum() >= 3:
+                err_full = np.nansum((d_act_f[gg] - d_pred_f[gg]) ** 2)
+                err_red = np.nansum((d_act_f[gg] - d_red_f[gg]) ** 2)
+                resid.append(err_red - err_full)   # >0 means full predicts TF better
+
+        c1_r = float(np.nanmean(folds_r)) if folds_r else np.nan
+        if len(resid) >= 3:
+            t, p_two = _stats.ttest_1samp(resid, 0.0)
+            c2_p = p_two / 2.0 if t > 0 else 1.0 - p_two / 2.0
+        else:
+            c2_p = np.nan
+        is_resp = bool((c1_r > cfg.c1_r_thresh) and (c2_p < cfg.c2_p_thresh))
 
     # kernel metrics
     kpeak_t, kfwhm = np.nan, np.nan

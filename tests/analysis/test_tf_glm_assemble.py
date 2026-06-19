@@ -29,3 +29,27 @@ def test_count_vector_matches_rows():
     d = assemble_design(trials, cfg)
     y = count_vector(trials, np.array([10.3, 10.32, 11.0]), d)
     assert y.size == d.X.shape[0] and y.sum() == 3
+
+def test_continuous_columns_standardized():
+    """Fix 2: continuous (tf, wheel) regressors standardized to unit variance;
+    event indicators (e.g. lick_prep) left as 0/1."""
+    cfg = TFGLMConfig()
+    # nonzero wheel so the wheel columns have variance to standardize
+    trials = [_toy_trial(10.0), _toy_trial(20.0, seed=1)]
+    rng = np.random.default_rng(7)
+    for tr in trials:
+        tr.wheel_bins = rng.normal(0.0, 1.0, tr.wheel_bins.size)
+    d = assemble_design(trials, cfg)
+    for grp in ("tf", "wheel"):
+        sl = d.col_groups[grp]
+        cols = d.X[:, sl]
+        # only check columns that carry signal (non-degenerate); zero columns stay zero
+        for j in range(cols.shape[1]):
+            c = cols[:, j]
+            if np.std(c) < 1e-8:
+                continue
+            assert abs(np.mean(c)) < 1e-6, f"{grp} col {j} mean {np.mean(c)}"
+            assert abs(np.std(c) - 1.0) < 1e-6, f"{grp} col {j} std {np.std(c)}"
+    # event indicator column untouched: still 0/1
+    ev = d.X[:, d.col_groups["lick_prep"]]
+    assert set(np.unique(ev)).issubset({0.0, 1.0})
