@@ -93,9 +93,10 @@ def test_itchiness_scores_more_fa_higher_criterion_shift():
     import numpy as np, pandas as pd
     from visdetect.analysis import decision_latents as dl
     def make(fa_frac):
+        rng = np.random.default_rng(0)
         rows = []
         for _ in range(200):
-            if np.random.default_rng().random() < fa_frac:
+            if rng.random() < fa_frac:
                 rows.append({"change_size": 2.0, "lick": 1, "outcome": "fa",
                              "decision_time": 1.0, "change_time_planned": 5.0, "censored": False})
             else:
@@ -110,10 +111,11 @@ def test_itchiness_scores_more_fa_higher_criterion_shift():
 def test_timing_scores_peak_and_offset():
     import numpy as np, pandas as pd
     from visdetect.analysis import decision_latents as dl
+    rng = np.random.default_rng(0)
     rows = []
     for _ in range(300):
         # changes cluster near 5s; licks (hits) shortly after
-        ct = 5.0 + np.random.default_rng().normal(0, 0.2)
+        ct = 5.0 + rng.normal(0, 0.2)
         rows.append({"change_reached": True, "change_time_planned": ct,
                      "lick": 1, "outcome": "hit", "decision_time": ct + 0.3})
     sc = dl.timing_scores(pd.DataFrame(rows), dt=0.05)
@@ -132,3 +134,4 @@ def test_cell_and_latent_tables(synth_session, synth_state_labels):
     lat = dl.descriptive_latent_table(tab, cells)
     assert len(lat) == len(tab)
     assert {"criterion_c", "sharpness_psy_slope", "trial_in_session"}.issubset(lat.columns)
+    assert "rt_cv_by_cs" in lat.columns   # spec §5 cross-check column propagated

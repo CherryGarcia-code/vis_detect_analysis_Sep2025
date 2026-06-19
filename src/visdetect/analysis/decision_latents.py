@@ -9,6 +9,7 @@ Phase 1 measures these directly from behaviour, split by the mouse's mood
 from __future__ import annotations
 import glob
 import os
+import warnings
 import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit
@@ -212,9 +213,11 @@ def itchiness_scores(trial_df, dt=0.05):
       gives a finite z.
     * ``fa_rate`` — fraction of trials whose ``outcome == "fa"`` (anticipatory
       lick; NOT the SDT false-alarm rate).
-    * ``baseline_hazard`` — mean lick hazard over the pre-change window, computed
-      from ``censored_hazard`` with FA-latency events (``outcome == "fa"``) and
-      ``decision_time`` durations (everything else right-censored).
+    * ``baseline_hazard`` — mean lick hazard over the full decision timeline
+      (note: diluted by post-change bins; a pre-change-windowed version is a
+      Phase-2 refinement), computed from ``censored_hazard`` with FA-latency
+      events (``outcome == "fa"``) and ``decision_time`` durations (everything
+      else right-censored).
     """
     go = trial_df[trial_df["change_size"] > 1.0]
     catch = trial_df[np.isclose(trial_df["change_size"], 1.0)]
@@ -316,6 +319,15 @@ def descriptive_cell_table(all_trials_df, min_cell_trials=20, dt=0.05):
             rec.update(sharpness_scores(cell))
             rec.update(itchiness_scores(cell, dt=dt))
             rec.update(timing_scores(cell, dt=dt))
+            # spec §5 cross-check: aggregate the per-change-size Hit-RT CVs into a
+            # single per-cell number (the deliverable propagates this name verbatim).
+            cv_vals = [rec[f"rt_cv_cs{cs}"] for cs in CHANGE_SIZES if f"rt_cv_cs{cs}" in rec]
+            if cv_vals and not np.all(np.isnan(cv_vals)):
+                with warnings.catch_warnings():       # guard all-NaN slice RuntimeWarning
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    rec["rt_cv_by_cs"] = float(np.nanmean(cv_vals))
+            else:
+                rec["rt_cv_by_cs"] = float("nan")
         rows.append(rec)
     return pd.DataFrame(rows)
 
@@ -328,10 +340,11 @@ def descriptive_latent_table(all_trials_df, cell_table):
     trials in a cell that was never scored get NaN). Renames the cell-level
     columns to their per-trial latent names (``psy_slope -> sharpness_psy_slope``,
     ``fa_rate -> fa_rate_cell``, ``lick_hazard_peak_time -> hazard_peak_cell``)
-    and keeps ``criterion_c`` as-is.
+    and keeps ``criterion_c`` and ``rt_cv_by_cs`` as-is (the latter is the spec §5
+    cross-check column, propagated verbatim).
     """
     key = ["session_name", "state_label"]
-    cols = ["psy_slope", "criterion_c", "fa_rate", "lick_hazard_peak_time"]
+    cols = ["psy_slope", "criterion_c", "fa_rate", "lick_hazard_peak_time", "rt_cv_by_cs"]
     avail = [c for c in cols if c in cell_table.columns]
     joined = all_trials_df.merge(cell_table[key + avail], on=key, how="left")
     return joined.rename(columns={"psy_slope": "sharpness_psy_slope",
