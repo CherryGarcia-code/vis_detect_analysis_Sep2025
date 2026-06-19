@@ -105,3 +105,34 @@ def build_trial_table(session, state_labels, session_name, dt=0.05):
     tab = pd.DataFrame(rows).sort_values("trial_idx").reset_index(drop=True)
     tab["trial_in_session"] = np.arange(len(tab))   # within-session position (satiety covariate)
     return tab
+
+
+def censored_hazard(durations, events, dt=0.05, t_max=None):
+    """Discrete-time hazard + survival with right-censoring.
+
+    Each trial ends at ``durations[i]``; ``events[i] = True`` means the event
+    occurred there, ``False`` means the trial was right-censored (e.g. a change
+    planned at 15 s but the mouse FA-licked at 3 s → censored at 3 s, never an
+    event at 15 s; spec §4 / user 2026-06-18). At bin *k* the hazard is
+    ``(#events in bin k) / (#trials still at risk at the start of bin k)`` and
+    ``survival = cumprod(1 - hazard)``. A trial censored at the start of bin *k*
+    is still at risk during the bin it falls in, then drops out.
+    """
+    durations = np.asarray(durations, float); events = np.asarray(events, bool)
+    if t_max is None:
+        t_max = float(np.nanmax(durations)) + dt
+    edges = np.arange(0.0, t_max + dt, dt)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    # A trial that exits at duration d occupies bins [0, d): its last (event) bin
+    # is [d-dt, d), index round(d/dt)-1. It is at risk at the START of bin k only
+    # while it has not yet exited, i.e. d > edges[k] (a trial exiting exactly at a
+    # bin's left edge — e.g. censored at 0.05 — is at risk during bin0 [0,0.05)
+    # but gone by the start of bin1).
+    event_bin = np.round(durations / dt).astype(int) - 1   # bin [d-dt, d) in which the trial ends
+    hazard = np.zeros(len(centers))
+    for k in range(len(centers)):
+        at_risk = np.sum(durations > edges[k] + 1e-12)         # still running at bin start
+        n_event = np.sum(events & (event_bin == k))
+        hazard[k] = (n_event / at_risk) if at_risk > 0 else 0.0
+    survival = np.cumprod(1.0 - hazard)
+    return centers, hazard, survival

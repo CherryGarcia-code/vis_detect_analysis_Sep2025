@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd, pytest
 from visdetect.analysis import decision_latents as dl
 
@@ -41,3 +42,21 @@ def test_build_trial_table_filters_and_columns(synth_session, synth_state_labels
     # change_reached True only for hit/miss
     assert (tab.loc[tab["change_reached"], "outcome"].isin(["hit", "miss"])).all()
     assert tab["trial_in_session"].is_monotonic_increasing
+
+
+def test_censored_hazard_counts_events_and_censoring():
+    from visdetect.analysis import decision_latents as dl
+    # 3 trials: event at 0.10s, event at 0.10s, CENSORED at 0.05s (no event)
+    dur = np.array([0.10, 0.10, 0.05]); ev = np.array([True, True, False])
+    centers, hz, surv = dl.censored_hazard(dur, ev, dt=0.05, t_max=0.15)
+    # bin0 [0,0.05): risk=3, events=0 -> hz=0 ; the censored trial leaves after bin0
+    assert hz[0] == 0.0
+    # bin1 [0.05,0.10): risk=2 (censored gone), events=2 -> hz=1.0
+    assert np.isclose(hz[1], 1.0)
+    assert np.all(surv <= 1.0) and np.all(np.diff(surv) <= 1e-9)
+
+def test_censored_hazard_survival_is_one_minus_prod():
+    from visdetect.analysis import decision_latents as dl
+    dur = np.array([0.10, 0.15]); ev = np.array([True, True])
+    _, hz, surv = dl.censored_hazard(dur, ev, dt=0.05, t_max=0.20)
+    assert np.isclose(surv[-1], np.prod(1 - hz))
