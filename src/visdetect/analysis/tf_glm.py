@@ -38,6 +38,7 @@ class TFGLMConfig:
     c2_p_thresh: float = 0.01
     seed: int = 42
     include_phase: bool = False         # off for DMS-first; on for cortex
+    fast_fit: bool = False              # select ridge lambda ONCE/unit (not per outer fold)
 
 
 def trial_bin_edges(t_start: float, t_end: float, bin_s: float) -> np.ndarray:
@@ -312,6 +313,36 @@ def _fit_one(Xtr, ytr, lam):
     return m
 
 
+def _select_lambda_once(X, y, fold_ids, cfg: TFGLMConfig) -> float:
+    """Fast-mode λ selection: pick the best ridge λ ONCE per unit on a single
+    trial-blocked train/validation split.
+
+    Hold out the first 2 of `cfg.n_folds` fold-ids as validation, train on the
+    remaining 8, and score each λ in `cfg.lambdas` by held-out Poisson
+    log-likelihood. Return the argmax λ. This costs len(lambdas) fits instead
+    of the nested ~n_folds*n_inner*len(lambdas). The chosen λ is then reused for
+    every outer held-out fit; the small λ-selection optimism does not invalidate
+    the per-fold held-out predictions (the outer test rows are still predicted by
+    a model fit without them).
+    """
+    uniq = np.unique(fold_ids)
+    n_val = min(2, max(1, uniq.size - 1))
+    val_folds = set(uniq[:n_val].tolist())
+    va = np.isin(fold_ids, list(val_folds))
+    tr = ~va
+    if va.sum() == 0 or tr.sum() == 0:
+        return cfg.lambdas[0]
+    best_lam, best_score = cfg.lambdas[0], -np.inf
+    for lam in cfg.lambdas:
+        m = _fit_one(X[tr], y[tr], lam)
+        mu = m.predict(X[va])
+        # Poisson held-out log-likelihood (up to const)
+        s = float(np.sum(y[va] * np.log(mu + 1e-9) - mu))
+        if s > best_score:
+            best_score, best_lam = s, lam
+    return best_lam
+
+
 def fit_poisson_cv(X, y, cfg: TFGLMConfig, fold_ids=None) -> FitResult:
     X = np.asarray(X, float); y = np.asarray(y, float)
     n = y.size
@@ -319,27 +350,34 @@ def fit_poisson_cv(X, y, cfg: TFGLMConfig, fold_ids=None) -> FitResult:
         fold_ids = np.repeat(np.arange(cfg.n_folds), int(np.ceil(n / cfg.n_folds)))[:n]
     pred = np.full(n, np.nan)
     coefs, best_lams = [], []
+
+    # Fast mode: choose λ ONCE per unit, then run the outer loop with it fixed.
+    fixed_lam = _select_lambda_once(X, y, fold_ids, cfg) if cfg.fast_fit else None
+
     for f in range(cfg.n_folds):
         te = fold_ids == f
         tr = ~te
         if te.sum() == 0 or tr.sum() == 0:
             continue
-        # inner CV over lambda on the training rows (split by inner folds)
-        inner = fold_ids[tr]
-        best_lam, best_score = cfg.lambdas[0], -np.inf
-        for lam in cfg.lambdas:
-            scores = []
-            for g in np.unique(inner):
-                itr = inner != g; ite = inner == g
-                if ite.sum() == 0 or itr.sum() == 0:
-                    continue
-                m = _fit_one(X[tr][itr], y[tr][itr], lam)
-                mu = m.predict(X[tr][ite])
-                # Poisson held-out log-likelihood (up to const)
-                scores.append(np.sum(y[tr][ite] * np.log(mu + 1e-9) - mu))
-            s = np.mean(scores) if scores else -np.inf
-            if s > best_score:
-                best_score, best_lam = s, lam
+        if cfg.fast_fit:
+            best_lam = fixed_lam
+        else:
+            # inner CV over lambda on the training rows (split by inner folds)
+            inner = fold_ids[tr]
+            best_lam, best_score = cfg.lambdas[0], -np.inf
+            for lam in cfg.lambdas:
+                scores = []
+                for g in np.unique(inner):
+                    itr = inner != g; ite = inner == g
+                    if ite.sum() == 0 or itr.sum() == 0:
+                        continue
+                    m = _fit_one(X[tr][itr], y[tr][itr], lam)
+                    mu = m.predict(X[tr][ite])
+                    # Poisson held-out log-likelihood (up to const)
+                    scores.append(np.sum(y[tr][ite] * np.log(mu + 1e-9) - mu))
+                s = np.mean(scores) if scores else -np.inf
+                if s > best_score:
+                    best_score, best_lam = s, lam
         m = _fit_one(X[tr], y[tr], best_lam)
         pred[te] = m.predict(X[te])
         coefs.append(m.coef_.copy()); best_lams.append(best_lam)
