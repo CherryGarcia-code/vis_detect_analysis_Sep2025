@@ -52,14 +52,27 @@ def fig_sharpness(cells):                 # F1
         sub = cells[cells["state_label"] == mood].sort_values("session_dprime")
         ax[0].plot(sub["session_dprime"], sub["psy_slope"], "o-", color=c, label=mood)
     ax[0].set_xlabel("session d′ (learning →)"); ax[0].set_ylabel("psychometric slope")
+    ax[0].set_ylim(-1, 21)                  # slope is bounded to [-20, 20] in sharpness_scores
     ax[0].set_title("F1  Sharpness rises with learning\n(steeper = tells the change apart better)")
     ax[0].legend(frameon=False)
-    rt_cols = [k for k in cells.columns if k.startswith("rt_cv_cs")]
-    if rt_cols:
-        ax[1].plot(cells.sort_values("session_dprime")["session_dprime"],
-                   cells.sort_values("session_dprime")[rt_cols].mean(axis=1), "o-")
-        ax[1].set_title("F2  RT variability shrinks with learning")
-        ax[1].set_xlabel("session d′"); ax[1].set_ylabel("mean RT CV (across change sizes)")
+    # F2: RT variability split small vs big change size (averaging across ALL sizes
+    # washed out the signal). Variability shrinks with learning, more/earlier for
+    # big changes. Non-mood colors here (panel is not mood-split).
+    SMALL_COLOR, BIG_COLOR = "#444444", "#1b9e8a"   # dark grey / teal
+    small_cols = [c for c in ["rt_cv_cs1.25", "rt_cv_cs1.35", "rt_cv_cs1.5"] if c in cells.columns]
+    big_cols = [c for c in ["rt_cv_cs2.0", "rt_cv_cs4.0"] if c in cells.columns]
+    if small_cols or big_cols:
+        srt = cells.sort_values("session_dprime")
+        x = srt["session_dprime"]
+        if small_cols:
+            ax[1].scatter(x, np.nanmean(srt[small_cols].values, axis=1),
+                          color=SMALL_COLOR, s=24, label="small Δ (1.25–1.5)")
+        if big_cols:
+            ax[1].scatter(x, np.nanmean(srt[big_cols].values, axis=1),
+                          color=BIG_COLOR, s=24, label="big Δ (2,4)")
+        ax[1].set_title("F2  RT variability shrinks with learning\n(more/earlier for big changes)")
+        ax[1].set_xlabel("session d′"); ax[1].set_ylabel("RT CV")
+        ax[1].legend(frameon=False)
     return save_fig(fig, "fig_b8_F1_F2_sharpness")
 
 def fig_itchiness(cells):                 # F3
@@ -76,9 +89,19 @@ def fig_timing(all_trials):               # F4
     fig, ax = plt.subplots(figsize=(8, 4))
     cc, ch, _ = dl.change_onset_hazard(all_trials)
     lc, lh, _ = dl.lick_hazard(all_trials)
-    ax.plot(cc, ch / max(ch.max(), 1e-9), label="change-onset hazard (when the change comes)")
-    ax.plot(lc, lh / max(lh.max(), 1e-9), label="lick hazard (when it licks)")
-    ax.set_xlim(0, 12); ax.set_xlabel("time from baseline on (s)"); ax.set_ylabel("hazard (norm.)")
+
+    def _norm_to_peak(centers, hz):
+        # Normalize each hazard to its own max over the plotted (x<12) window so
+        # both peak at 1.0 — the visual point is peak ALIGNMENT, not amplitude.
+        # Clip to x<12 first so a single late low-at-risk bin can't dominate.
+        win = np.asarray(centers) < 12.0
+        peak = hz[win].max() if win.any() else hz.max()
+        return hz / max(peak, 1e-9)
+
+    ax.plot(cc, _norm_to_peak(cc, ch), label="change-onset hazard (when the change comes)")
+    ax.plot(lc, _norm_to_peak(lc, lh), label="lick hazard (when it licks)")
+    ax.set_xlim(0, 12); ax.set_ylim(0, 1.05)
+    ax.set_xlabel("time from baseline on (s)"); ax.set_ylabel("hazard (norm. to own peak)")
     ax.set_title("F4  Temporal expectation\n(does licking line up with when the change actually comes?)")
     ax.legend(frameon=False)
     return save_fig(fig, "fig_b8_F4_timing")
@@ -89,6 +112,7 @@ def fig_bias_not_gain(cells):             # F5
         sub = cells[cells["state_label"] == mood]
         ax.scatter(sub["psy_slope"], sub["dprime"], color=c, label=mood)
     ax.set_xlabel("psychometric slope"); ax.set_ylabel("d′ (true sensitivity)")
+    ax.set_xlim(-1, 21)                     # slope is bounded to [-20, 20]; leave y (d′) auto
     ax.set_title("F5  Bias-not-gain test\n(Impulsive looks eager but d′ should NOT be higher)")
     ax.legend(frameon=False)
     return save_fig(fig, "fig_b8_F5_bias_not_gain")

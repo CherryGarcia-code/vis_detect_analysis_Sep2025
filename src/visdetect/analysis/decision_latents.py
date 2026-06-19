@@ -171,7 +171,12 @@ def sharpness_scores(trial_df):
     if len(go) >= 8 and go["change_size"].nunique() >= 2:
         x = np.log2(go["change_size"].values); y = go["lick"].values.astype(float)
         try:
-            (a, b), _ = curve_fit(_logistic, x, y, p0=[0.0, 1.0], maxfev=5000)
+            # Bound intercept a and slope b each to [-20, 20]: an unbounded fit on
+            # near-separable cells returns absurd slopes (up to ~418), corrupting
+            # both the cached deliverable and the figures. A slope of 20 in
+            # log2(change_size) space is already near-step, so this loses no signal.
+            (a, b), _ = curve_fit(_logistic, x, y, p0=[0.0, 1.0],
+                                  bounds=([-20.0, -20.0], [20.0, 20.0]), maxfev=5000)
             out["psy_slope"] = float(b)
         except Exception:
             out["psy_slope"] = float("nan")
