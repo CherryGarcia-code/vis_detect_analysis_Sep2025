@@ -31,6 +31,7 @@ so a fresh chat can boot a single question in isolation.
 | B5 | Does learning re-set the dSPN/iSPN baseline operating point? (photometry) | T2 | not-started | — | — |
 | B6 | Divergent DA teaching-signal trajectories (RPE↑ vs APE↓) | T2/T3 | not-started | — | — |
 | B7 | Falling learning rate / uncertainty reduction across training | T1→T2 | not-started | — | — |
+| **B8** ⭐ | Per-trial decision-latents (sharpness/itchiness/timing) decomposed by state — behavior-first deliverable for the post-TF-null spine; absorbs D1's behavioral half | T1 | in-progress (Phase 1 descriptive done; Phase 2 generative pending) | [design](../superpowers/specs/2026-06-18-B8-behavioral-decision-latents-by-state-design.md) | [plan](../superpowers/plans/2026-06-18-B8-behavioral-decision-latents-by-state-plan.md) |
 | C1 ⭐ | FA = suppression failure; waiting-period D2/indirect (MOs→D2) brake | T1→T2 | not-started | — | — |
 | C2 | Same evidence axis vs opposite-sign push-pull (mode-aware; photometry) | T2 | not-started | — | — |
 | C3 | Proposal cell-type role table via anatomical (dorsal/ventral) stratification | T3 | not-started | — | — |
@@ -48,4 +49,4 @@ so a fresh chat can boot a single question in isolation.
 | F2 | Tracking quality as a scientific gate (plasticity vs matching error) | T1 | not-started | — | — |
 | F3 | Which claims survive as n=1 vs need cohort pooling (BG_031/038/039)? | meta | not-started | — | — |
 
-_Last updated: 2026-06-08. Add a row's spec/plan links and bump status as each question is worked._
+_Last updated: 2026-06-19 (B8 → in-progress: Phase 1 descriptive landed + plan link). Add a row's spec/plan links and bump status as each question is worked._
