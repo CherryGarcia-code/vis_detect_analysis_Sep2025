@@ -123,12 +123,14 @@ def censored_hazard(durations, events, dt=0.05, t_max=None):
         t_max = float(np.nanmax(durations)) + dt
     edges = np.arange(0.0, t_max + dt, dt)
     centers = 0.5 * (edges[:-1] + edges[1:])
-    # A trial that exits at duration d occupies bins [0, d): its last (event) bin
-    # is [d-dt, d), index round(d/dt)-1. It is at risk at the START of bin k only
+    # Half-open (left, right] bins: bin k = (k·dt, (k+1)·dt]. A trial exiting at
+    # duration d (d > 0) falls in bin ceil(d/dt)-1 (e.g. d=0.07, dt=0.05 →
+    # ceil(1.4)-1 = bin1 (0.05,0.10]). It is at risk at the START of bin k only
     # while it has not yet exited, i.e. d > edges[k] (a trial exiting exactly at a
-    # bin's left edge — e.g. censored at 0.05 — is at risk during bin0 [0,0.05)
-    # but gone by the start of bin1).
-    event_bin = np.round(durations / dt).astype(int) - 1   # bin [d-dt, d) in which the trial ends
+    # bin's right edge — e.g. censored at 0.05 — is in bin0 (0,0.05] and gone by
+    # the start of bin1).
+    n_bins = len(centers)
+    event_bin = np.clip(np.ceil(durations / dt).astype(int) - 1, 0, n_bins - 1)  # bin (d-dt, d] in which the trial ends
     hazard = np.zeros(len(centers))
     for k in range(len(centers)):
         at_risk = np.sum(durations > edges[k] + 1e-12)         # still running at bin start

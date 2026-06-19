@@ -60,3 +60,11 @@ def test_censored_hazard_survival_is_one_minus_prod():
     dur = np.array([0.10, 0.15]); ev = np.array([True, True])
     _, hz, surv = dl.censored_hazard(dur, ev, dt=0.05, t_max=0.20)
     assert np.isclose(surv[-1], np.prod(1 - hz))
+
+def test_censored_hazard_bins_mid_bin_duration_correctly():
+    import numpy as np
+    from visdetect.analysis import decision_latents as dl
+    # one event at 0.07s -> belongs in bin1 (0.05,0.10], NOT bin0
+    centers, hz, surv = dl.censored_hazard(np.array([0.07]), np.array([True]), dt=0.05, t_max=0.15)
+    assert hz[0] == 0.0          # nothing happens in bin0 (0,0.05]
+    assert np.isclose(hz[1], 1.0)  # the event lands in bin1
