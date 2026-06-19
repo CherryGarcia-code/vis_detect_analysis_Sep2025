@@ -87,3 +87,21 @@ def test_sharpness_scores_keys_and_dprime_direction():
     assert "psy_slope" in sc and "dprime" in sc
     assert any(k.startswith("rt_cv_cs") for k in sc)
     assert sc["dprime"] > 0          # more hits on big changes than FAs on catch
+
+
+def test_itchiness_scores_more_fa_higher_criterion_shift():
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    def make(fa_frac):
+        rows = []
+        for _ in range(200):
+            if np.random.default_rng().random() < fa_frac:
+                rows.append({"change_size": 2.0, "lick": 1, "outcome": "fa",
+                             "decision_time": 1.0, "change_time_planned": 5.0, "censored": False})
+            else:
+                rows.append({"change_size": 2.0, "lick": 1, "outcome": "hit",
+                             "decision_time": 5.3, "change_time_planned": 5.0, "censored": False})
+        return pd.DataFrame(rows)
+    hi = dl.itchiness_scores(make(0.6)); lo = dl.itchiness_scores(make(0.1))
+    assert hi["fa_rate"] > lo["fa_rate"]
+    assert "criterion_c" in hi and "baseline_hazard" in hi

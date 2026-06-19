@@ -12,6 +12,7 @@ import os
 import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit
+from scipy.stats import norm
 
 from visdetect.analysis import ddm
 from visdetect.analysis.behavior import compute_session_performance, calculate_dprime
@@ -187,3 +188,38 @@ def sharpness_scores(trial_df):
         out[f"rt_mean_cs{cs}"] = float(np.mean(rt)) if rt.size >= 3 else float("nan")
         out[f"rt_cv_cs{cs}"] = float(np.std(rt) / np.mean(rt)) if rt.size >= 3 and np.mean(rt) > 0 else float("nan")
     return out
+
+
+def _loglinear(rate, n):
+    """Log-linear correction: maps a rate into the open interval (0, 1) so
+    ``norm.ppf`` never returns ±inf for a 0/1 hit- or FA-rate."""
+    return (rate * n + 0.5) / (n + 1.0)
+
+
+def itchiness_scores(trial_df, dt=0.05):
+    """Itchiness = how trigger-happy the mouse is before any real evidence.
+
+    Operates on one (session × mood) cell's trial rows. Returns a dict:
+
+    * ``criterion_c`` — SDT criterion ``-(z(H) + z(FA)) / 2`` where ``H`` is the
+      go-trial (``change_size > 1.0``) lick rate and ``FA`` the catch-trial
+      (``change_size ≈ 1.0``) lick rate, each log-linear corrected so a 0/1 rate
+      gives a finite z.
+    * ``fa_rate`` — fraction of trials whose ``outcome == "fa"`` (anticipatory
+      lick; NOT the SDT false-alarm rate).
+    * ``baseline_hazard`` — mean lick hazard over the pre-change window, computed
+      from ``censored_hazard`` with FA-latency events (``outcome == "fa"``) and
+      ``decision_time`` durations (everything else right-censored).
+    """
+    go = trial_df[trial_df["change_size"] > 1.0]
+    catch = trial_df[np.isclose(trial_df["change_size"], 1.0)]
+    H = _loglinear(go["lick"].mean() if len(go) else 0.0, max(len(go), 1))
+    FA = _loglinear(catch["lick"].mean() if len(catch) else 0.0, max(len(catch), 1))
+    crit = -(norm.ppf(H) + norm.ppf(FA)) / 2.0
+    fa_rate = float((trial_df["outcome"] == "fa").mean())
+    # baseline lick hazard: FA-latency events vs everything else censored at decision_time
+    is_fa = (trial_df["outcome"] == "fa").values
+    dur = trial_df["decision_time"].values.copy()
+    _, hz, _ = censored_hazard(dur, is_fa, dt=dt)
+    return {"criterion_c": float(crit), "fa_rate": fa_rate,
+            "baseline_hazard": float(np.nanmean(hz)) if hz.size else float("nan")}
