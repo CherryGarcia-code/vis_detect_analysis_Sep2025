@@ -277,15 +277,30 @@ def fa_lick_hazard(trial_df, dt=0.05):
     """Hazard of an anticipatory/early (FA) lick over trial time.
 
     Event = the trial outcome is the labeler ``fa`` (an early/anticipatory lick
-    during baseline, BEFORE any change could occur) at ``decision_time``; every
-    non-FA trial is right-censored at its ``decision_time`` (it never contributes
-    an event, only risk-time up to when the trial ended). Because changes never
-    occur before 6 s (real-data fact; FA-lick median ≈ 4.57 s), this hazard isolates
-    the *early-lick* timing — the temporal expectation expressed before the change
-    can physically appear. Delegates to ``censored_hazard`` (no reimplementation).
+    during baseline, BEFORE any change could occur) at ``decision_time``.
+
+    FIX (round 2, 2026-06-18): an FA lick can ONLY happen before the change, so a
+    non-FA (hit/miss) trial must leave the FA at-risk set at the CHANGE, not at its
+    (later) ``decision_time``. Censoring non-FA trials at ``decision_time`` (which
+    for hits/misses is AFTER the change) left the at-risk denominator un-depleted,
+    collapsing this "hazard" onto the raw FA-event density (verified corr 0.97 with
+    the FA-time histogram). Per-trial censor time:
+
+    * FA trials → ``decision_time`` (the FA event time).
+    * non-FA trials → ``min(change_time_planned, decision_time)`` (drop out at the
+      change), falling back to ``decision_time`` when ``change_time_planned`` is NaN.
+
+    Because changes never occur before 6 s (real-data fact; FA-lick median ≈ 4.57 s),
+    this hazard isolates the *early-lick* timing — the temporal expectation expressed
+    before the change can physically appear. Delegates to ``censored_hazard``.
     """
-    ev = (trial_df["outcome"] == "fa").values
-    return censored_hazard(trial_df["decision_time"].values.astype(float), ev, dt=dt)
+    is_fa = (trial_df["outcome"] == "fa").values
+    dtime = trial_df["decision_time"].values.astype(float)
+    ctime = trial_df["change_time_planned"].values.astype(float)
+    # non-FA trials censor at the change; NaN change_time falls back to decision_time
+    change_censor = np.where(np.isnan(ctime), dtime, np.minimum(ctime, dtime))
+    censor_t = np.where(is_fa, dtime, change_censor)
+    return censored_hazard(censor_t, is_fa, dt=dt)
 
 
 def _peak_and_spread(centers, hazard):

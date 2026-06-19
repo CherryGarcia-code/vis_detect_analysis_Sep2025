@@ -137,10 +137,15 @@ def test_fa_lick_hazard_nonzero_in_fa_bins_and_reuses_censored_hazard():
                      "change_time_planned": 7.0, "lick": 1})
     df = pd.DataFrame(rows)
     centers, hazard, survival = dl.fa_lick_hazard(df, dt=0.05)
-    # reuses censored_hazard: same shape contract (centers/hazard/survival aligned)
+    # reuses censored_hazard: same shape contract (centers/hazard/survival aligned).
+    # FIX (round 2): non-FA trials are censored at the CHANGE (min(change_time,
+    # decision_time)), not at decision_time — an FA can only occur before the change.
+    censor_t = np.where(df["outcome"].values == "fa",
+                        df["decision_time"].values.astype(float),
+                        np.minimum(df["change_time_planned"].values.astype(float),
+                                   df["decision_time"].values.astype(float)))
     ref_c, ref_h, ref_s = dl.censored_hazard(
-        df["decision_time"].values.astype(float),
-        (df["outcome"] == "fa").values, dt=0.05)
+        censor_t, (df["outcome"] == "fa").values, dt=0.05)
     assert centers.shape == hazard.shape == survival.shape == ref_h.shape
     assert np.allclose(centers, ref_c) and np.allclose(hazard, ref_h)
     # hazard is non-zero in the bin containing the FA licks (~4.5s)
@@ -149,6 +154,39 @@ def test_fa_lick_hazard_nonzero_in_fa_bins_and_reuses_censored_hazard():
     # nothing happens before any lick (e.g. ~2s bin is zero)
     early_bin = np.argmin(np.abs(centers - 2.0))
     assert hazard[early_bin] == 0.0
+
+
+def test_fa_lick_hazard_censors_non_fa_at_change_not_decision():
+    """FIX (round 2): an anticipatory (FA) lick can only happen BEFORE the change.
+    A hit/miss trial must therefore leave the FA at-risk set at its change time,
+    NOT at its (later) decision_time. This test FAILS under the old behaviour
+    (censor at decision_time) and PASSES once non-FA trials censor at the change.
+
+    Construction: one FA trial whose early lick lands at 5.2 s, and 9 hit trials
+    whose change is at 5.0 s with a (later) decision_time of 5.5 s. At the FA bin
+    (~5.2 s) the at-risk denominator differs sharply:
+      * FIX  → 9 hits already censored at 5.0 s ⇒ at_risk = 1 ⇒ FA hazard = 1.0
+      * OLD  → 9 hits still at risk at 5.2 s    ⇒ at_risk = 10 ⇒ FA hazard ≈ 0.1
+    """
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    rows = [{"outcome": "fa", "decision_time": 5.2, "change_time_planned": 8.0, "lick": 1}]
+    for _ in range(9):
+        rows.append({"outcome": "hit", "decision_time": 5.5,
+                     "change_time_planned": 5.0, "lick": 1})
+    df = pd.DataFrame(rows)
+    centers, hazard, survival = dl.fa_lick_hazard(df, dt=0.05)
+    fa_bin = np.argmin(np.abs(centers - 5.2))
+    # FIX: the 9 hits are gone by 5.0 s, leaving only the FA trial at risk ⇒ haz=1.0
+    assert np.isclose(hazard[fa_bin], 1.0)
+    # the OLD (decision_time) censoring would have left the 9 hits at risk ⇒ haz≈0.1,
+    # so the behaviour genuinely changed (the at-risk set now depletes at the change).
+    bad_c, bad_h, bad_s = dl.censored_hazard(
+        df["decision_time"].values.astype(float),
+        (df["outcome"] == "fa").values, dt=0.05)
+    bad_fa_bin = np.argmin(np.abs(bad_c - 5.2))
+    assert np.isclose(bad_h[bad_fa_bin], 0.1, atol=1e-6)   # old buggy value
+    assert hazard[fa_bin] > bad_h[bad_fa_bin] + 1e-6        # fix raised the hazard
 
 
 def test_sharpness_scores_psy_threshold_present_and_finite():
