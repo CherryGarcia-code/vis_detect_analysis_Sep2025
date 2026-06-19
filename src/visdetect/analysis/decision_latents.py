@@ -223,3 +223,63 @@ def itchiness_scores(trial_df, dt=0.05):
     _, hz, _ = censored_hazard(dur, is_fa, dt=dt)
     return {"criterion_c": float(crit), "fa_rate": fa_rate,
             "baseline_hazard": float(np.nanmean(hz)) if hz.size else float("nan")}
+
+
+def change_onset_hazard(trial_df, dt=0.05):
+    """Hazard of the change actually occurring over trial time.
+
+    Event = the change being reached (``change_reached == True``) at
+    ``change_time_planned``. Trials whose change was planned but never reached
+    (``change_reached == False``, e.g. an FA-lick before the change time) are
+    RIGHT-CENSORED at ``decision_time`` — they never contribute an event, only
+    risk-time up to when the trial ended. Delegates to ``censored_hazard``.
+    """
+    reached = trial_df["change_reached"].values.astype(bool)
+    dur = np.where(reached, trial_df["change_time_planned"].values,
+                   trial_df["decision_time"].values).astype(float)
+    return censored_hazard(dur, reached, dt=dt)
+
+
+def lick_hazard(trial_df, dt=0.05):
+    """Hazard of the first lick over trial time.
+
+    Event = a lick occurred (``lick == 1``) at ``decision_time``; non-lick
+    trials are right-censored at their ``decision_time``. Delegates to
+    ``censored_hazard``.
+    """
+    ev = (trial_df["lick"].values.astype(int) == 1)
+    return censored_hazard(trial_df["decision_time"].values.astype(float), ev, dt=dt)
+
+
+def _peak_and_spread(centers, hazard):
+    """Peak time (argmax of the hazard) and the std of the hazard-weighted time
+    distribution. Returns ``(nan, nan)`` when the hazard is all-zero so an empty
+    cell never raises on the weighted average."""
+    w = np.clip(hazard, 0, None)
+    if w.sum() <= 0:
+        return float("nan"), float("nan")
+    peak = centers[int(np.argmax(hazard))]
+    mean = np.average(centers, weights=w)
+    spread = float(np.sqrt(np.average((centers - mean) ** 2, weights=w)))
+    return float(peak), spread
+
+
+def timing_scores(trial_df, dt=0.05):
+    """Timing = how strongly (and how sharply) the mouse expects the change now.
+
+    Returns a dict:
+
+    * ``change_hazard_peak_time`` — when the change-onset hazard peaks.
+    * ``lick_hazard_peak_time`` — when the lick hazard peaks.
+    * ``lick_hazard_spread`` — std of the hazard-weighted lick-time distribution
+      (how temporally dispersed the licking is).
+    * ``peak_offset`` — ``lick_peak − change_peak`` (how far the mouse's licking
+      sits from the true change timing); NaN if either peak is undefined.
+    """
+    cc, ch, _ = change_onset_hazard(trial_df, dt=dt)
+    lc, lh, _ = lick_hazard(trial_df, dt=dt)
+    ch_peak, _ = _peak_and_spread(cc, ch)
+    l_peak, l_spread = _peak_and_spread(lc, lh)
+    return {"change_hazard_peak_time": ch_peak, "lick_hazard_peak_time": l_peak,
+            "lick_hazard_spread": l_spread,
+            "peak_offset": (l_peak - ch_peak) if np.isfinite(l_peak) and np.isfinite(ch_peak) else float("nan")}

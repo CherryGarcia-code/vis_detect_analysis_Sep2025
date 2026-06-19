@@ -105,3 +105,18 @@ def test_itchiness_scores_more_fa_higher_criterion_shift():
     hi = dl.itchiness_scores(make(0.6)); lo = dl.itchiness_scores(make(0.1))
     assert hi["fa_rate"] > lo["fa_rate"]
     assert "criterion_c" in hi and "baseline_hazard" in hi
+
+
+def test_timing_scores_peak_and_offset():
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    rows = []
+    for _ in range(300):
+        # changes cluster near 5s; licks (hits) shortly after
+        ct = 5.0 + np.random.default_rng().normal(0, 0.2)
+        rows.append({"change_reached": True, "change_time_planned": ct,
+                     "lick": 1, "outcome": "hit", "decision_time": ct + 0.3})
+    sc = dl.timing_scores(pd.DataFrame(rows), dt=0.05)
+    assert 4.0 < sc["change_hazard_peak_time"] < 6.0
+    assert sc["lick_hazard_peak_time"] >= sc["change_hazard_peak_time"]  # licks after change
+    assert "peak_offset" in sc and "lick_hazard_spread" in sc
