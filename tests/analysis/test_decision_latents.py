@@ -124,6 +124,53 @@ def test_timing_scores_peak_and_offset():
     assert "peak_offset" in sc and "lick_hazard_spread" in sc
 
 
+def test_fa_lick_hazard_nonzero_in_fa_bins_and_reuses_censored_hazard():
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    # 4 FA trials whose anticipatory licks land at ~4.5s, plus some hits at ~7s.
+    rows = []
+    for _ in range(4):
+        rows.append({"outcome": "fa", "decision_time": 4.5,
+                     "change_time_planned": 7.0, "lick": 1})
+    for _ in range(6):
+        rows.append({"outcome": "hit", "decision_time": 7.3,
+                     "change_time_planned": 7.0, "lick": 1})
+    df = pd.DataFrame(rows)
+    centers, hazard, survival = dl.fa_lick_hazard(df, dt=0.05)
+    # reuses censored_hazard: same shape contract (centers/hazard/survival aligned)
+    ref_c, ref_h, ref_s = dl.censored_hazard(
+        df["decision_time"].values.astype(float),
+        (df["outcome"] == "fa").values, dt=0.05)
+    assert centers.shape == hazard.shape == survival.shape == ref_h.shape
+    assert np.allclose(centers, ref_c) and np.allclose(hazard, ref_h)
+    # hazard is non-zero in the bin containing the FA licks (~4.5s)
+    fa_bin = np.argmin(np.abs(centers - 4.5))
+    assert hazard[fa_bin] > 0.0
+    # nothing happens before any lick (e.g. ~2s bin is zero)
+    early_bin = np.argmin(np.abs(centers - 2.0))
+    assert hazard[early_bin] == 0.0
+
+
+def test_sharpness_scores_psy_threshold_present_and_finite():
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    rng = np.random.default_rng(0)
+    rows = []
+    # well-separated psychometric: low detect at small Δ, near-ceiling at big Δ
+    for cs, p in [(1.0, 0.05), (1.25, 0.3), (1.5, 0.55), (2.0, 0.85), (4.0, 0.98)]:
+        for _ in range(60):
+            lick = rng.random() < p
+            outcome = "hit" if (cs > 1.0 and lick) else ("fa" if (cs == 1.0 and lick) else "miss")
+            ct = 7.0
+            rows.append({"change_size": cs, "lick": int(lick), "outcome": outcome,
+                         "change_time_planned": ct,
+                         "decision_time": ct + rng.uniform(0.2, 0.6) if outcome == "hit" else ct + 2.0})
+    sc = dl.sharpness_scores(pd.DataFrame(rows))
+    assert "psy_threshold" in sc
+    assert np.isfinite(sc["psy_threshold"])
+    assert 1.0 <= sc["psy_threshold"] <= 8.0   # clamped to plausible change-size range
+
+
 def test_cell_and_latent_tables(synth_session, synth_state_labels):
     from visdetect.analysis import decision_latents as dl
     tab = dl.build_trial_table(synth_session, synth_state_labels, "07072025")

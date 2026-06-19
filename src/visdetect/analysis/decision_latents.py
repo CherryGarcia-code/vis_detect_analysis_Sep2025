@@ -158,6 +158,11 @@ def sharpness_scores(trial_df):
     * ``psy_slope`` — logistic-fit slope of P(lick) vs ``log2(change_size)`` on
       GO trials (``change_size > 1.0``). NaN if < 8 go trials, < 2 distinct
       change sizes, or the fit fails.
+    * ``psy_threshold`` — the change size at 50% detection from the same logistic
+      fit. The 50% point in log2(change_size) space is ``x50 = -a/b``, so
+      ``psy_threshold = 2 ** x50``. NaN if the fit failed / ``psy_slope`` is NaN /
+      ``abs(b) < 1e-3``; otherwise clamped to ``[1.0, 8.0]`` (change sizes span
+      1.25–4.0, so this avoids wild extrapolation off a near-flat fit).
     * ``dprime`` — ``calculate_dprime(hit_rate, fa_rate)`` with go-trial lick
       mean as the hit rate and catch-trial (``change_size ≈ 1.0``) lick mean as
       the FA rate. (``calculate_dprime`` log-linear-clips the rates.)
@@ -183,6 +188,15 @@ def sharpness_scores(trial_df):
             out["psy_slope"] = float("nan")
     else:
         out["psy_slope"] = float("nan")
+    # psy_threshold: change size at 50% detection = 2 ** (-a/b). NaN if the fit
+    # failed / slope ~0 (abs(b) < 1e-3 → near-flat, x50 explodes); else clamp to
+    # the plausible change-size range [1.0, 8.0] to avoid wild extrapolation.
+    b = out["psy_slope"]
+    if np.isfinite(b) and abs(b) >= 1e-3:
+        x50 = -a / b
+        out["psy_threshold"] = float(np.clip(2.0 ** x50, 1.0, 8.0))
+    else:
+        out["psy_threshold"] = float("nan")
     hit_rate = float(go["lick"].mean()) if len(go) else float("nan")
     fa_rate = float(catch["lick"].mean()) if len(catch) else float("nan")
     out["dprime"] = float(calculate_dprime(hit_rate, fa_rate))
@@ -256,6 +270,21 @@ def lick_hazard(trial_df, dt=0.05):
     ``censored_hazard``.
     """
     ev = (trial_df["lick"].values.astype(int) == 1)
+    return censored_hazard(trial_df["decision_time"].values.astype(float), ev, dt=dt)
+
+
+def fa_lick_hazard(trial_df, dt=0.05):
+    """Hazard of an anticipatory/early (FA) lick over trial time.
+
+    Event = the trial outcome is the labeler ``fa`` (an early/anticipatory lick
+    during baseline, BEFORE any change could occur) at ``decision_time``; every
+    non-FA trial is right-censored at its ``decision_time`` (it never contributes
+    an event, only risk-time up to when the trial ended). Because changes never
+    occur before 6 s (real-data fact; FA-lick median ≈ 4.57 s), this hazard isolates
+    the *early-lick* timing — the temporal expectation expressed before the change
+    can physically appear. Delegates to ``censored_hazard`` (no reimplementation).
+    """
+    ev = (trial_df["outcome"] == "fa").values
     return censored_hazard(trial_df["decision_time"].values.astype(float), ev, dt=dt)
 
 
