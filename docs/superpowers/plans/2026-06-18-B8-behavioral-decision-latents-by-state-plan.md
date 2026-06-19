@@ -397,7 +397,8 @@ def enumerate_valid_sessions(subject="BG_046", tag_dir=None, min_total_trials=50
     return sorted(sessions, key=parse_session_date)
 
 def session_dprime(session):
-    return float(compute_session_performance(session).get("dprime", float("nan")))
+    # NOTE: the key is "d_prime" (NOT "dprime") — confirmed in behavior.py; wrong key = silent NaN
+    return float(compute_session_performance(session).get("d_prime", float("nan")))
 
 def assign_comprehension_flags(dprime_by_session, threshold=0.5):
     ordered = sorted(dprime_by_session, key=parse_session_date)
@@ -958,21 +959,22 @@ import os, sys, gc, numpy as np, pandas as pd, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 from visdetect.suite.loader import load_session
 from visdetect.suite.plotting import setup_style          # styling only
-from visdetect.analysis.config import ROOT, SUBJECT
+from visdetect.analysis.config import ROOT, SUBJECT, STATE_LABEL_COLORS  # canonical new-labeler mood palette
 from visdetect.analysis import decision_latents as dl
 setup_style()
 FIG_DIR = os.path.join(ROOT, "FIGURES", "decision_latents", SUBJECT)
 CACHE_DIR = os.path.join(ROOT, "data", "cache", "decision_latents")
 os.makedirs(FIG_DIR, exist_ok=True); os.makedirs(CACHE_DIR, exist_ok=True)
-CACHE = os.path.join(CACHE_DIR, "decision_latents_by_state.csv")
+CACHE = os.path.join(CACHE_DIR, "decision_latents_by_state.csv")        # deliverable: per-trial LATENT table
+TRIAL_CACHE = os.path.join(CACHE_DIR, "decision_latents_trialtable.csv")  # raw per-trial table (build() cache)
 
 def save_fig(fig, name):                       # writes to top-level FIGURES/, not analysis_suite/
     p = os.path.join(FIG_DIR, f"{name}.png"); fig.savefig(p, dpi=300, bbox_inches="tight")
     plt.close(fig); return p
 
 def build(force=False):
-    if os.path.exists(CACHE) and not force:
-        return pd.read_csv(CACHE)
+    if os.path.exists(TRIAL_CACHE) and not force:
+        return pd.read_csv(TRIAL_CACHE)
     sessions = dl.enumerate_valid_sessions()
     dprime = {}
     parts = []
@@ -988,7 +990,7 @@ def build(force=False):
         tab["session_dprime"] = dprime[sname]; tab["comprehension_flag"] = flags[sname]
         frames.append(tab)
     all_trials = pd.concat(frames, ignore_index=True)
-    all_trials.to_csv(CACHE, index=False)
+    all_trials.to_csv(TRIAL_CACHE, index=False)
     return all_trials
 ```
 
@@ -1003,7 +1005,7 @@ Append plain-language-captioned panels. Each uses the local `save_fig(fig, name)
 ```python
 def fig_sharpness(cells):                 # F1
     fig, ax = plt.subplots(1, 2, figsize=(12, 4))
-    for mood, c in [("Impulsive", "#d62728"), ("StimSens", "#1f77b4")]:
+    for mood, c in [(m, STATE_LABEL_COLORS[m]) for m in ("Impulsive", "StimSens")]:
         sub = cells[cells["state_label"] == mood].sort_values("session_dprime")
         ax[0].plot(sub["session_dprime"], sub["psy_slope"], "o-", color=c, label=mood)
     ax[0].set_xlabel("session d′ (learning →)"); ax[0].set_ylabel("psychometric slope")
@@ -1019,7 +1021,7 @@ def fig_sharpness(cells):                 # F1
 
 def fig_itchiness(cells):                 # F3
     fig, ax = plt.subplots(figsize=(7, 4))
-    for mood, c in [("Impulsive", "#d62728"), ("StimSens", "#1f77b4")]:
+    for mood, c in [(m, STATE_LABEL_COLORS[m]) for m in ("Impulsive", "StimSens")]:
         sub = cells[cells["state_label"] == mood]
         ax.scatter(sub["criterion_c"], sub["fa_rate"], color=c, label=mood)
     ax.set_xlabel("criterion c  (low = trigger-happy)"); ax.set_ylabel("FA rate")
@@ -1040,7 +1042,7 @@ def fig_timing(all_trials):               # F4
 
 def fig_bias_not_gain(cells):             # F5
     fig, ax = plt.subplots(figsize=(7, 4))
-    for mood, c in [("Impulsive", "#d62728"), ("StimSens", "#1f77b4")]:
+    for mood, c in [(m, STATE_LABEL_COLORS[m]) for m in ("Impulsive", "StimSens")]:
         sub = cells[cells["state_label"] == mood]
         ax.scatter(sub["psy_slope"], sub["dprime"], color=c, label=mood)
     ax.set_xlabel("psychometric slope"); ax.set_ylabel("d′ (true sensitivity)")
