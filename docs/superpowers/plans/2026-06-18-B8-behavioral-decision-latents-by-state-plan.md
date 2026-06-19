@@ -1105,6 +1105,13 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 To be written as `docs/superpowers/plans/2026-06-…-B8-phase2-generative-latents-plan.md` once Phase 1 figures + cell scores exist. It will cover (spec §4 Step 2, §6): the temporal-expectation-shaped urgency, the minimal regression-accumulator with `v/z/urgency` as state functions, the **expert-anchored backward-seeded** fit, **parameter recovery at the real long-baseline regime** (the gate), the generative per-trial latents appended to the table, and figures F6–F8. Phase 1's cell scores **seed and sanity-check** it; if recovery fails, Phase 1's descriptive latents are the shipped deliverable (spec §9).
 
+**Carried-forward refinements (from Phase-1 review + user figure review):**
+- **Evidence reconstruction** must index `baseline_values` at the 60 Hz frame rate / collapse runs of 3 (n_seen is None; `ddm.build_trial_evidence`'s `ct/len(bv)` + n_seen truncation are wrong for this data — needs a corrected evidence builder).
+- **F1 sharpness-metric rethink (bigger):** the single logistic `psy_slope` is shape-blind (the 1.25→1.5 segment ≠ 1.5→4 segment) and fragile (capped ±20). Move to a proper psychometric model (threshold + slope + lapse) and/or per-change-size d′; Phase 1 adds threshold + curves as an interim, Phase 2 does the full model.
+- **State-definition circularity:** the bias-not-gain claim needs a labeler-independent sensitivity measure and/or neural confirmation (itchiness/criterion is partly definitional — labeler uses `f_inapplick`, `f_hit_hard`, `f_miss_easy`); see spec §7.
+- **`baseline_hazard` window:** restrict to a pre-change window (currently a whole-decision-timeline mean, not comparable across cells with different max decision_time).
+- **change-time anchor:** report the empirical change-time mode/median directly (not the hazard peak, which is biased late by at-risk depletion).
+
 ---
 
 ## Self-Review
