@@ -8,6 +8,7 @@ P<0.01 across folds). See docs/superpowers/specs/2026-06-18-tf-glm-replication-d
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
+import warnings
 import numpy as np
 
 
@@ -298,7 +299,15 @@ def make_trial_folds(trial_index: np.ndarray, n_folds: int, seed: int) -> np.nda
 
 
 def _fit_one(Xtr, ytr, lam):
-    m = PoissonRegressor(alpha=lam, fit_intercept=True, max_iter=300, tol=1e-6)
+    # tol=1e-4 (not 1e-6): a purely-numerical convergence change, NOT a
+    # scientific one. On the large real-data designs (~140k rows x ~380 cols)
+    # the lbfgs solver hits max_iter at tol=1e-6 on every CV fit (the nested
+    # 10-fold x 6-lambda search is ~1100 fits/unit), making the run intractable.
+    # At tol=1e-4 the ridge-Poisson coefficients and CV lambda selection are
+    # unchanged to within noise, but each fit converges in a fraction of the
+    # iterations. max_iter raised to 500 as a safety margin for the few fits
+    # that still need it. Synthetic-fixture tests are unaffected.
+    m = PoissonRegressor(alpha=lam, fit_intercept=True, max_iter=500, tol=1e-4)
     m.fit(Xtr, ytr)
     return m
 
@@ -405,7 +414,16 @@ def tf_pulse_peth(values_per_bin, bin_edges, pulse_times, win, bin_s,
         rows.append(row)
     if not rows:
         return t_axis, np.full(offs.size, np.nan)
-    return t_axis, np.nanmean(np.vstack(rows), axis=0)
+    # A lag column where no pulse contributed an in-trial bin is an all-NaN
+    # slice; np.nanmean emits a "Mean of empty slice" RuntimeWarning via
+    # warnings.warn (NOT a float error, so np.errstate cannot suppress it).
+    # The NaN result is the intended "undefined at this lag" sentinel, so
+    # silence that specific warning narrowly to keep the suite clean under
+    # -W error::RuntimeWarning.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        peth = np.nanmean(np.vstack(rows), axis=0)
+    return t_axis, peth
 
 
 def _tf_kernel(full_fit, design, cfg):
@@ -425,10 +443,11 @@ def identify_tf_responsive(design, y, full_fit, reduced_fit, cfg: TFGLMConfig) -
 
     def diff_peth(values):
         # nanmean over an all-NaN PETH row (no pulses landed in that lag) is a
-        # legitimate "undefined" -> NaN; suppress the RuntimeWarning narrowly.
-        with np.errstate(invalid="ignore"):
-            _, pf = tf_pulse_peth(values, design.bin_edges, fast, win, bs, trial_index=ti)
-            _, ps = tf_pulse_peth(values, design.bin_edges, slow, win, bs, trial_index=ti)
+        # legitimate "undefined" -> NaN; the RuntimeWarning is suppressed inside
+        # tf_pulse_peth via warnings.catch_warnings (np.errstate does NOT catch
+        # the "Mean of empty slice" warning, which is raised by warnings.warn).
+        _, pf = tf_pulse_peth(values, design.bin_edges, fast, win, bs, trial_index=ti)
+        _, ps = tf_pulse_peth(values, design.bin_edges, slow, win, bs, trial_index=ti)
         return pf - ps
 
     # Pulse-count gate (Fix 3): too few fast/slow pulses -> the PETHs are

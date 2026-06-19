@@ -42,7 +42,7 @@ COL_OUTCOME = "trialoutcome"
 @dataclass
 class KhilSession:
     units: Dict[int, np.ndarray]
-    regions: Dict[int, str]
+    regions: Dict[int, str]            # fine CCF acronym (VISp1, VISp5, CP, ...)
     trials: pd.DataFrame
     licks: np.ndarray
     baseline_on: np.ndarray
@@ -52,6 +52,7 @@ class KhilSession:
     stim: pd.DataFrame
     movement: dict
     running: np.ndarray
+    regions_coarse: Optional[Dict[int, str]] = None  # grouped label (VISp, CP)
 
 
 def _read(d: Path, name_parquet: str, name_csv: str) -> pd.DataFrame:
@@ -90,6 +91,16 @@ def load_khilkevich_session(session_dir) -> KhilSession:
                         .drop_duplicates(subset=[COL_UNIT])
                         .itertuples(index=False)):
             regions[int(uid)] = str(rg)
+
+    # Coarse (grouped) region label, e.g. VISp1/VISp5 -> VISp, used for region
+    # selection in the regressor builder (matches the survey's coarse labels).
+    regions_coarse: Dict[int, str] = {}
+    coarse_src = clusters if COL_REGION_COMB in clusters.columns else neural
+    if COL_REGION_COMB in coarse_src.columns and COL_UNIT in coarse_src.columns:
+        for uid, rg in (coarse_src[[COL_UNIT, COL_REGION_COMB]]
+                        .drop_duplicates(subset=[COL_UNIT])
+                        .itertuples(index=False)):
+            regions_coarse[int(uid)] = str(rg)
 
     def _daq(channel_csv: str) -> np.ndarray:
         """Event onset times from a per-channel daq CSV.
@@ -130,4 +141,172 @@ def load_khilkevich_session(session_dir) -> KhilSession:
     return KhilSession(units=units, regions=regions, trials=trials, licks=licks,
                        baseline_on=baseline_on, change_on=change_on, valve=valve,
                        airpuff=airpuff, stim=stim, movement=movement,
-                       running=running)
+                       running=running, regions_coarse=regions_coarse)
+
+
+# ── Task 9: per-trial regressor builder for the Khilkevich npx_converted data ──
+
+# Trial-event / per-trial column names (verified against the real schema).
+COL_TF_COL = "TF"                 # per-frame linear TF in stim.csv
+COL_STIM_FRAME_TIME = "frame_time"  # NEURAL-clock per-frame time (NOT vbl, which
+                                  # is the raw VBL hardware clock ~1.6e9)
+COL_VALVE = "Valve_L_rise"        # per-trial reward (valve open) time
+COL_LICK_TIMES = "lick_times"     # per-trial array of lick times (object column)
+
+# Snap-to grid for the change ratio (matches tf_glm.CHANGE_SIZES).
+_CHANGE_SIZES = (1.0, 1.25, 1.35, 1.5, 2.0, 4.0)
+
+
+def _resample_to_bins(times, values, bin_edges, bin_s, fill=0.0):
+    """Mean of a (times, values) signal within each 50-ms bin; empties -> fill.
+
+    ``bin_edges`` are the LEFT edges of this trial's bins. A sample at time t
+    falls in bin floor((t - edges[0]) / bin_s). Samples outside the edge span
+    are dropped. Used for the per-frame TF signal and the wheel speed.
+    """
+    edges = np.asarray(bin_edges, float)
+    if edges.size == 0:
+        return np.zeros(0)
+    t = np.asarray(times, float)
+    v = np.asarray(values, float)
+    out = np.full(edges.size, float(fill))
+    if t.size == 0 or not np.isfinite(edges[0]):
+        return out
+    # Compute float bin indices first; only cast the finite, in-window samples
+    # (casting NaN/inf to int is undefined and raises a RuntimeWarning).
+    fidx = (t - edges[0]) / bin_s + 1e-9
+    finite = np.isfinite(fidx) & np.isfinite(v)
+    idx = np.full(t.size, -1, dtype=int)
+    idx[finite] = np.floor(fidx[finite]).astype(int)
+    acc = np.zeros(edges.size)
+    cnt = np.zeros(edges.size)
+    ok = finite & (idx >= 0) & (idx < edges.size)
+    np.add.at(acc, idx[ok], v[ok])
+    np.add.at(cnt, idx[ok], 1.0)
+    nz = cnt > 0
+    out[nz] = acc[nz] / cnt[nz]
+    return out
+
+
+def _snap_change_size(ratio: float) -> float:
+    """Snap a raw Stim2TF/Stim1TF ratio to the nearest canonical change size."""
+    if not np.isfinite(ratio):
+        return 1.0
+    arr = np.asarray(_CHANGE_SIZES, float)
+    return float(arr[int(np.argmin(np.abs(arr - ratio)))])
+
+
+def khilkevich_trial_regressors(
+    ks: KhilSession, cfg: TFGLMConfig, region: Optional[str] = None
+) -> Tuple[List[TrialRegressors], Dict[int, np.ndarray]]:
+    """Build per-trial TrialRegressors + the requested region's spike trains.
+
+    Adapts the Khilkevich npx_converted schema (verified on real sessions) to
+    the tf_glm TrialRegressors container. Alignment is driven by the per-trial
+    ``ks.trials`` DataFrame (NOT the NaN-dropped flat daq arrays), so trial
+    indexing is preserved on catch/abort trials.
+
+    Per trial i:
+      - t_start = Baseline_ON_rise[i]; t_end = next sorted baseline onset
+        (last trial: t_start + 20 s).
+      - change_time = Change_ON_rise[i] (NaN on catch/abort -> no change col).
+      - change_size = round(Stim2TF/Stim1TF, 2) snapped to CHANGE_SIZES.
+      - tf_bins: per-frame linear TF from ks.stim (frame_time = neural clock)
+        resampled onto THIS trial's bins. Linear TF is passed through;
+        pulse_times_from_tf log2's it internally.
+      - lick_times: per-trial lick_times array if present, else flat ks.licks
+        filtered to [t_start, t_end).
+      - reward_time: first Valve_L_rise in [t_start, t_end) (per-trial col,
+        falls back to the flat ks.valve array).
+      - abort_time: change_time if trialoutcome == 'abort' else NaN.
+      - wheel_bins: |speed| from ks.running resampled onto the trial's bins.
+      - phase_bins = None (PHASE IS ABSENT from the export; run include_phase=False).
+
+    The returned spike dict holds only units whose region matches ``region``
+    (matched on fine OR coarse label; None -> all units).
+    """
+    bs = cfg.bin_s
+    tr = ks.trials
+
+    bon = tr[COL_BASELINE_ON].to_numpy(float)
+    n = bon.size
+    # Trial ends = next sorted baseline onset; last trial gets a fixed window.
+    order = np.argsort(np.where(np.isfinite(bon), bon, np.inf))
+    ends = np.full(n, np.nan)
+    for k in range(n):
+        i = order[k]
+        if k + 1 < n:
+            ends[i] = bon[order[k + 1]]
+        else:
+            ends[i] = bon[i] + 20.0 if np.isfinite(bon[i]) else np.nan
+
+    chg = (tr[COL_CHANGE_ON].to_numpy(float) if COL_CHANGE_ON in tr.columns
+           else np.full(n, np.nan))
+    s1 = (tr[COL_STIM1_TF].to_numpy(float) if COL_STIM1_TF in tr.columns
+          else np.ones(n))
+    s2 = (tr[COL_STIM2_TF].to_numpy(float) if COL_STIM2_TF in tr.columns
+          else np.ones(n))
+    valve = (tr[COL_VALVE].to_numpy(float) if COL_VALVE in tr.columns
+             else np.full(n, np.nan))
+    outcome = (tr[COL_OUTCOME].astype(str).to_numpy() if COL_OUTCOME in tr.columns
+               else np.array([""] * n))
+    has_lick_col = COL_LICK_TIMES in tr.columns
+    lick_col = tr[COL_LICK_TIMES].to_numpy(object) if has_lick_col else None
+
+    # Per-frame stimulus signal (neural-clock frame_time + linear TF).
+    stim = ks.stim
+    s_t = (stim[COL_STIM_FRAME_TIME].to_numpy(float)
+           if COL_STIM_FRAME_TIME in stim.columns else stim.iloc[:, 0].to_numpy(float))
+    s_tf = (stim[COL_TF_COL].to_numpy(float)
+            if COL_TF_COL in stim.columns else stim.iloc[:, 1].to_numpy(float))
+
+    # Running wheel: col 0 = time (neural clock), col 1 = signed speed.
+    if ks.running.size:
+        run_t = ks.running[:, 0]
+        run_v = np.abs(ks.running[:, 1])
+    else:
+        run_t = np.zeros(0)
+        run_v = np.zeros(0)
+
+    trials_regs: List[TrialRegressors] = []
+    for i in range(n):
+        t0, t1 = float(bon[i]), float(ends[i])
+        if not (np.isfinite(t0) and np.isfinite(t1) and t1 > t0):
+            # Degenerate trial: emit an empty regressor so trial indexing holds.
+            t1 = t0 + bs if np.isfinite(t0) else 0.0
+        edges = trial_bin_edges(t0, t1, bs)
+        tf_bins = _resample_to_bins(s_t, s_tf, edges, bs, fill=0.0)
+        wheel_bins = _resample_to_bins(run_t, run_v, edges, bs, fill=0.0)
+
+        if has_lick_col and lick_col[i] is not None and np.ndim(lick_col[i]) > 0:
+            lk = np.asarray(lick_col[i], float)
+            lk = lk[(lk >= t0) & (lk < t1)]
+        else:
+            lk = ks.licks[(ks.licks >= t0) & (ks.licks < t1)]
+
+        ratio = round(s2[i] / s1[i], 2) if (np.isfinite(s1[i]) and s1[i] != 0
+                                            and np.isfinite(s2[i])) else 1.0
+        change_size = _snap_change_size(ratio)
+        ct = chg[i] if (i < chg.size and np.isfinite(chg[i])) else np.nan
+
+        rew = valve[i] if (i < valve.size and np.isfinite(valve[i])) else np.nan
+        if not np.isfinite(rew) and ks.valve.size:
+            inwin = ks.valve[(ks.valve >= t0) & (ks.valve < t1)]
+            rew = float(inwin[0]) if inwin.size else np.nan
+
+        abort_time = ct if str(outcome[i]).lower() == "abort" else np.nan
+
+        trials_regs.append(TrialRegressors(
+            t_start=t0, t_end=t1, change_time=ct, change_size=change_size,
+            tf_bins=tf_bins, lick_times=lk, reward_time=rew,
+            abort_time=abort_time, wheel_bins=wheel_bins, phase_bins=None))
+
+    # Region selection: match fine OR coarse label; None -> all units.
+    coarse = ks.regions_coarse or {}
+    if region is None:
+        unit_ids = list(ks.units.keys())
+    else:
+        unit_ids = [u for u in ks.units
+                    if ks.regions.get(u, "") == region
+                    or coarse.get(u, "") == region]
+    return trials_regs, {u: ks.units[u] for u in unit_ids}
