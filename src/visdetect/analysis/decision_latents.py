@@ -11,10 +11,14 @@ import glob
 import os
 import numpy as np
 import pandas as pd
+from scipy.optimize import curve_fit
 
 from visdetect.analysis import ddm
-from visdetect.analysis.behavior import compute_session_performance
+from visdetect.analysis.behavior import compute_session_performance, calculate_dprime
 from visdetect.analysis.config import parse_session_date  # DDMMYYYY parser
+# CHANGE_SIZES is the canonical ordered go-trial list (sorted ALL_GO_CHANGE_SIZES);
+# it lives in config, NOT constants (the task brief's import path is a typo).
+from visdetect.analysis.config import CHANGE_SIZES
 
 MAIN_MOODS = ("Impulsive", "StimSens")
 SEPARATE_MOODS = ("Disengaged",)
@@ -138,3 +142,48 @@ def censored_hazard(durations, events, dt=0.05, t_max=None):
         hazard[k] = (n_event / at_risk) if at_risk > 0 else 0.0
     survival = np.cumprod(1.0 - hazard)
     return centers, hazard, survival
+
+
+def _logistic(x, a, b):
+    return 1.0 / (1.0 + np.exp(-(a + b * x)))
+
+
+def sharpness_scores(trial_df):
+    """Sharpness = how clearly the mouse tells the change happened.
+
+    Operates on one (session × mood) cell's trial rows. Returns a dict:
+
+    * ``psy_slope`` — logistic-fit slope of P(lick) vs ``log2(change_size)`` on
+      GO trials (``change_size > 1.0``). NaN if < 8 go trials, < 2 distinct
+      change sizes, or the fit fails.
+    * ``dprime`` — ``calculate_dprime(hit_rate, fa_rate)`` with go-trial lick
+      mean as the hit rate and catch-trial (``change_size ≈ 1.0``) lick mean as
+      the FA rate. (``calculate_dprime`` log-linear-clips the rates.)
+    * ``rt_mean_cs{cs}`` / ``rt_cv_cs{cs}`` per ``cs`` in canonical
+      ``CHANGE_SIZES`` — Hit RT = ``decision_time − change_time_planned`` on hit
+      trials; NaN if < 3 such trials.
+    """
+    go = trial_df[trial_df["change_size"] > 1.0]
+    catch = trial_df[np.isclose(trial_df["change_size"], 1.0)]
+    out = {}
+    # psychometric slope: P(lick) vs log2(change_size) on go trials
+    if len(go) >= 8 and go["change_size"].nunique() >= 2:
+        x = np.log2(go["change_size"].values); y = go["lick"].values.astype(float)
+        try:
+            (a, b), _ = curve_fit(_logistic, x, y, p0=[0.0, 1.0], maxfev=5000)
+            out["psy_slope"] = float(b)
+        except Exception:
+            out["psy_slope"] = float("nan")
+    else:
+        out["psy_slope"] = float("nan")
+    hit_rate = float(go["lick"].mean()) if len(go) else float("nan")
+    fa_rate = float(catch["lick"].mean()) if len(catch) else float("nan")
+    out["dprime"] = float(calculate_dprime(hit_rate, fa_rate))
+    # per-change-size Hit RT mean + CV
+    hits = go[go["outcome"] == "hit"].copy()
+    hits["rt"] = hits["decision_time"] - hits["change_time_planned"]
+    for cs in CHANGE_SIZES:
+        rt = hits.loc[np.isclose(hits["change_size"], cs), "rt"].values
+        out[f"rt_mean_cs{cs}"] = float(np.mean(rt)) if rt.size >= 3 else float("nan")
+        out[f"rt_cv_cs{cs}"] = float(np.std(rt) / np.mean(rt)) if rt.size >= 3 and np.mean(rt) > 0 else float("nan")
+    return out

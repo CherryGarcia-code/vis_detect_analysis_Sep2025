@@ -68,3 +68,22 @@ def test_censored_hazard_bins_mid_bin_duration_correctly():
     centers, hz, surv = dl.censored_hazard(np.array([0.07]), np.array([True]), dt=0.05, t_max=0.15)
     assert hz[0] == 0.0          # nothing happens in bin0 (0,0.05]
     assert np.isclose(hz[1], 1.0)  # the event lands in bin1
+
+
+def test_sharpness_scores_keys_and_dprime_direction():
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    rng = np.random.default_rng(0)
+    rows = []
+    for cs, p in [(1.0, 0.1), (1.25, 0.4), (2.0, 0.8), (4.0, 0.95)]:
+        for _ in range(50):
+            lick = rng.random() < p
+            outcome = "hit" if (cs > 1.0 and lick) else ("fa" if (cs == 1.0 and lick) else "miss")
+            ct = 5.0
+            rows.append({"change_size": cs, "lick": int(lick), "outcome": outcome,
+                         "change_time_planned": ct,
+                         "decision_time": ct + rng.uniform(0.2, 0.6) if outcome == "hit" else ct + 2.0})
+    sc = dl.sharpness_scores(pd.DataFrame(rows))
+    assert "psy_slope" in sc and "dprime" in sc
+    assert any(k.startswith("rt_cv_cs") for k in sc)
+    assert sc["dprime"] > 0          # more hits on big changes than FAs on catch
