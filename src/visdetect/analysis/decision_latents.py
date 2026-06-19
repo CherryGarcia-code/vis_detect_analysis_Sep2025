@@ -283,3 +283,52 @@ def timing_scores(trial_df, dt=0.05):
     return {"change_hazard_peak_time": ch_peak, "lick_hazard_peak_time": l_peak,
             "lick_hazard_spread": l_spread,
             "peak_offset": (l_peak - ch_peak) if np.isfinite(l_peak) and np.isfinite(ch_peak) else float("nan")}
+
+
+def descriptive_cell_table(all_trials_df, min_cell_trials=20, dt=0.05):
+    """One row per ``(session_name, state_label)`` cell, scored descriptively.
+
+    Cells are kept only for moods in ``MAIN_MOODS + SEPARATE_MOODS``
+    (Impulsive/StimSens/Disengaged); labeler ``Abort``/excluded moods never
+    appear. Disengaged is kept but flagged ``reported_separately=True``. A cell
+    with ``n_trials < min_cell_trials`` is kept with ``underpowered=True`` and
+    NaN scores (the score functions are simply not called). ``session_dprime``
+    and ``comprehension_flag`` are read from the cell's first row (the caller
+    attaches them as columns on ``all_trials_df``).
+    """
+    keep = list(MAIN_MOODS) + list(SEPARATE_MOODS)
+    rows = []
+    for (sname, mood), cell in all_trials_df.groupby(["session_name", "state_label"]):
+        if mood not in keep:
+            continue
+        n = len(cell)
+        rec = {"session_name": sname, "state_label": mood, "n_trials": n,
+               "reported_separately": mood in SEPARATE_MOODS,
+               "underpowered": n < min_cell_trials,
+               "session_dprime": cell["session_dprime"].iloc[0],
+               "comprehension_flag": cell["comprehension_flag"].iloc[0]}
+        if n >= min_cell_trials:
+            rec.update(sharpness_scores(cell))
+            rec.update(itchiness_scores(cell, dt=dt))
+            rec.update(timing_scores(cell, dt=dt))
+        rows.append(rec)
+    return pd.DataFrame(rows)
+
+
+def descriptive_latent_table(all_trials_df, cell_table):
+    """Per-trial deliverable: each trial row joined to its cell's scores.
+
+    Left-merges on ``(session_name, state_label)`` so every input trial keeps
+    exactly one output row (cell scores broadcast to all of the cell's trials;
+    trials in a cell that was never scored get NaN). Renames the cell-level
+    columns to their per-trial latent names (``psy_slope -> sharpness_psy_slope``,
+    ``fa_rate -> fa_rate_cell``, ``lick_hazard_peak_time -> hazard_peak_cell``)
+    and keeps ``criterion_c`` as-is.
+    """
+    key = ["session_name", "state_label"]
+    cols = ["psy_slope", "criterion_c", "fa_rate", "lick_hazard_peak_time"]
+    avail = [c for c in cols if c in cell_table.columns]
+    joined = all_trials_df.merge(cell_table[key + avail], on=key, how="left")
+    return joined.rename(columns={"psy_slope": "sharpness_psy_slope",
+                                  "fa_rate": "fa_rate_cell",
+                                  "lick_hazard_peak_time": "hazard_peak_cell"})

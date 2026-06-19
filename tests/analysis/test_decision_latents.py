@@ -120,3 +120,15 @@ def test_timing_scores_peak_and_offset():
     assert 4.0 < sc["change_hazard_peak_time"] < 6.0
     assert sc["lick_hazard_peak_time"] >= sc["change_hazard_peak_time"]  # licks after change
     assert "peak_offset" in sc and "lick_hazard_spread" in sc
+
+
+def test_cell_and_latent_tables(synth_session, synth_state_labels):
+    from visdetect.analysis import decision_latents as dl
+    tab = dl.build_trial_table(synth_session, synth_state_labels, "07072025")
+    tab["session_dprime"] = 0.9; tab["comprehension_flag"] = "post"
+    cells = dl.descriptive_cell_table(tab, min_cell_trials=1)
+    assert set(cells["state_label"]).issubset(set(dl.MAIN_MOODS + dl.SEPARATE_MOODS))
+    assert {"criterion_c", "psy_slope", "lick_hazard_peak_time", "n_trials"}.issubset(cells.columns)
+    lat = dl.descriptive_latent_table(tab, cells)
+    assert len(lat) == len(tab)
+    assert {"criterion_c", "sharpness_psy_slope", "trial_in_session"}.issubset(lat.columns)
