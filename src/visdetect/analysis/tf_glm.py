@@ -35,6 +35,14 @@ class TFGLMConfig:
         "abort":         (-1.25, 0.25),
         "wheel":         (-0.05, 0.8),
         "phase":         (0.0, 0.0),    # 12 bins x up/down, no temporal unfold
+        # Movement-controlled (full Khilkevich) regressors; only added to the
+        # design when cfg.include_movement is True. Windows from the audit of
+        # FullBlocks_CV.m (#17 FaceMovement / #18 RunSpeed dur850/off-1 =>
+        # [-0.05, 0.8]s; #19 Pupil dur1500/off-15 => [-0.75, 0.75]s; #12 Air
+        # puff dur250/off0 => [0, 0.25]s).
+        "motion_energy": (-0.05, 0.8),
+        "pupil":         (-0.75, 0.75),
+        "airpuff":       (0.0, 0.25),
     })
     sd_pulse: float = 0.5               # fast/slow = +/-0.5 SD of baseline TF
     pulse_eval_win: Tuple[float, float] = (-0.15, 0.75)  # PETH window around pulses
@@ -56,6 +64,12 @@ class TFGLMConfig:
     responsive_criterion: str = "c2"    # "c2" (default) | "c1_and_c2"
     seed: int = 42
     include_phase: bool = False         # off for DMS-first; on for cortex
+    # Movement-controlled (full Khilkevich-faithful) model: add motion-energy +
+    # pupil continuous FIR regressors and an air-puff event regressor. OFF by
+    # default so existing (reduced-model) callers are unaffected; the reduced
+    # model is what C2 toggles the TF block against, and these movement
+    # regressors are the nuisance controls the paper's full model carries.
+    include_movement: bool = False
     fast_fit: bool = False              # select ridge lambda ONCE/unit (not per outer fold)
 
 
@@ -148,6 +162,13 @@ class TrialRegressors:
     abort_time: float           # neural-clock; NaN if none
     wheel_bins: np.ndarray      # (n_bins,) wheel speed per bin
     phase_bins: Optional[np.ndarray] = None  # (n_bins,) phase degrees [0,360) or None
+    # Movement-controlled (full Khilkevich) regressors. Default to None so
+    # reduced-model callers (BG_046/039 session builder) are unaffected; only
+    # populated + used when cfg.include_movement is True. Per-bin continuous
+    # (like wheel_bins); airpuff_time is a single neural-clock event time.
+    motion_bins: Optional[np.ndarray] = None  # (n_bins,) face/whisker motion-energy
+    pupil_bins: Optional[np.ndarray] = None   # (n_bins,) pupil area
+    airpuff_time: float = float("nan")        # neural-clock air-puff onset; NaN if none
 
 
 @dataclass
@@ -172,6 +193,9 @@ def _phase_indicator(phase_deg: np.ndarray, n_bins_circ: int = 12) -> np.ndarray
 
 
 def _resize(a, n, fill=0.0):
+    # None (e.g. unset motion_bins/pupil_bins on a reduced-model trial) -> all-fill
+    if a is None:
+        return np.full(n, fill)
     a = np.asarray(a, dtype=float).ravel()
     if a.size == n:
         return a
@@ -256,6 +280,18 @@ def assemble_design(trials: List["TrialRegressors"], cfg: TFGLMConfig) -> Design
     # 18) wheel (continuous)
     _add("wheel", _blockwise(trials, per_edges, lambda tr, e: fir_continuous(
         _resize(tr.wheel_bins, e.size), cfg.kern["wheel"], bs)))
+    # 17,19,12) movement-controlled regressors (optional): face/whisker
+    # motion-energy + pupil (continuous FIR) and air-puff (event FIR). Built
+    # per-trial then stacked so lags do not bleed across trial boundaries.
+    if cfg.include_movement:
+        _add("motion_energy", _blockwise(trials, per_edges, lambda tr, e:
+            fir_continuous(_resize(tr.motion_bins, e.size),
+                           cfg.kern["motion_energy"], bs)))
+        _add("pupil", _blockwise(trials, per_edges, lambda tr, e:
+            fir_continuous(_resize(tr.pupil_bins, e.size),
+                           cfg.kern["pupil"], bs)))
+        _add("airpuff", _blockwise(trials, per_edges, lambda tr, e: fir_event(
+            np.array([tr.airpuff_time]), e, cfg.kern["airpuff"], bs)))
     # 15-16) phase (optional)
     if cfg.include_phase:
         _add("phase", _phase_indicator(phase_bins))
@@ -267,7 +303,7 @@ def assemble_design(trials: List["TrialRegressors"], cfg: TFGLMConfig) -> Design
     # zero-variance columns (e.g. all-zero TF lags) — leave them unchanged.
     # NOTE: design.tf_bins is left RAW on purpose — pulse_times_from_tf reads it
     # for ±SD pulse detection and must see the raw linear-TF signal.
-    for grp in ("tf", "wheel"):
+    for grp in ("tf", "wheel", "motion_energy", "pupil"):
         sl = groups.get(grp)
         if sl is None:
             continue

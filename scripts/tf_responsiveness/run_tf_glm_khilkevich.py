@@ -295,6 +295,9 @@ def main(argv=None):
                    help="subsample first N trials (runtime knob; shrinks design)")
     p.add_argument("--include-phase", action="store_true",
                    help="(phase is ABSENT in the Khilkevich export; leave off)")
+    p.add_argument("--include-movement", action="store_true",
+                   help="full Khilkevich-faithful model: add motion-energy + "
+                        "pupil (continuous FIR) + air-puff (event) regressors")
     p.add_argument("--fast-fit", action="store_true",
                    help="select ridge lambda ONCE per unit (much faster; "
                         "preserves held-out pred structure)")
@@ -303,7 +306,8 @@ def main(argv=None):
                         "grid; pass e.g. 0.01,0.1,1.0 to speed fast-fit further)")
     a = p.parse_args(argv)
 
-    kw = dict(include_phase=a.include_phase, fast_fit=a.fast_fit)
+    kw = dict(include_phase=a.include_phase, include_movement=a.include_movement,
+              fast_fit=a.fast_fit)
     if a.lambdas:
         kw["lambdas"] = tuple(float(x) for x in a.lambdas.split(","))
     cfg = TFGLMConfig(**kw)

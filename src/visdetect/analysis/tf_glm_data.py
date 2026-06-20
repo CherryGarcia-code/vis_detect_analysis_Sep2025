@@ -53,6 +53,7 @@ class KhilSession:
     movement: dict
     running: np.ndarray
     regions_coarse: Optional[Dict[int, str]] = None  # grouped label (VISp, CP)
+    session_dir: Optional[str] = None  # source dir (for daq_Eye_cam.csv movement ts)
 
 
 def _read(d: Path, name_parquet: str, name_csv: str) -> pd.DataFrame:
@@ -141,7 +142,8 @@ def load_khilkevich_session(session_dir) -> KhilSession:
     return KhilSession(units=units, regions=regions, trials=trials, licks=licks,
                        baseline_on=baseline_on, change_on=change_on, valve=valve,
                        airpuff=airpuff, stim=stim, movement=movement,
-                       running=running, regions_coarse=regions_coarse)
+                       running=running, regions_coarse=regions_coarse,
+                       session_dir=str(d))
 
 
 # ── Task 9: per-trial regressor builder for the Khilkevich npx_converted data ──
@@ -151,6 +153,7 @@ COL_TF_COL = "TF"                 # per-frame linear TF in stim.csv
 COL_STIM_FRAME_TIME = "frame_time"  # NEURAL-clock per-frame time (NOT vbl, which
                                   # is the raw VBL hardware clock ~1.6e9)
 COL_VALVE = "Valve_L_rise"        # per-trial reward (valve open) time
+COL_AIRPUFF = "Air_puff_rise"     # per-trial air-puff onset (NaN when none)
 COL_LICK_TIMES = "lick_times"     # per-trial array of lick times (object column)
 
 # Snap-to grid for the change ratio (matches tf_glm.CHANGE_SIZES).
@@ -196,6 +199,53 @@ def _snap_change_size(ratio: float) -> float:
     return float(arr[int(np.argmin(np.abs(arr - ratio)))])
 
 
+def _eyecam_movement_signals(ks: "KhilSession", session_dir):
+    """(eye_t, motion_energy, pupil) on the NEURAL clock for the full model.
+
+    movement.pkl holds video arrays (mouth_me / whisker_me / pupil_area, length
+    ~305025). Their TIME VECTOR is the eye-camera frame rise times in
+    daq_Eye_cam.csv (~305028 rows), which are already on the neural/spike clock
+    (same clock as Baseline_ON_rise etc.). We TRUNCATE both to their common
+    length so index i of each movement array maps to eye-cam rise-time i.
+
+    motion_energy = mean(mouth_me, whisker_me) (face/whisker movement that
+    accompanies licking); pupil = pupil_area. Returns three equal-length 1-D
+    arrays, or empties if the inputs are missing.
+    """
+    video = (ks.movement or {}).get("video", {})
+    mouth = np.asarray(video.get("mouth_me", np.zeros(0)), float).ravel()
+    whisk = np.asarray(video.get("whisker_me", np.zeros(0)), float).ravel()
+    pupil = np.asarray(video.get("pupil_area", np.zeros(0)), float).ravel()
+    if mouth.size == 0 and whisk.size == 0 and pupil.size == 0:
+        return np.zeros(0), np.zeros(0), np.zeros(0)
+
+    # Eye-camera frame rise times (neural clock) from daq_Eye_cam.csv (col 0).
+    eye_t = np.zeros(0)
+    if session_dir is not None:
+        fp = Path(session_dir) / "daq_Eye_cam.csv"
+        if fp.exists():
+            eye_t = pd.read_csv(fp).iloc[:, 0].to_numpy(float)
+    if eye_t.size == 0:
+        return np.zeros(0), np.zeros(0), np.zeros(0)
+
+    # motion-energy = mean of available face channels (mouth + whisker).
+    me_parts = [a for a in (mouth, whisk) if a.size]
+    if me_parts:
+        m = min(a.size for a in me_parts)
+        motion = np.mean(np.vstack([a[:m] for a in me_parts]), axis=0)
+    else:
+        motion = np.zeros(0)
+
+    # Truncate eye-cam times and each movement signal to their common length so
+    # index i of the movement array maps to eye-cam rise-time i.
+    n = min(x.size for x in (eye_t, motion if motion.size else eye_t,
+                             pupil if pupil.size else eye_t))
+    eye_t = eye_t[:n]
+    motion = motion[:n] if motion.size else np.zeros(n)
+    pupil = pupil[:n] if pupil.size else np.zeros(n)
+    return eye_t, motion, pupil
+
+
 def khilkevich_trial_regressors(
     ks: KhilSession, cfg: TFGLMConfig, region: Optional[str] = None
 ) -> Tuple[List[TrialRegressors], Dict[int, np.ndarray]]:
@@ -221,6 +271,15 @@ def khilkevich_trial_regressors(
       - abort_time: change_time if trialoutcome == 'abort' else NaN.
       - wheel_bins: |speed| from ks.running resampled onto the trial's bins.
       - phase_bins = None (PHASE IS ABSENT from the export; run include_phase=False).
+
+    When ``cfg.include_movement`` (the full Khilkevich-faithful model), three
+    further regressors are populated (else left None/NaN so the reduced model is
+    unaffected):
+      - motion_bins: mean(mouth_me, whisker_me) face/whisker motion-energy from
+        movement.pkl, on the daq_Eye_cam.csv (neural-clock) frame times,
+        resampled onto THIS trial's bins.
+      - pupil_bins: pupil_area from movement.pkl on the same eye-cam clock.
+      - airpuff_time: per-trial Air_puff_rise (NaN when no puff).
 
     The returned spike dict holds only units whose region matches ``region``
     (matched on fine OR coarse label; None -> all units).
@@ -248,6 +307,8 @@ def khilkevich_trial_regressors(
           else np.ones(n))
     valve = (tr[COL_VALVE].to_numpy(float) if COL_VALVE in tr.columns
              else np.full(n, np.nan))
+    airpuff_col = (tr[COL_AIRPUFF].to_numpy(float) if COL_AIRPUFF in tr.columns
+                   else np.full(n, np.nan))
     outcome = (tr[COL_OUTCOME].astype(str).to_numpy() if COL_OUTCOME in tr.columns
                else np.array([""] * n))
     has_lick_col = COL_LICK_TIMES in tr.columns
@@ -267,6 +328,13 @@ def khilkevich_trial_regressors(
     else:
         run_t = np.zeros(0)
         run_v = np.zeros(0)
+
+    # Movement-controlled regressors (full Khilkevich model only): face/whisker
+    # motion-energy + pupil on the eye-cam (neural) clock. Empty unless asked.
+    if cfg.include_movement:
+        eye_t, motion_sig, pupil_sig = _eyecam_movement_signals(ks, ks.session_dir)
+    else:
+        eye_t = motion_sig = pupil_sig = np.zeros(0)
 
     trials_regs: List[TrialRegressors] = []
     for i in range(n):
@@ -296,10 +364,25 @@ def khilkevich_trial_regressors(
 
         abort_time = ct if str(outcome[i]).lower() == "abort" else np.nan
 
+        # Movement regressors (full model only): resample motion-energy + pupil
+        # onto THIS trial's per-trial bins (never the global concatenated edges);
+        # air-puff is a per-trial event time.
+        if cfg.include_movement and eye_t.size:
+            motion_bins = _resample_to_bins(eye_t, motion_sig, edges, bs, fill=0.0)
+            pupil_bins = _resample_to_bins(eye_t, pupil_sig, edges, bs, fill=0.0)
+        else:
+            motion_bins = None
+            pupil_bins = None
+        airpuff_time = (float(airpuff_col[i]) if (cfg.include_movement
+                        and i < airpuff_col.size and np.isfinite(airpuff_col[i]))
+                        else np.nan)
+
         trials_regs.append(TrialRegressors(
             t_start=t0, t_end=t1, change_time=ct, change_size=change_size,
             tf_bins=tf_bins, lick_times=lk, reward_time=rew,
-            abort_time=abort_time, wheel_bins=wheel_bins, phase_bins=None))
+            abort_time=abort_time, wheel_bins=wheel_bins, phase_bins=None,
+            motion_bins=motion_bins, pupil_bins=pupil_bins,
+            airpuff_time=airpuff_time))
 
     # Region selection: match fine OR coarse label; None -> all units.
     coarse = ks.regions_coarse or {}
