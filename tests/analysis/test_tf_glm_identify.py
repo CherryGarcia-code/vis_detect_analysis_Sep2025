@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from visdetect.analysis.tf_glm import (TFGLMConfig, tf_pulse_peth,
                                         pulse_times_from_tf, identify_tf_responsive,
                                         DesignMatrix, FitResult)
@@ -82,6 +83,56 @@ def test_dense_identify_not_responsive_when_full_equals_reduced():
                                  _fit_stub(shared.copy(), fold_ids), cfg)
     assert not out["is_responsive"]
     assert out["c2_p"] >= 0.01 or not np.isfinite(out["c2_p"])
+
+
+def test_criterion_c2_vs_c1_and_c2_when_c1_low():
+    # Construct a case where C2 is significant (FULL beats REDUCED on every fold)
+    # but the FULL model's overall predictive correlation c1_r is BELOW 0.2:
+    #   - pred_full is only WEAKLY (but consistently) correlated with y -> low c1_r
+    #   - pred_red is ANTI-correlated with y -> r_full - r_red > 0 on every fold
+    # Default "c2": responsive (TF kernel adds paired held-out power).
+    # "c1_and_c2": NOT responsive (c1_r fails the raw-bin 0.2 floor).
+    rng = np.random.default_rng(7)
+    n_folds, per = 6, 60
+    n = n_folds * per
+    fold_ids = np.repeat(np.arange(n_folds), per)
+    y = rng.poisson(2.0, n).astype(float)
+    # weak positive signal -> small but reliably positive r_full (< 0.2)
+    pred_full = 0.05 * y + rng.normal(0, 1.0, n)
+    # reduced is reliably anti-correlated -> r_red < 0 on every fold
+    pred_red = -0.20 * y + rng.normal(0, 0.3, n)
+
+    out_c2 = identify_tf_responsive(_design_stub(n), y,
+                                    _fit_stub(pred_full, fold_ids),
+                                    _fit_stub(pred_red, fold_ids),
+                                    TFGLMConfig(responsive_criterion="c2"))
+    # sanity: this is exactly the c1-low, c2-significant regime we want to test
+    assert out_c2["c1_r"] < 0.2
+    assert out_c2["c2_p"] < 0.01
+    assert out_c2["is_responsive"]                 # C2 alone -> responsive
+
+    out_both = identify_tf_responsive(_design_stub(n), y,
+                                      _fit_stub(pred_full, fold_ids),
+                                      _fit_stub(pred_red, fold_ids),
+                                      TFGLMConfig(responsive_criterion="c1_and_c2"))
+    # same c1_r / c2_p, but the conjunction fails on the raw-bin C1 floor
+    assert out_both["c1_r"] < 0.2
+    assert out_both["c2_p"] < 0.01
+    assert not out_both["is_responsive"]           # c1_and_c2 -> NOT responsive
+
+
+def test_unknown_responsive_criterion_raises():
+    n_folds, per = 5, 40
+    n = n_folds * per
+    fold_ids = np.repeat(np.arange(n_folds), per)
+    rng = np.random.default_rng(3)
+    y = rng.poisson(2.0, n).astype(float)
+    pred = 0.5 * y + rng.normal(0, 0.3, n)
+    cfg = TFGLMConfig(responsive_criterion="bogus")
+    with pytest.raises(ValueError):
+        identify_tf_responsive(_design_stub(n), y,
+                               _fit_stub(pred, fold_ids),
+                               _fit_stub(pred, fold_ids), cfg)
 
 
 def test_dense_identify_skips_low_variance_folds():

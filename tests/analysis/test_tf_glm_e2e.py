@@ -43,21 +43,21 @@ def _run(tf_gain, seed, base=0.0, fast_fit=False):
 
 @pytest.mark.parametrize("fast_fit", [False, True])
 def test_tf_neuron_is_responsive(fast_fit):
-    # Dense criterion: a neuron whose rate genuinely depends on TF has the FULL
-    # model (with TF kernel) predict held-out activity better than the REDUCED
-    # model -> r_full >> r_red (paired positive, significant) AND c1_r > 0.2.
+    # Default criterion is "c2" (paired TF-ablation): a neuron whose rate
+    # genuinely depends on TF has the FULL model (with TF kernel) predict
+    # held-out activity better than the REDUCED model -> r_full > r_red paired,
+    # so c2_p < 0.01 and is_responsive is decided by C2.
     out = _run(tf_gain=3.0, base=0.0, seed=1, fast_fit=fast_fit)
-    assert out["c1_r"] > 0.2
     assert out["c2_p"] < 0.01
-    assert out["is_responsive"]
+    assert out["is_responsive"]                       # decided by C2 (default)
     # the TF kernel adds held-out predictive power
     assert out["r_full_mean"] >= out["r_red_mean"]
 
 
 def test_flat_neuron_not_responsive():
     # A TF-independent neuron (same baseline rate, tf_gain=0): FULL and REDUCED
-    # predict held-out activity equally poorly, and the FULL model has no real
-    # TF signal to lock onto -> c1_r stays below 0.2 -> not responsive.
+    # predict held-out activity equally; the TF kernel adds no paired held-out
+    # power -> c2_p not significant -> not responsive under the default "c2" rule.
     out = _run(tf_gain=0.0, base=0.0, seed=2)
     assert not out["is_responsive"]
-    assert out["c1_r"] < 0.2
+    assert not (np.isfinite(out["c2_p"]) and out["c2_p"] < 0.01)

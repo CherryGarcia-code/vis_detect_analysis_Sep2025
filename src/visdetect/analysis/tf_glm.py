@@ -43,6 +43,17 @@ class TFGLMConfig:
     lambdas: Tuple[float, ...] = (1e-3, 1e-2, 1e-1, 1.0, 10.0, 100.0)
     c1_r_thresh: float = 0.2
     c2_p_thresh: float = 0.01
+    # TF-responsive decision rule. A diagnostic on the authors' (Khilkevich-Lohse
+    # 2024) own data showed the raw-bin C1 r>0.2 floor is mis-scaled and
+    # confounded: it gates GENERAL held-out predictability, not TF specifically
+    # (striatum CP scored HIGHER C1 than visual VISp — the OPPOSITE of the TF
+    # biology), because the paper's r>0.2 was measured on a denoised pulse PETH,
+    # a different scale than this code's raw-bin FullPred. C2 — the paired
+    # full-vs-reduced TF-ablation test — is scale-free and reproduces the paper's
+    # biology (VISp 27% > CP 15%, both in the 5-45% range). C2 is therefore the
+    # primary criterion. "c1_and_c2" keeps the paper's literal conjunction for
+    # faithfulness/comparison.
+    responsive_criterion: str = "c2"    # "c2" (default) | "c1_and_c2"
     seed: int = 42
     include_phase: bool = False         # off for DMS-first; on for cortex
     fast_fit: bool = False              # select ridge lambda ONCE/unit (not per outer fold)
@@ -516,7 +527,31 @@ def identify_tf_responsive(design, y, full_fit, reduced_fit, cfg: TFGLMConfig) -
     C2 : a one-sided paired t-test across folds that ``r_full - r_red > 0`` must
          have ``p < cfg.c2_p_thresh`` (0.01): the TF kernel improves held-out
          prediction.
+
+    The ``is_responsive`` DECISION RULE is configurable via
+    ``cfg.responsive_criterion``:
+
+    - ``"c2"`` (DEFAULT): ``is_responsive = (c2_p < cfg.c2_p_thresh)``. C2 is the
+      scale-free TF-ABLATION test (does the TF kernel add held-out predictive
+      power on the paired folds?). A diagnostic on the authors' own data showed
+      the raw-bin C1 r>0.2 floor is mis-scaled/confounded — it gates general
+      predictability, not TF (striatum CP > visual VISp on C1, opposite the TF
+      biology) — whereas C2 alone reproduces the paper's biology (VISp 27% > CP
+      15%). The paper's r>0.2 was on a denoised pulse PETH, a different scale than
+      this code's raw-bin FullPred, so it does not transfer.
+    - ``"c1_and_c2"``: ``is_responsive = (c1_r > cfg.c1_r_thresh) and
+      (c2_p < cfg.c2_p_thresh)`` — the paper's literal conjunction, kept for
+      faithfulness/comparison.
+
+    ``c1_r``, ``c2_p``, ``r_full_mean``, ``r_red_mean``, ``kernel_peak_t`` and
+    ``kernel_fwhm`` are always returned unchanged; only the ``is_responsive``
+    decision rule depends on ``cfg.responsive_criterion``.
     """
+    if cfg.responsive_criterion not in ("c2", "c1_and_c2"):
+        raise ValueError(
+            f"Unknown responsive_criterion {cfg.responsive_criterion!r}; "
+            "expected 'c2' or 'c1_and_c2'."
+        )
     bs = cfg.bin_s
     y = np.asarray(y, float)
     fold_ids = np.asarray(full_fit.fold_ids)
@@ -571,7 +606,13 @@ def identify_tf_responsive(design, y, full_fit, reduced_fit, cfg: TFGLMConfig) -
             c2_p = np.nan
         c1_pass = np.isfinite(c1_r) and (c1_r > cfg.c1_r_thresh)
         c2_pass = np.isfinite(c2_p) and (c2_p < cfg.c2_p_thresh)
-        is_resp = bool(c1_pass and c2_pass)
+        # Decision rule per cfg.responsive_criterion (validated above): C2 alone
+        # (scale-free TF-ablation test) is the default; "c1_and_c2" is the
+        # paper's literal conjunction, kept for comparison.
+        if cfg.responsive_criterion == "c2":
+            is_resp = bool(c2_pass)
+        else:  # "c1_and_c2"
+            is_resp = bool(c1_pass and c2_pass)
 
     # kernel metrics (unchanged)
     kpeak_t, kfwhm = np.nan, np.nan
