@@ -365,8 +365,11 @@ def session_trial_regressors(
 
     bon = np.asarray(ni.get("Baseline_ON", np.zeros(0)), float).ravel()
     con = np.asarray(ni.get("Change_ON", np.zeros(0)), float).ravel()
-    piezo = np.asarray(ni.get("Piezo_1", np.zeros(0)), float).ravel()
-    piezo = piezo[np.isfinite(piezo)]
+    # Lick channel: BG_046 logs licks on the piezo channel (Piezo_1); other
+    # subjects (e.g. BG_039 cortex) log them on Lick_L / Lick_R instead. Pool
+    # whichever channels are present so the lick regressor is never empty (the
+    # lick control is essential -- this is the "lick-controlled GLM").
+    licks = _collect_lick_times(ni)
     valve = np.asarray(ni.get("Valve_L", np.zeros(0)), float).ravel()
     rot = np.asarray(ni.get("Rot_enc_A", np.zeros(0)), float).ravel()
     rot = np.sort(rot[np.isfinite(rot)])
@@ -419,7 +422,7 @@ def session_trial_regressors(
         # a count accumulator).
         wheel_bins = _tick_density_to_bins(rot, edges, bs)
 
-        lk = piezo[(piezo >= t0) & (piezo < t1)] if piezo.size else np.zeros(0)
+        lk = licks[(licks >= t0) & (licks < t1)] if licks.size else np.zeros(0)
 
         rew = float(valve[i]) if (i < valve.size and np.isfinite(valve[i])) else np.nan
         abort_time = raw_change if outcome == "abort" else np.nan
@@ -441,6 +444,28 @@ def session_trial_regressors(
         unit_ids = list(spike_map.keys())
     units = {u: spike_map[u] for u in unit_ids}
     return trials_regs, units
+
+
+# Lick channels, in priority order. BG_046 uses the piezo channel; BG_039 and
+# other subjects use the optical Lick_L/Lick_R channels. Pool all present (a
+# lick is a lick regardless of which spout/channel detected it).
+_LICK_CHANNELS = ("Piezo_1", "Lick_L", "Lick_R", "Piezo_2")
+
+
+def _collect_lick_times(ni: dict) -> np.ndarray:
+    """Sorted, finite lick times pooled across whichever lick channels exist."""
+    parts = []
+    for ch in _LICK_CHANNELS:
+        v = ni.get(ch)
+        if v is None:
+            continue
+        a = np.asarray(v, float).ravel()
+        a = a[np.isfinite(a)]
+        if a.size:
+            parts.append(a)
+    if not parts:
+        return np.zeros(0)
+    return np.sort(np.concatenate(parts))
 
 
 def _tick_density_to_bins(tick_times: np.ndarray, bin_edges: np.ndarray,

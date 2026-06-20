@@ -54,11 +54,23 @@ def _list_pkls(pkl_dir: Path, limit=None):
     return pkls
 
 
-def run_session(pkl_path: Path, cfg: TFGLMConfig, max_units=None, verbose=True):
-    """Fit full + reduced GLM per good unit in one session; return per-unit rows."""
+def run_session(pkl_path: Path, cfg: TFGLMConfig, max_units=None,
+                max_trials=None, verbose=True):
+    """Fit full + reduced GLM per good unit in one session; return per-unit rows.
+
+    ``max_trials`` subsamples the first N trials before assembling the design
+    (a RUNTIME knob, not a scientific one -- mirrors run_tf_glm_khilkevich.py).
+    BG_046 sessions run ~630 trials -> X ~150k rows, making each nested-CV
+    Poisson fit slow (~6 min/unit). Capping trials shrinks the design
+    proportionally while leaving thousands of 50-ms TF bins (>> any pulse floor),
+    so the per-region TF-responsive fraction is unaffected in spirit. The same
+    cap was used for the validated Khilkevich positive control.
+    """
     sname = pkl_path.stem
     session = load_session(str(pkl_path))
     trials, units = session_trial_regressors(session, cfg)
+    if max_trials:
+        trials = trials[:max_trials]
     design = assemble_design(trials, cfg)
     folds = make_trial_folds(design.trial_index, cfg.n_folds, cfg.seed)
 
@@ -120,6 +132,8 @@ def main(argv=None):
                    help="use only the first N sessions (chronological by name)")
     p.add_argument("--max-units", type=int, default=None,
                    help="cap units per session (highest-spike first)")
+    p.add_argument("--max-trials", type=int, default=None,
+                   help="subsample first N trials (runtime knob; shrinks design)")
     p.add_argument("--label", required=True,
                    help="region label for reporting, e.g. BG_046_DMS")
     p.add_argument("--out", required=True, help="output per-unit CSV path")
@@ -140,7 +154,7 @@ def main(argv=None):
 
     all_rows = []
     for pkl in pkls:
-        rows = run_session(pkl, cfg, a.max_units)
+        rows = run_session(pkl, cfg, a.max_units, a.max_trials)
         all_rows.extend(rows)
         if rows:
             df_s = pd.DataFrame(rows)
