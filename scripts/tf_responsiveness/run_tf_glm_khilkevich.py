@@ -55,7 +55,7 @@ from visdetect.viz.plotting import set_style, despine
 CACHE_DIR = _REPO / "data" / "cache" / "tf_glm"
 FIG_DIR = _REPO / "figures" / "tf_responsiveness"
 PAPER_LO, PAPER_HI = 5.0, 45.0          # published TF-responsive fraction range
-MIN_SPIKES = 100                        # skip near-silent units
+MIN_SPIKES = 500                        # skip low-spike-count units (paper-power floor)
 
 
 # ── core: fit one region, return per-unit DataFrame + diagnostics bundle ─────
@@ -91,9 +91,18 @@ def run_region(session_dir, region, cfg, max_units=None, max_trials=None,
               f"X={design.X.shape}, fast/slow pulses={fast.size}/{slow.size}",
               flush=True)
 
-    uids = list(units)
+    # Rank units by total spike count (highest first) and keep only those with
+    # >= MIN_SPIKES; then cap at max_units. This uses the highest-power units for
+    # the positive control (per brief: ~40 highest-spike units, skip <~500 spk).
+    spk_total = {uid: float(np.sum(np.isfinite(units[uid]))) for uid in units}
+    uids = [u for u in sorted(units, key=lambda u: spk_total[u], reverse=True)
+            if spk_total[u] >= MIN_SPIKES]
+    n_qualifying = len(uids)
     if max_units:
         uids = uids[:max_units]
+    if verbose:
+        print(f"  [{region}] {n_qualifying} units >= {MIN_SPIKES} spk; "
+              f"fitting {len(uids)}", flush=True)
 
     import time
     rows, fits = [], {}
@@ -120,7 +129,8 @@ def run_region(session_dir, region, cfg, max_units=None, max_trials=None,
                   f"[{time.time()-t0:.0f}s]", flush=True)
 
     cols = ["unit", "region", "n_spikes", "c1_r", "c2_p", "is_responsive",
-            "n_fast", "n_slow", "kernel_peak_t", "kernel_fwhm"]
+            "r_full_mean", "r_red_mean", "n_folds_used",
+            "kernel_peak_t", "kernel_fwhm"]
     df = pd.DataFrame(rows)
     if len(df):
         df = df[cols]
@@ -198,7 +208,7 @@ def plot_exemplars(region_dfs, region_designs, region_fits, cfg, out_path,
         passing = df[df["is_responsive"] == True]  # noqa: E712
         for _, r in passing.iterrows():
             cands.append((float(r["c1_r"]), region, int(r["unit"]),
-                          float(r["c2_p"])))
+                          float(r["c2_p"]), float(r.get("r_red_mean", np.nan))))
     cands.sort(reverse=True)
     cands = cands[:n_exemplars]
 
@@ -222,10 +232,9 @@ def plot_exemplars(region_dfs, region_designs, region_fits, cfg, out_path,
                            hspace=0.55, wspace=0.28)
     tf_lags = _lag_offsets(cfg.kern["tf"], cfg.bin_s) * cfg.bin_s
 
-    for ri, (c1_r, region, uid, c2_p) in enumerate(cands):
+    for ri, (c1_r, region, uid, c2_p, r_red) in enumerate(cands):
         design = region_designs[region]
         y, full, red = region_fits[region][uid]
-        fast, slow = pulse_times_from_tf(design, cfg)
 
         # LEFT: TF FIR kernel (mean weight per lag across folds).
         ax0 = fig.add_subplot(gs[ri, 0])
@@ -239,20 +248,26 @@ def plot_exemplars(region_dfs, region_designs, region_fits, cfg, out_path,
                       fontsize=10)
         despine(ax0)
 
-        # RIGHT: actual vs full-model-predicted fast-minus-slow PETH.
+        # RIGHT: dense held-out predicted-vs-actual trace (the series the
+        # TF-responsive metric is actually computed on:
+        # corr(zscore(yTest), y_hat_pred)). Show a readable ~6 s snippet of the
+        # held-out bins, z-scored actual counts vs full-model predicted rate.
         ax1 = fig.add_subplot(gs[ri, 1])
-        offs = _lag_offsets(cfg.pulse_eval_win, cfg.bin_s)
-        t_axis = offs * cfg.bin_s
-        d_act = _diff_peth(y, design, fast, slow, cfg)
-        d_pred = _diff_peth(full.pred, design, fast, slow, cfg)
-        ax1.plot(t_axis, d_act, color="0.2", lw=2, label="actual")
-        ax1.plot(t_axis, d_pred, color="#d8743b", lw=2, ls="--",
+        held = np.isfinite(full.pred) & np.isfinite(y)
+        yz = y.copy().astype(float)
+        m, s = np.nanmean(y[held]), np.nanstd(y[held])
+        yz = (yz - m) / (s if s > 1e-9 else 1.0)
+        idx = np.where(held)[0]
+        win_bins = min(idx.size, int(6.0 / cfg.bin_s))     # ~6 s window
+        seg = idx[:win_bins]
+        t_seg = np.arange(seg.size) * cfg.bin_s
+        ax1.plot(t_seg, yz[seg], color="0.4", lw=1.0, label="actual (z-scored)")
+        ax1.plot(t_seg, full.pred[seg], color="#d8743b", lw=2,
                  label="full-model predicted")
-        ax1.axvline(0, color="0.6", lw=0.8)
-        ax1.set_xlabel("Time from speed pulse (s)")
-        ax1.set_ylabel("Fast - slow\n(spikes/bin)")
-        ax1.set_title(f"{region} unit {uid} | c1_r={c1_r:.2f}  c2_p={c2_p:.1e}",
-                      fontsize=10)
+        ax1.set_xlabel("Time within held-out segment (s)")
+        ax1.set_ylabel("Firing (z / predicted rate)")
+        ax1.set_title(f"{region} unit {uid} | held-out r={c1_r:.2f} "
+                      f"(vs no-TF {r_red:.2f}), p={c2_p:.1e}", fontsize=10)
         ax1.legend(loc="best", frameon=False, fontsize=9)
         despine(ax1)
 
@@ -280,9 +295,18 @@ def main(argv=None):
                    help="subsample first N trials (runtime knob; shrinks design)")
     p.add_argument("--include-phase", action="store_true",
                    help="(phase is ABSENT in the Khilkevich export; leave off)")
+    p.add_argument("--fast-fit", action="store_true",
+                   help="select ridge lambda ONCE per unit (much faster; "
+                        "preserves held-out pred structure)")
+    p.add_argument("--lambdas", default=None,
+                   help="comma-separated ridge lambda grid (default: full 6-value "
+                        "grid; pass e.g. 0.01,0.1,1.0 to speed fast-fit further)")
     a = p.parse_args(argv)
 
-    cfg = TFGLMConfig(include_phase=a.include_phase)
+    kw = dict(include_phase=a.include_phase, fast_fit=a.fast_fit)
+    if a.lambdas:
+        kw["lambdas"] = tuple(float(x) for x in a.lambdas.split(","))
+    cfg = TFGLMConfig(**kw)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     region_dfs, region_designs, region_fits = {}, {}, {}
