@@ -310,3 +310,149 @@ def khilkevich_trial_regressors(
                     if ks.regions.get(u, "") == region
                     or coarse.get(u, "") == region]
     return trials_regs, {u: ks.units[u] for u in unit_ids}
+
+
+# ── Task 10: per-trial regressor builder for a visdetect Session (BG_046/039) ──
+
+# Outcomes whose Change_ON is a real change event (the stimulus actually changed
+# or was withheld on a catch trial). On FA/abort the change stimulus was never
+# presented, so its "change time" is scientifically meaningless -> NaN.
+# (Mirrors CLAUDE.md's EVENT_VALID_OUTCOMES for Change_ON, plus catch trials
+# where the mouse withheld: hit/miss/ref are the change-reached outcomes.)
+_CHANGE_REACHED_OUTCOMES = {"hit", "miss", "ref"}
+
+# baseline_values (St1TrialVector) is logged ~3x per 50-ms TF update; stride 3
+# recovers the genuine 50-ms TF grid from the baseline start.
+_BASELINE_STRIDE = 3
+
+
+def session_trial_regressors(
+    session, cfg: TFGLMConfig
+) -> Tuple[List[TrialRegressors], Dict[int, np.ndarray]]:
+    """Build per-trial TrialRegressors + good-unit spike trains from a Session.
+
+    Reduced regressor set on the NEURAL clock (no phase, no motion-energy/pupil),
+    matching ``khilkevich_trial_regressors`` so the BG result is apples-to-apples
+    with the Khilkevich positive control.
+
+    Per trial i (1:1 with ``session.trials``):
+      - ``t_start`` = ``ni_events['Baseline_ON'][i]``; ``t_end`` = next
+        Baseline_ON onset (last trial: ``t_start + 20 s``).
+      - ``change_time`` = ``ni_events['Change_ON'][i]`` BUT only when the trial's
+        outcome reached the change (hit/miss/ref); NaN on FA/abort (the change
+        stimulus was never presented) -> no change regressor for that trial.
+      - ``change_size`` = ``float(trial.change_size)`` (already the canonical
+        ratio in {1.0, 1.25, 1.35, 1.5, 2.0, 4.0}).
+      - ``tf_bins``: ``trial.baseline_values`` (St1TrialVector) decimated by
+        ``stride 3`` -> 50-ms linear-TF grid from baseline start, placed onto the
+        trial's per-trial 50-ms bin edges and ZEROED at/after change onset.
+      - ``lick_times``: ``ni_events['Piezo_1']`` in [t_start, t_end).
+      - ``reward_time``: first finite ``ni_events['Valve_L'][i]`` (per-trial
+        array; NaN if none).
+      - ``abort_time``: ``change_time`` if outcome == 'abort' else NaN.
+        (NB: change_time is NaN'd for abort above, so abort uses the raw
+        ``Change_ON[i]`` time directly.)
+      - ``wheel_bins``: ``ni_events['Rot_enc_A']`` tick DENSITY (ticks/bin)
+        resampled onto the trial's per-trial edges.
+      - ``phase_bins`` = None (run ``include_phase=False``).
+
+    Units: ``session.good_and_stable_ids or session.good_cluster_ids`` (the
+    project's QC pool), mapped to spike trains from ``session.clusters``. The
+    <500-spike skip happens in the RUN LOOP, not here.
+    """
+    bs = cfg.bin_s
+    ni = session.ni_events or {}
+
+    bon = np.asarray(ni.get("Baseline_ON", np.zeros(0)), float).ravel()
+    con = np.asarray(ni.get("Change_ON", np.zeros(0)), float).ravel()
+    piezo = np.asarray(ni.get("Piezo_1", np.zeros(0)), float).ravel()
+    piezo = piezo[np.isfinite(piezo)]
+    valve = np.asarray(ni.get("Valve_L", np.zeros(0)), float).ravel()
+    rot = np.asarray(ni.get("Rot_enc_A", np.zeros(0)), float).ravel()
+    rot = np.sort(rot[np.isfinite(rot)])
+
+    n = len(session.trials)
+    # Trial ends = next sorted baseline onset; last trial gets a fixed window.
+    order = np.argsort(np.where(np.isfinite(bon), bon, np.inf)) if bon.size else np.zeros(0, int)
+    ends = np.full(n, np.nan)
+    for k in range(order.size):
+        i = order[k]
+        if i >= n:
+            continue
+        if k + 1 < order.size and order[k + 1] < n:
+            ends[i] = bon[order[k + 1]]
+        else:
+            ends[i] = bon[i] + 20.0 if np.isfinite(bon[i]) else np.nan
+
+    trials_regs: List[TrialRegressors] = []
+    for i, trial in enumerate(session.trials):
+        t0 = float(bon[i]) if i < bon.size else np.nan
+        t1 = float(ends[i]) if i < ends.size else np.nan
+        if not (np.isfinite(t0) and np.isfinite(t1) and t1 > t0):
+            t1 = t0 + bs if np.isfinite(t0) else 0.0
+        edges = trial_bin_edges(t0, t1, bs)
+
+        outcome = str(trial.trialoutcome or "").lower()
+        raw_change = float(con[i]) if (i < con.size and np.isfinite(con[i])) else np.nan
+        change_time = raw_change if outcome in _CHANGE_REACHED_OUTCOMES else np.nan
+
+        change_size = (float(trial.change_size)
+                       if trial.change_size is not None else 1.0)
+
+        # TF signal: decimate baseline_values to the 50-ms grid, build a
+        # per-frame (time, value) signal anchored at baseline start, resample
+        # onto this trial's edges, and zero it at/after change onset.
+        tf_bins = np.zeros(edges.size, float)
+        bv = (np.asarray(trial.baseline_values, float).ravel()
+              if trial.baseline_values is not None else np.zeros(0))
+        if bv.size and edges.size:
+            tf_vals = bv[::_BASELINE_STRIDE]
+            tf_times = t0 + np.arange(tf_vals.size) * bs
+            tf_bins = _resample_to_bins(tf_times, tf_vals, edges, bs, fill=0.0)
+            # Zero TF after change onset (baseline ends at the change).
+            if np.isfinite(raw_change):
+                tf_bins[edges >= raw_change] = 0.0
+
+        # Wheel: rotary-encoder A tick DENSITY (ticks per bin), resampled by
+        # counting ticks per bin (use value=1 per tick so the bin mean -> mean
+        # density; equivalently a histogram, but reuse the shared resampler with
+        # a count accumulator).
+        wheel_bins = _tick_density_to_bins(rot, edges, bs)
+
+        lk = piezo[(piezo >= t0) & (piezo < t1)] if piezo.size else np.zeros(0)
+
+        rew = float(valve[i]) if (i < valve.size and np.isfinite(valve[i])) else np.nan
+        abort_time = raw_change if outcome == "abort" else np.nan
+
+        trials_regs.append(TrialRegressors(
+            t_start=t0, t_end=t1, change_time=change_time,
+            change_size=change_size, tf_bins=tf_bins, lick_times=lk,
+            reward_time=rew, abort_time=abort_time, wheel_bins=wheel_bins,
+            phase_bins=None))
+
+    # Unit selection: prefer good_and_stable_ids, fall back to good_cluster_ids,
+    # else every cluster. Map to spike trains from session.clusters.
+    spike_map = {int(c.cluster_id): np.asarray(c.spike_times, float).ravel()
+                 for c in session.clusters}
+    sel = session.good_and_stable_ids or session.good_cluster_ids
+    if sel:
+        unit_ids = [int(u) for u in sel if int(u) in spike_map]
+    else:
+        unit_ids = list(spike_map.keys())
+    units = {u: spike_map[u] for u in unit_ids}
+    return trials_regs, units
+
+
+def _tick_density_to_bins(tick_times: np.ndarray, bin_edges: np.ndarray,
+                          bin_s: float) -> np.ndarray:
+    """Tick count per 50-ms bin for a monotonic array of event times.
+
+    The rotary-encoder A channel stores tick TIMESTAMPS (not a speed signal);
+    wheel speed is proportional to tick density. Bin i = [edges[i], edges[i]+bs).
+    """
+    edges = np.asarray(bin_edges, float)
+    if edges.size == 0 or tick_times.size == 0 or not np.isfinite(edges[0]):
+        return np.zeros(edges.size, float)
+    full = np.append(edges, edges[-1] + bin_s)
+    counts, _ = np.histogram(tick_times, bins=full)
+    return counts.astype(float)
