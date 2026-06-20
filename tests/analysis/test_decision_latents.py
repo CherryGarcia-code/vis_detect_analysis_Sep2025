@@ -209,14 +209,109 @@ def test_sharpness_scores_psy_threshold_present_and_finite():
     assert 1.0 <= sc["psy_threshold"] <= 8.0   # clamped to plausible change-size range
 
 
+def test_sharpness_threshold_nan_for_negative_slope():
+    """A non-monotonic (negative-slope) psychometric — small-sample noise where
+    detection appears to FALL with bigger Δ — has no defined detection threshold.
+    Guard against the old behaviour that emitted an absurd clamped value."""
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    rng = np.random.default_rng(1)
+    rows = []
+    # DECREASING detect with Δ (biologically nonsensical → must yield NaN threshold)
+    for cs, p in [(1.0, 0.9), (1.25, 0.8), (1.5, 0.6), (2.0, 0.4), (4.0, 0.2)]:
+        for _ in range(60):
+            lick = rng.random() < p
+            rows.append({"change_size": cs, "lick": int(lick),
+                         "outcome": "hit" if (cs > 1.0 and lick) else "miss",
+                         "change_time_planned": 7.0, "decision_time": 9.0})
+    sc = dl.sharpness_scores(pd.DataFrame(rows))
+    assert sc["psy_slope"] < 0          # the fit really is negative-slope
+    assert np.isnan(sc["psy_threshold"])  # ...so no threshold is reported
+
+
 def test_cell_and_latent_tables(synth_session, synth_state_labels):
     from visdetect.analysis import decision_latents as dl
     tab = dl.build_trial_table(synth_session, synth_state_labels, "07072025")
     tab["session_dprime"] = 0.9; tab["comprehension_flag"] = "post"
     cells = dl.descriptive_cell_table(tab, min_cell_trials=1)
     assert set(cells["state_label"]).issubset(set(dl.MAIN_MOODS + dl.SEPARATE_MOODS))
-    assert {"criterion_c", "psy_slope", "lick_hazard_peak_time", "n_trials"}.issubset(cells.columns)
+    # QC columns always travel with every cell; psy_slope present (synth cells have
+    # go-trials). The synth has NO catch trials and < 20-trial cells, so SDT/timing
+    # scores legitimately DON'T fire — that's the per-metric gate working, not a bug.
+    assert {"psy_slope", "n_trials", "n_go",
+            "usable_psychometric", "usable_sdt", "usable_rtcv", "usable_timing"}.issubset(cells.columns)
+    assert not cells["usable_sdt"].any()   # no catch → SDT never usable on synth
     lat = dl.descriptive_latent_table(tab, cells)
     assert len(lat) == len(tab)
-    assert {"criterion_c", "sharpness_psy_slope", "trial_in_session"}.issubset(lat.columns)
-    assert "rt_cv_by_cs" in lat.columns   # spec §5 cross-check column propagated
+    assert {"sharpness_psy_slope", "trial_in_session", "rt_cv_by_cs"}.issubset(lat.columns)
+    assert {"usable_psychometric", "usable_sdt"}.issubset(lat.columns)  # QC flags propagate per-trial
+
+
+def _mk_cell_rows(mood, go_specs, n_catch_lick=0, n_catch_nolick=0, n_fa=0):
+    """Build realistic trial rows for one (session×mood) cell.
+    go_specs: list of (change_size, n_hits, n_miss). Hits lick after the change."""
+    import numpy as np
+    rng = np.random.default_rng(7)
+    rows, ti = [], 0
+    for cs, n_hit, n_miss in go_specs:
+        for _ in range(n_hit):
+            rows.append({"change_size": cs, "lick": 1, "outcome": "hit", "change_reached": True,
+                         "change_time_planned": 7.0, "decision_time": 7.0 + rng.uniform(0.2, 0.6),
+                         "state_label": mood, "trial_in_session": ti}); ti += 1
+        for _ in range(n_miss):
+            rows.append({"change_size": cs, "lick": 0, "outcome": "miss", "change_reached": True,
+                         "change_time_planned": 7.0, "decision_time": 9.0,
+                         "state_label": mood, "trial_in_session": ti}); ti += 1
+    for k in range(n_catch_lick):     # catch trial, licked → SDT false alarm
+        rows.append({"change_size": 1.0, "lick": 1, "outcome": "hit", "change_reached": True,
+                     "change_time_planned": 7.0, "decision_time": 7.3,
+                     "state_label": mood, "trial_in_session": ti}); ti += 1
+    for k in range(n_catch_nolick):   # catch trial, correctly withheld
+        rows.append({"change_size": 1.0, "lick": 0, "outcome": "miss", "change_reached": True,
+                     "change_time_planned": 7.0, "decision_time": 9.0,
+                     "state_label": mood, "trial_in_session": ti}); ti += 1
+    for k in range(n_fa):             # anticipatory early lick before the change
+        rows.append({"change_size": 2.0, "lick": 1, "outcome": "fa", "change_reached": False,
+                     "change_time_planned": 7.0, "decision_time": 4.5,
+                     "state_label": mood, "trial_in_session": ti}); ti += 1
+    return rows
+
+
+def test_compute_cell_qc_flags():
+    """compute_cell_qc sets each per-metric flag from its own support gate."""
+    import pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    # well-powered: 30 go (5 sizes, increasing hits), 10 catch, 20+ trials
+    well = pd.DataFrame(_mk_cell_rows(
+        "StimSens", [(1.25, 2, 4), (1.35, 3, 3), (1.5, 4, 2), (2.0, 5, 1), (4.0, 6, 0)],
+        n_catch_lick=3, n_catch_nolick=7))
+    qc = dl.compute_cell_qc(well)
+    assert qc["n_go"] == 30 and qc["n_catch"] == 10
+    assert qc["has_psychometric_support"] and qc["usable_sdt"] and qc["usable_timing"]
+    assert qc["usable_rtcv"]            # >= 2 change-sizes have >= 3 hit-RTs
+    # thin: 6 go-trials, no catch → nothing usable
+    thin = pd.DataFrame(_mk_cell_rows("Impulsive", [(1.25, 1, 1), (1.5, 2, 0), (4.0, 2, 0)]))
+    qc2 = dl.compute_cell_qc(thin)
+    assert qc2["n_go"] == 6 and qc2["n_catch"] == 0
+    assert not qc2["has_psychometric_support"]   # < 8 go
+    assert not qc2["usable_sdt"]                 # no catch
+
+
+def test_descriptive_cell_table_per_metric_gating():
+    """A usable cell gets every score; a thin cell gets QC flags but no junk scores."""
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    rows = _mk_cell_rows("StimSens", [(1.25, 2, 4), (1.35, 3, 3), (1.5, 4, 2), (2.0, 5, 1), (4.0, 6, 0)],
+                         n_catch_lick=3, n_catch_nolick=7)
+    rows += _mk_cell_rows("Impulsive", [(1.25, 1, 1), (1.5, 2, 0), (4.0, 2, 0)])  # thin, no catch
+    tab = pd.DataFrame(rows)
+    tab["session_name"] = "07072025"; tab["session_dprime"] = 1.0; tab["comprehension_flag"] = "post"
+    cells = dl.descriptive_cell_table(tab, min_cell_trials=1)
+    well = cells[cells["state_label"] == "StimSens"].iloc[0]
+    thin = cells[cells["state_label"] == "Impulsive"].iloc[0]
+    assert well["usable_psychometric"] and well["usable_sdt"]
+    assert np.isfinite(well["criterion_c"]) and np.isfinite(well["dprime"])
+    assert np.isfinite(well["psy_threshold"])          # monotonic → real threshold
+    assert not thin["usable_psychometric"] and not thin["usable_sdt"]
+    # thin cell must NOT carry a (junk) d′ or criterion
+    assert ("criterion_c" not in cells.columns) or np.isnan(thin.get("criterion_c", np.nan))

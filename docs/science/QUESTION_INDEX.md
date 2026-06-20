@@ -16,6 +16,18 @@ so a fresh chat can boot a single question in isolation.
 ## Spine
 *How do mice LEARN to suppress impulsivity and increase sensitivity to informative stimuli, to drive perceptual decisions?* → decomposable as DDM **drift** (sensitivity) vs **threshold/starting-point** (impulsivity). Every question below is a facet of this.
 
+### Decision-spine program (the B8 through-line)
+The behavior-first method order (post-TF-null direction §6) runs as one continuous program, even though its later stages are filed under sibling question IDs:
+
+1. **B8 Phase 1 — descriptive dials (DONE).** Per-(session×mood) sharpness/itchiness/timing over learning; censored hazards; a cached **per-trial descriptive latent table**. Result: bias-not-gain (states load on criterion, not sensitivity), with the circularity caveat (itchiness partly definitional → lean on timing/RT/neural).
+2. **B8 Phase 2 — generative latents (NEXT).** Recovery-gated regression-accumulator emitting per-trial **drift / start-point / urgency**; corrected 60 Hz evidence builder; lapse-aware psychometric metric. Deliverable = the per-trial latent table the neural phase regresses against.
+3. **Neural phase (downstream IDs).** Regress striatal activity against the B8 latents — *this is where the circularity breaks* (a neural correlate of itchiness is labeler-independent). Maps onto:
+   - **B0** — which DDM knob learning turns (drift vs threshold vs start-point);
+   - **A1 / A2 / E1** — is the lick-locked population ramp the bound; single-trial drift-to-bound; DDM tests on the evidence axis;
+   - **D1** — lapses as gain vs bias (state-conditioned psychometrics; absorbs B8's behavioral half).
+
+B8's per-trial latent table is the shared **input** to B0/A1/E1/D1; those rows are "what follows B8," not independent threads.
+
 ## Index
 
 | ID | Question (short) | Tier | Status | Spec | Plan |
@@ -49,4 +61,4 @@ so a fresh chat can boot a single question in isolation.
 | F2 | Tracking quality as a scientific gate (plasticity vs matching error) | T1 | not-started | — | — |
 | F3 | Which claims survive as n=1 vs need cohort pooling (BG_031/038/039)? | meta | not-started | — | — |
 
-_Last updated: 2026-06-19 (B8 → in-progress: Phase 1 descriptive landed + plan link). Add a row's spec/plan links and bump status as each question is worked._
+_Last updated: 2026-06-20 (added the Decision-spine program through-line: B8 Phase1→Phase2→{B0,A1,E1,D1} neural arrow). Add a row's spec/plan links and bump status as each question is worked._

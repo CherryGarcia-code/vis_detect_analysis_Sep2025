@@ -25,6 +25,13 @@ def save_fig(fig, name):                       # writes to top-level FIGURES/, n
     p = os.path.join(FIG_DIR, f"{name}.png"); fig.savefig(p, dpi=300, bbox_inches="tight")
     plt.close(fig); return p
 
+def _usable_mask(cells, flag):
+    """Boolean Series selecting cells whose `flag` QC gate passed. If the flag
+    column is absent (no cell populated it), nothing is usable. NaN → False."""
+    if flag not in cells.columns:
+        return pd.Series(False, index=cells.index)
+    return cells[flag].fillna(False).astype(bool)
+
 def build(force=False):
     if os.path.exists(TRIAL_CACHE) and not force:
         return pd.read_csv(TRIAL_CACHE)
@@ -129,10 +136,12 @@ def fig_F1B_threshold(cells):
     Robust y-limit: clip the top to the 95th percentile (+0.1) so a few outliers
     don't flatten the trajectory."""
     fig, ax = plt.subplots(figsize=(7, 4))
-    thr_all = cells["psy_threshold"].values.astype(float)
+    # QC gate: only cells whose psychometric is usable (enough go-trials + monotonic fit)
+    usable = _usable_mask(cells, "usable_psychometric") & np.isfinite(cells.get("psy_threshold", np.nan))
+    thr_all = cells.loc[usable, "psy_threshold"].values.astype(float) if usable.any() else np.array([])
     for mood in ("Impulsive", "StimSens"):
         c = STATE_LABEL_COLORS[mood]
-        sub = cells[(cells["state_label"] == mood) & np.isfinite(cells["psy_threshold"])]
+        sub = cells[usable & (cells["state_label"] == mood)]
         if sub.empty:
             continue
         ax.scatter(sub["session_idx"], sub["psy_threshold"], color=c, s=22,
@@ -215,8 +224,9 @@ def fig_rt_variability(cells):            # F2
 
 def fig_itchiness(cells):                 # F3
     fig, ax = plt.subplots(figsize=(7, 4))
+    usable = _usable_mask(cells, "usable_sdt")   # criterion_c / fa_rate need go+catch (SDT)
     for mood, c in [(m, STATE_LABEL_COLORS[m]) for m in ("Impulsive", "StimSens")]:
-        sub = cells[cells["state_label"] == mood]
+        sub = cells[usable & (cells["state_label"] == mood)]
         ax.scatter(sub["criterion_c"], sub["fa_rate"], color=c, label=mood)
     ax.set_xlabel("criterion c  (low = trigger-happy)"); ax.set_ylabel("FA rate")
     ax.set_title("F3  Itchiness separates the moods\n(Impulsive = liberal criterion, more early licks)\n"
@@ -262,7 +272,7 @@ def fig_bias_not_gain(cells):             # F5
     a mean ± 95% CI overlay per mood. The old d′-vs-psy_slope scatter is dropped
     because psy_slope is a poor x (flat for Impulsive)."""
     moods = ("Impulsive", "StimSens")
-    eng = cells[cells["state_label"].isin(moods)]
+    eng = cells[_usable_mask(cells, "usable_sdt") & cells["state_label"].isin(moods)]  # d′/criterion need SDT gate
     rng = np.random.default_rng(42)
 
     def _strip(ax, col):

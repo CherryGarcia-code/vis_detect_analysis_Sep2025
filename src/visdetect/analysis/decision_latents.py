@@ -188,11 +188,14 @@ def sharpness_scores(trial_df):
             out["psy_slope"] = float("nan")
     else:
         out["psy_slope"] = float("nan")
-    # psy_threshold: change size at 50% detection = 2 ** (-a/b). NaN if the fit
-    # failed / slope ~0 (abs(b) < 1e-3 → near-flat, x50 explodes); else clamp to
-    # the plausible change-size range [1.0, 8.0] to avoid wild extrapolation.
+    # psy_threshold: change size at 50% detection = 2 ** (-a/b). NaN unless the
+    # slope is POSITIVE and non-trivial (b >= 1e-3): a detection threshold is
+    # only defined for an INCREASING psychometric. Near-flat (b≈0 → x50 explodes)
+    # AND negative-slope fits (small-sample noise: "detection falls with bigger
+    # Δ" is nonsense and yields an absurd clamped threshold) are both rejected.
+    # Otherwise clamp 2**x50 to the plausible change-size range [1.0, 8.0].
     b = out["psy_slope"]
-    if np.isfinite(b) and abs(b) >= 1e-3:
+    if np.isfinite(b) and b >= 1e-3:
         x50 = -a / b
         out["psy_threshold"] = float(np.clip(2.0 ** x50, 1.0, 8.0))
     else:
@@ -337,41 +340,122 @@ def timing_scores(trial_df, dt=0.05):
             "peak_offset": (l_peak - ch_peak) if np.isfinite(l_peak) and np.isfinite(ch_peak) else float("nan")}
 
 
-def descriptive_cell_table(all_trials_df, min_cell_trials=20, dt=0.05):
-    """One row per ``(session_name, state_label)`` cell, scored descriptively.
+# ── Data-quality gate (Phase-0.5) ──────────────────────────────────────────
+# Distribution-justified inclusion thresholds — derived from, and re-runnable
+# via, scripts/analysis/decision_latents/behavioral_qc_profile.py. The analysis
+# UNIT is the (session × mood) CELL, not the session: a healthy session sliced by
+# mood can still leave a thin cell. Each metric group has its OWN support gate, so
+# a cell can be usable for one score and not another (e.g. enough go+catch for d′
+# but a non-monotonic psychometric → no threshold). Figures/analyses filter on the
+# matching ``usable_*`` flag so underpowered junk never reaches a result.
+QC_MIN_GO = 8             # psychometric slope / d′: floor on go-trials (fit support)
+QC_MIN_DISTINCT_CS = 2    # >= 2 distinct go change-sizes to fit a slope at all
+QC_MIN_CATCH = 5          # SDT (d′, criterion, fa): catch trials for a real FA rate
+QC_MIN_RT_PER_CS = 3      # >= 3 hit-RTs at a change-size for a stable per-cs RT-CV
+QC_MIN_RTCV_CS = 2        # >= 2 such change-sizes for the aggregate rt_cv_by_cs
+QC_MIN_TIMING_TRIALS = 20  # hazards/peaks need a populated trial timeline
+
+
+def compute_cell_qc(trial_df):
+    """Per-(session × mood) cell QC metrics + per-metric usability flags.
+
+    Returns trial counts plus boolean ``usable_*`` flags built from the
+    distribution-justified ``QC_*`` thresholds. ``usable_psychometric`` is only a
+    COUNT pre-gate here (``has_psychometric_support``); the final monotonicity
+    requirement (slope > 0) is ANDed in by ``descriptive_cell_table`` after the
+    logistic fit, to avoid double-fitting. Flags:
+
+    * ``has_psychometric_support`` — >= QC_MIN_GO go-trials AND >= QC_MIN_DISTINCT_CS
+      distinct go change-sizes (necessary to attempt a slope/threshold fit).
+    * ``usable_sdt`` — >= QC_MIN_GO go AND >= QC_MIN_CATCH catch trials (d′/criterion/fa).
+    * ``usable_rtcv`` — >= QC_MIN_RTCV_CS change-sizes each with >= QC_MIN_RT_PER_CS hit-RTs.
+    * ``usable_timing`` — >= QC_MIN_TIMING_TRIALS trials (hazard/peak support).
+    """
+    go = trial_df[trial_df["change_size"] > 1.0]
+    catch = trial_df[np.isclose(trial_df["change_size"], 1.0)]
+    n_go, n_catch, n_trials = len(go), len(catch), len(trial_df)
+    n_distinct = int(go["change_size"].nunique())
+    # hit-RT support per change size (RT = decision_time − planned change time on hits)
+    hit = trial_df[trial_df["outcome"] == "hit"]
+    if len(hit):
+        rt = hit["decision_time"].values - hit["change_time_planned"].values
+        n_cs_rt = sum(int((np.isclose(hit["change_size"].values, cs) & np.isfinite(rt)).sum())
+                      >= QC_MIN_RT_PER_CS for cs in CHANGE_SIZES)
+    else:
+        n_cs_rt = 0
+    return {
+        "n_trials": n_trials, "n_go": n_go, "n_catch": n_catch,
+        "n_distinct_cs": n_distinct, "n_cs_rt_support": n_cs_rt,
+        "has_psychometric_support": bool(n_go >= QC_MIN_GO and n_distinct >= QC_MIN_DISTINCT_CS),
+        "usable_sdt": bool(n_go >= QC_MIN_GO and n_catch >= QC_MIN_CATCH),
+        "usable_rtcv": bool(n_cs_rt >= QC_MIN_RTCV_CS),
+        "usable_timing": bool(n_trials >= QC_MIN_TIMING_TRIALS),
+    }
+
+
+def descriptive_cell_table(all_trials_df, min_cell_trials=1, dt=0.05):
+    """One row per ``(session_name, state_label)`` cell, scored descriptively
+    **behind a per-metric data-quality gate** (``compute_cell_qc``).
 
     Cells are kept only for moods in ``MAIN_MOODS + SEPARATE_MOODS``
     (Impulsive/StimSens/Disengaged); labeler ``Abort``/excluded moods never
-    appear. Disengaged is kept but flagged ``reported_separately=True``. A cell
-    with ``n_trials < min_cell_trials`` is kept with ``underpowered=True`` and
-    NaN scores (the score functions are simply not called). ``session_dprime``
-    and ``comprehension_flag`` are read from the cell's first row (the caller
-    attaches them as columns on ``all_trials_df``).
+    appear. Disengaged is kept but flagged ``reported_separately=True``.
+
+    Each score group is computed ONLY if its gate passes — replacing the old
+    blanket ``n_trials >= 20`` gate (which was the wrong granularity: it scored
+    or dropped a whole cell, letting e.g. a no-distinct-Δ cell through to a junk
+    d′, or excluding a small-but-clean psychometric). The matching ``usable_*``
+    columns travel with every row so downstream figures filter on them. Scores
+    whose gate fails are simply absent (NaN after the DataFrame is assembled).
+    ``min_cell_trials`` is a hard floor below which a cell is skipped entirely
+    (default 1 = keep all; the per-metric gates do the real work).
+    ``session_dprime``/``comprehension_flag`` are read from the cell's first row.
     """
     keep = list(MAIN_MOODS) + list(SEPARATE_MOODS)
     rows = []
     for (sname, mood), cell in all_trials_df.groupby(["session_name", "state_label"]):
-        if mood not in keep:
+        if mood not in keep or len(cell) < min_cell_trials:
             continue
-        n = len(cell)
-        rec = {"session_name": sname, "state_label": mood, "n_trials": n,
+        qc = compute_cell_qc(cell)
+        rec = {"session_name": sname, "state_label": mood,
                "reported_separately": mood in SEPARATE_MOODS,
-               "underpowered": n < min_cell_trials,
                "session_dprime": cell["session_dprime"].iloc[0],
                "comprehension_flag": cell["comprehension_flag"].iloc[0]}
-        if n >= min_cell_trials:
-            rec.update(sharpness_scores(cell))
-            rec.update(itchiness_scores(cell, dt=dt))
-            rec.update(timing_scores(cell, dt=dt))
-            # spec §5 cross-check: aggregate the per-change-size Hit-RT CVs into a
-            # single per-cell number (the deliverable propagates this name verbatim).
-            cv_vals = [rec[f"rt_cv_cs{cs}"] for cs in CHANGE_SIZES if f"rt_cv_cs{cs}" in rec]
-            if cv_vals and not np.all(np.isnan(cv_vals)):
-                with warnings.catch_warnings():       # guard all-NaN slice RuntimeWarning
-                    warnings.simplefilter("ignore", category=RuntimeWarning)
-                    rec["rt_cv_by_cs"] = float(np.nanmean(cv_vals))
+        rec.update(qc)
+        s = None
+        # ── psychometric + RT block (go-only) ──────────────────────────────
+        if qc["has_psychometric_support"]:
+            s = sharpness_scores(cell)
+            rec["psy_slope"] = s["psy_slope"]
+            rec["psy_threshold"] = s["psy_threshold"]
+            for cs in CHANGE_SIZES:
+                rec[f"rt_mean_cs{cs}"] = s.get(f"rt_mean_cs{cs}", float("nan"))
+                rec[f"rt_cv_cs{cs}"] = s.get(f"rt_cv_cs{cs}", float("nan"))
+            # final psychometric usability = enough support AND a monotonic fit
+            rec["usable_psychometric"] = bool(np.isfinite(s["psy_slope"]) and s["psy_slope"] > 0)
+            # spec §5 cross-check: aggregate per-change-size Hit-RT CVs — only when
+            # the per-cs support gate (usable_rtcv) passes.
+            if qc["usable_rtcv"]:
+                cv = [rec[f"rt_cv_cs{cs}"] for cs in CHANGE_SIZES
+                      if np.isfinite(rec.get(f"rt_cv_cs{cs}", float("nan")))]
+                rec["rt_cv_by_cs"] = float(np.mean(cv)) if cv else float("nan")
             else:
                 rec["rt_cv_by_cs"] = float("nan")
+        else:
+            rec["usable_psychometric"] = False
+            rec["rt_cv_by_cs"] = float("nan")
+        # ── SDT block (needs catch): d′, criterion, fa ─────────────────────
+        if qc["usable_sdt"]:
+            if s is None:
+                s = sharpness_scores(cell)
+            it = itchiness_scores(cell, dt=dt)
+            rec["dprime"] = s["dprime"]
+            rec["criterion_c"] = it["criterion_c"]
+            rec["fa_rate"] = it["fa_rate"]
+            rec["baseline_hazard"] = it["baseline_hazard"]
+        # ── timing block (hazards) ─────────────────────────────────────────
+        if qc["usable_timing"]:
+            rec.update(timing_scores(cell, dt=dt))
         rows.append(rec)
     return pd.DataFrame(rows)
 
@@ -385,10 +469,13 @@ def descriptive_latent_table(all_trials_df, cell_table):
     columns to their per-trial latent names (``psy_slope -> sharpness_psy_slope``,
     ``fa_rate -> fa_rate_cell``, ``lick_hazard_peak_time -> hazard_peak_cell``)
     and keeps ``criterion_c`` and ``rt_cv_by_cs`` as-is (the latter is the spec §5
-    cross-check column, propagated verbatim).
+    cross-check column, propagated verbatim). The per-metric ``usable_*`` QC flags
+    travel with every trial row so downstream (neural) analyses can filter latents
+    on the data-quality of the cell that produced them.
     """
     key = ["session_name", "state_label"]
-    cols = ["psy_slope", "criterion_c", "fa_rate", "lick_hazard_peak_time", "rt_cv_by_cs"]
+    cols = ["psy_slope", "criterion_c", "fa_rate", "lick_hazard_peak_time", "rt_cv_by_cs",
+            "usable_psychometric", "usable_sdt", "usable_rtcv", "usable_timing"]
     avail = [c for c in cols if c in cell_table.columns]
     joined = all_trials_df.merge(cell_table[key + avail], on=key, how="left")
     return joined.rename(columns={"psy_slope": "sharpness_psy_slope",
