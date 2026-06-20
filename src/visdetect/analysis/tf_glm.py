@@ -1,9 +1,16 @@
 """Per-neuron Poisson encoding GLM (Khilkevich-Lohse 2024 replication).
 
 50-ms-binned, temporally-unfolded (FIR) design matrix -> ridge-Poisson per
-neuron with nested 10-fold CV -> TF-responsive identification by the paper's
-two held-out criteria (C1 fast-minus-slow prediction r>0.2; C2 ablation t-test
-P<0.01 across folds). See docs/superpowers/specs/2026-06-18-tf-glm-replication-design.md.
+neuron with (nested or fast) 10-fold CV -> TF-responsive identification by the
+paper's DENSE held-out criterion: a FULL model (with TF kernel) and a
+REDUCED_TF model (TF kernel removed) are fit on the SAME CV split, and a unit
+is TF-responsive when the FULL model's cross-validated predictive correlation
+``corr(zscore(yTest), y_hat_pred)`` (C1 r>0.2) is significantly higher than the
+REDUCED model's across the paired folds (C2 one-sided paired t-test P<0.01).
+This matches ``FullBlocks_CV.m`` line ~626 (PredSmth=1 => no smoothing); it is
+NOT the sparse fast/slow pulse PETH (their pulse analysis is only the separate
+Fig-3 population pulse-scaling figure). See
+docs/superpowers/specs/2026-06-18-tf-glm-replication-design.md.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -473,68 +480,100 @@ def _tf_kernel(full_fit, design, cfg):
     return K.mean(axis=0)
 
 
+def _zscore(a: np.ndarray) -> np.ndarray:
+    """z-score a 1-D array (sample SD), returning NaN if variance is ~0."""
+    a = np.asarray(a, float)
+    mu = a.mean()
+    sd = a.std()
+    if not np.isfinite(sd) or sd < 1e-12:
+        return np.full(a.shape, np.nan)
+    return (a - mu) / sd
+
+
 def identify_tf_responsive(design, y, full_fit, reduced_fit, cfg: TFGLMConfig) -> dict:
-    fast, slow = pulse_times_from_tf(design, cfg)
+    """TF-responsive by the DENSE paired full-vs-reduced predictive-correlation
+    criterion of Khilkevich & Lohse 2024.
+
+    This matches their ``FullBlocks_CV.m`` line ~626::
+
+        [FullPred,FullPred_pval]=corr(zscore(smoothdata(yTest,'movmean',PredSmth)), y_hat_pred);
+
+    with ``PredSmth=1`` (movmean window 1 = no smoothing). For each held-out
+    CV fold they z-score the ACTUAL held-out spike counts and correlate against
+    the model's predicted rate on that fold. A unit is TF-responsive when the
+    FULL model (with the TF kernel) reaches a meaningful held-out predictive
+    correlation AND beats the REDUCED_TF model (identical regressors minus the
+    TF kernel) on the SAME paired CV folds (the TF kernel adds held-out
+    predictive power).
+
+    ``full_fit`` and ``reduced_fit`` were fit on the SAME ``fold_ids`` (the
+    caller passes one ``make_trial_folds`` array to both), so their per-fold
+    held-out predictions are paired fold-for-fold.
+
+    C1 : ``c1_r = nanmean_f pearson(zscore(y[te_f]), full_fit.pred[te_f])`` must
+         exceed ``cfg.c1_r_thresh`` (0.2). This is the dense whole-series
+         predictive correlation of the FULL model.
+    C2 : a one-sided paired t-test across folds that ``r_full - r_red > 0`` must
+         have ``p < cfg.c2_p_thresh`` (0.01): the TF kernel improves held-out
+         prediction.
+    """
     bs = cfg.bin_s
-    win = cfg.pulse_eval_win
-    ti = design.trial_index
+    y = np.asarray(y, float)
+    fold_ids = np.asarray(full_fit.fold_ids)
+    pred_full = np.asarray(full_fit.pred, float)
+    pred_red = np.asarray(reduced_fit.pred, float)
 
-    def diff_peth(values):
-        # nanmean over an all-NaN PETH row (no pulses landed in that lag) is a
-        # legitimate "undefined" -> NaN; the RuntimeWarning is suppressed inside
-        # tf_pulse_peth via warnings.catch_warnings (np.errstate does NOT catch
-        # the "Mean of empty slice" warning, which is raised by warnings.warn).
-        _, pf = tf_pulse_peth(values, design.bin_edges, fast, win, bs, trial_index=ti)
-        _, ps = tf_pulse_peth(values, design.bin_edges, slow, win, bs, trial_index=ti)
-        return pf - ps
+    r_full, r_red = [], []
+    for f in np.unique(fold_ids):
+        te = fold_ids == f
+        ok = te & np.isfinite(y) & np.isfinite(pred_full) & np.isfinite(pred_red)
+        if ok.sum() < 10:
+            continue
+        yz = _zscore(y[ok])                # z-score the ACTUAL counts (movmean=1)
+        pf = pred_full[ok]
+        pr = pred_red[ok]
+        # Guard: need nonzero variance in actual and predicted; else skip fold.
+        if (not np.all(np.isfinite(yz))) or np.std(pf) < 1e-12:
+            rf = np.nan
+        else:
+            rf = float(np.corrcoef(yz, pf)[0, 1])
+        if (not np.all(np.isfinite(yz))) or np.std(pr) < 1e-12:
+            rr = np.nan
+        else:
+            rr = float(np.corrcoef(yz, pr)[0, 1])
+        if np.isfinite(rf) and np.isfinite(rr):
+            r_full.append(rf)
+            r_red.append(rr)
 
-    # Pulse-count gate (Fix 3): too few fast/slow pulses -> the PETHs are
-    # untrustworthy; report C1/C2 as NaN (not responsive) but still populate
-    # n_fast/n_slow and the kernel metrics below.
-    if fast.size < cfg.min_pulses_per_label or slow.size < cfg.min_pulses_per_label:
-        c1_r, c2_p, is_resp = np.nan, np.nan, False
+    r_full = np.asarray(r_full, float)
+    r_red = np.asarray(r_red, float)
+
+    if r_full.size == 0:
+        c1_r = np.nan
+        c2_p = np.nan
+        is_resp = False
+        r_full_mean = np.nan
+        r_red_mean = np.nan
     else:
-        # C1 (per-fold mean) and C2 (across-fold ablation t-test) share ONE pass
-        # over folds.  For each held-out fold we restrict the predicted/actual
-        # signals to that fold's rows (np.where(m, ..., nan)) so both criteria
-        # use the same held-out masking.
-        #   C1: Pearson r between the full-model-PREDICTED fast-minus-slow PETH
-        #       and the ACTUAL fast-minus-slow PETH on that fold; c1_r is the
-        #       nanmean of the per-fold r's (spec §2.2-C1).
-        #   C2: one-sided t-test, across folds, that the full model beats the
-        #       reduced model on the fast-minus-slow PETH shape (per-fold
-        #       reduced-err minus full-err > 0).
-        folds_r, resid = [], []
-        for f in np.unique(full_fit.fold_ids):
-            m = full_fit.fold_ids == f
-            pred_full = np.where(m, full_fit.pred, np.nan)
-            pred_red = np.where(m, reduced_fit.pred, np.nan)
-            act = np.where(m, y, np.nan)
-            d_pred_f = diff_peth(pred_full)
-            d_red_f = diff_peth(pred_red)
-            d_act_f = diff_peth(act)
-
-            # C1 for this fold: predicted-vs-actual fast-slow PETH correlation
-            gc = np.isfinite(d_pred_f) & np.isfinite(d_act_f)
-            if gc.sum() >= 3 and np.std(d_pred_f[gc]) > 1e-9 and np.std(d_act_f[gc]) > 1e-9:
-                folds_r.append(float(np.corrcoef(d_pred_f[gc], d_act_f[gc])[0, 1]))
-
-            # C2 for this fold: squared-error improvement (reduced - full)
-            gg = np.isfinite(d_pred_f) & np.isfinite(d_red_f) & np.isfinite(d_act_f)
-            if gg.sum() >= 3:
-                err_full = np.nansum((d_act_f[gg] - d_pred_f[gg]) ** 2)
-                err_red = np.nansum((d_act_f[gg] - d_red_f[gg]) ** 2)
-                resid.append(err_red - err_full)   # >0 means full predicts TF better
-
-        c1_r = float(np.nanmean(folds_r)) if folds_r else np.nan
-        if len(resid) >= 3:
-            t, p_two = _stats.ttest_1samp(resid, 0.0)
+        c1_r = float(np.nanmean(r_full))
+        r_full_mean = c1_r
+        r_red_mean = float(np.nanmean(r_red))
+        # C2: one-sided paired t-test that r_full - r_red > 0 across folds.
+        diff = r_full - r_red
+        if diff.size >= 2 and np.std(diff) > 1e-12:
+            t, p_two = _stats.ttest_rel(r_full, r_red)
+            # one-sided positive: full beats reduced
             c2_p = p_two / 2.0 if t > 0 else 1.0 - p_two / 2.0
+        elif diff.size >= 2 and np.all(diff > 0):
+            # zero-variance but strictly positive improvement on every fold
+            c2_p = 0.0
         else:
             c2_p = np.nan
-        is_resp = bool((c1_r > cfg.c1_r_thresh) and (c2_p < cfg.c2_p_thresh))
+        c1_pass = np.isfinite(c1_r) and (c1_r > cfg.c1_r_thresh)
+        c2_pass = np.isfinite(c2_p) and (c2_p < cfg.c2_p_thresh)
+        is_resp = bool(c1_pass and c2_pass)
 
-    # kernel metrics
+    # kernel metrics (unchanged)
     kpeak_t, kfwhm = np.nan, np.nan
     K = _tf_kernel(full_fit, design, cfg)
     if K is not None and K.size:
@@ -550,5 +589,6 @@ def identify_tf_responsive(design, y, full_fit, reduced_fit, cfg: TFGLMConfig) -
             hi += 1
         kfwhm = float(lags[hi] - lags[lo])
     return {"c1_r": c1_r, "c2_p": c2_p, "is_responsive": is_resp,
-            "n_fast": int(fast.size), "n_slow": int(slow.size),
+            "r_full_mean": r_full_mean, "r_red_mean": r_red_mean,
+            "n_folds_used": int(r_full.size),
             "kernel_peak_t": kpeak_t, "kernel_fwhm": kfwhm}

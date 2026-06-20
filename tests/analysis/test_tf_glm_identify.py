@@ -1,8 +1,9 @@
 import numpy as np
 from visdetect.analysis.tf_glm import (TFGLMConfig, tf_pulse_peth,
                                         pulse_times_from_tf, identify_tf_responsive,
-                                        DesignMatrix)
+                                        DesignMatrix, FitResult)
 
+# ── pulse helpers (still used for exemplar visualisation) ────────────────────
 def test_tf_pulse_peth_triggers():
     edges = np.arange(0.0, 1.0, 0.05)
     sig = np.zeros(edges.size); sig[10] = 5.0       # impulse at t=0.5
@@ -13,9 +14,6 @@ def test_tf_pulse_peth_triggers():
 def test_pulse_times_split_by_sd():
     # Real ±0.5-SD split test with enough valid bins to clear the >=10-valid guard.
     # tf_bins are log2-encoded (negatives present -> taken as log2 directly).
-    # 6 clearly-positive bins (early) and 6 clearly-negative bins (late), plus
-    # filler nonzero bins so >=12 are valid. With ~symmetric +/-1.0 excursions the
-    # baseline log2 SD ~1.0 and threshold ~0.5 -> all +1.0 are fast, all -1.0 slow.
     edges = np.arange(0.0, 2.0, 0.05)            # 40 bins
     tf = np.zeros(edges.size)
     tf[2:8] = 1.0                                 # 6 fast bins (early)
@@ -27,5 +25,79 @@ def test_pulse_times_split_by_sd():
     fast, slow = pulse_times_from_tf(d, cfg)
     assert fast.size > 0 and slow.size > 0
     assert fast.size == 6 and slow.size == 6
-    # all fast pulses precede all slow pulses
     assert fast.max() < slow.min()
+
+
+# ── dense paired full-vs-reduced identification ──────────────────────────────
+def _design_stub(n_bins, n_tf_cols=3):
+    """Minimal DesignMatrix so identify_tf_responsive's kernel block runs."""
+    bin_edges = np.arange(n_bins, dtype=float) * 0.05
+    return DesignMatrix(
+        X=np.zeros((n_bins, n_tf_cols)),
+        col_groups={"tf": slice(0, n_tf_cols)},
+        bin_edges=bin_edges,
+        trial_index=np.zeros(n_bins, int),
+        tf_bins=np.ones(n_bins),
+    )
+
+
+def _fit_stub(pred, fold_ids, n_tf_cols=3):
+    coef = [np.zeros(n_tf_cols) for _ in np.unique(fold_ids)]
+    return FitResult(pred=np.asarray(pred, float), fold_ids=np.asarray(fold_ids),
+                     coef_by_fold=coef, best_lambdas=[1.0] * len(coef))
+
+
+def test_dense_identify_responsive_when_full_beats_reduced():
+    # FULL prediction tracks the actual counts; REDUCED is near-constant noise.
+    rng = np.random.default_rng(0)
+    n_folds, per = 5, 40
+    n = n_folds * per
+    fold_ids = np.repeat(np.arange(n_folds), per)
+    y = rng.poisson(2.0, n).astype(float)
+    # full pred strongly correlated with y on every fold; reduced ~ flat
+    pred_full = 0.5 * y + rng.normal(0, 0.3, n)
+    pred_red = np.full(n, y.mean()) + rng.normal(0, 0.3, n)
+    cfg = TFGLMConfig()
+    out = identify_tf_responsive(_design_stub(n), y,
+                                 _fit_stub(pred_full, fold_ids),
+                                 _fit_stub(pred_red, fold_ids), cfg)
+    assert out["c1_r"] > 0.2
+    assert out["c2_p"] < 0.01
+    assert out["is_responsive"]
+    assert out["r_full_mean"] >= out["r_red_mean"]
+
+
+def test_dense_identify_not_responsive_when_full_equals_reduced():
+    # FULL and REDUCED predict identically (TF kernel adds nothing) -> diff ~ 0,
+    # C2 non-significant -> not responsive even though c1_r may be high.
+    rng = np.random.default_rng(1)
+    n_folds, per = 5, 40
+    n = n_folds * per
+    fold_ids = np.repeat(np.arange(n_folds), per)
+    y = rng.poisson(2.0, n).astype(float)
+    shared = 0.5 * y + rng.normal(0, 0.3, n)
+    cfg = TFGLMConfig()
+    out = identify_tf_responsive(_design_stub(n), y,
+                                 _fit_stub(shared.copy(), fold_ids),
+                                 _fit_stub(shared.copy(), fold_ids), cfg)
+    assert not out["is_responsive"]
+    assert out["c2_p"] >= 0.01 or not np.isfinite(out["c2_p"])
+
+
+def test_dense_identify_skips_low_variance_folds():
+    # A fold with <10 finite bins or zero-variance prediction must be skipped,
+    # not crash; here one fold is all-NaN pred.
+    n_folds, per = 4, 20
+    n = n_folds * per
+    fold_ids = np.repeat(np.arange(n_folds), per)
+    rng = np.random.default_rng(2)
+    y = rng.poisson(2.0, n).astype(float)
+    pred_full = 0.5 * y + rng.normal(0, 0.3, n)
+    pred_red = y.mean() + rng.normal(0, 0.3, n)   # near-flat but nonzero variance
+    pred_full[fold_ids == 0] = np.nan             # one bad fold
+    cfg = TFGLMConfig()
+    out = identify_tf_responsive(_design_stub(n), y,
+                                 _fit_stub(pred_full, fold_ids),
+                                 _fit_stub(pred_red, fold_ids), cfg)
+    assert out["n_folds_used"] == n_folds - 1
+    assert np.isfinite(out["c1_r"])
