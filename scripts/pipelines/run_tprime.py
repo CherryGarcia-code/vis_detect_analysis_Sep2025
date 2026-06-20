@@ -114,6 +114,7 @@ def process_session(
     tprime_exe: str,
     sync_period: float,
     dry_run: bool = False,
+    timeout: int = 1800,
 ) -> bool:
     """Run TPrime on a single session.
 
@@ -220,7 +221,7 @@ def process_session(
             logging.info("    Running TPrime...")
             logging.debug("    CMD: %s", cmd)
             result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=300
+                cmd, shell=True, capture_output=True, text=True, timeout=timeout
             )
             if result.returncode != 0:
                 logging.error("    TPrime stderr: %s", result.stderr)
@@ -278,6 +279,11 @@ def main(argv=None):
         help="Re-run even if spike_times_sec_adj.npy already exists",
     )
     parser.add_argument(
+        "--timeout", type=int, default=1800,
+        help="Per-probe TPrime.exe subprocess timeout in seconds (default: 1800). "
+             "Raise for large sessions (tens of millions of spikes) over slow mounts.",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Show what would be done without executing",
     )
@@ -332,7 +338,8 @@ def main(argv=None):
         logging.info("Processing: %s", sname)
 
         try:
-            process_session(session_dir, args.tprime_exe, args.sync_period, args.dry_run)
+            process_session(session_dir, args.tprime_exe, args.sync_period,
+                            args.dry_run, args.timeout)
             success_count += 1
         except Exception as e:
             logging.error("FAILED: %s - %s", sname, e)
