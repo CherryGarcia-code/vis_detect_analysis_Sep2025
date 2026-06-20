@@ -205,6 +205,23 @@ def _resize(a, n, fill=0.0):
     return out
 
 
+def _tf_octaves(tf_lin: np.ndarray) -> np.ndarray:
+    """Linear baseline TF (Hz, geomean 1) -> z-scored octaves log2(TF)/0.25.
+
+    Matches the authors' BaseTFFrames_to_ms.m TF regressor: the baseline TF is
+    drawn from log2 ~ N(0, 0.25 octave), so log2(TF)/0.25 is symmetric about 0
+    and already ~unit-variance in SD-octave units. Post-change / masked bins are
+    encoded as 0 (TF<=0), which maps to the geomean-neutral 0 octave. Feeding
+    LINEAR TF would be asymmetric (a 2x-up pulse = +1 Hz but a 2x-down = -0.5 Hz),
+    which the FIR cannot represent as the symmetric log-TF kernel.
+    """
+    tf = np.asarray(tf_lin, dtype=float).ravel()
+    out = np.zeros(tf.shape, dtype=float)
+    pos = tf > 0
+    out[pos] = np.log2(tf[pos]) / 0.25
+    return out
+
+
 def _ramp_col(tr, edges, bs):
     """Seconds since baseline start, zero before 1 s and after change onset."""
     t = edges - tr.t_start
@@ -251,9 +268,13 @@ def assemble_design(trials: List["TrialRegressors"], cfg: TFGLMConfig) -> Design
         groups[name] = slice(start, start + block.shape[1])
 
     # 1) TF (continuous, per-bin, lagged) — built per-trial then stacked so lags
-    #    do not bleed across trial boundaries.
+    #    do not bleed across trial boundaries. The regressor is z-scored OCTAVES
+    #    log2(TF)/0.25 (NOT linear Hz): the baseline TF is log2 ~ N(0, 0.25), so
+    #    log2(TF)/0.25 is symmetric (matching the authors' BaseTFFrames_to_ms.m)
+    #    and already ~unit-variance, so the tf block is NOT per-column z-scored
+    #    below. (design.tf_bins stays LINEAR for pulse_times_from_tf.)
     _add("tf", _blockwise(trials, per_edges, lambda tr, e: fir_continuous(
-        _resize(tr.tf_bins, e.size), cfg.kern["tf"], bs)))
+        _tf_octaves(_resize(tr.tf_bins, e.size)), cfg.kern["tf"], bs)))
     # 2) trial start event
     _add("trial_start", _blockwise(trials, per_edges, lambda tr, e: fir_event(
         np.array([tr.t_start]), e, cfg.kern["trial_start"], bs)))
@@ -298,12 +319,16 @@ def assemble_design(trials: List["TrialRegressors"], cfg: TFGLMConfig) -> Design
 
     X = np.concatenate(cols, axis=1) if cols else np.zeros((N, 0))
 
-    # Spec §4: standardize the continuous regressors (tf, wheel) to unit
-    # variance; leave event/ramp/phase indicators as-is (0/1). Guard against
-    # zero-variance columns (e.g. all-zero TF lags) — leave them unchanged.
-    # NOTE: design.tf_bins is left RAW on purpose — pulse_times_from_tf reads it
-    # for ±SD pulse detection and must see the raw linear-TF signal.
-    for grp in ("tf", "wheel", "motion_energy", "pupil"):
+    # Spec §4: standardize the continuous nuisance regressors (wheel, motion,
+    # pupil) to unit variance; leave event/ramp/phase indicators as-is (0/1).
+    # Guard against zero-variance columns — leave them unchanged.
+    # NOTE: the "tf" block is DELIBERATELY EXCLUDED — it is already in z-scored
+    # SD-octave units (log2(TF)/0.25, baseline log2 ~ N(0, 0.25) => ~unit var)
+    # and symmetric; per-column z-scoring would re-center/re-scale each lag and
+    # destroy that symmetric octave encoding.
+    # NOTE: design.tf_bins is left RAW (linear Hz) on purpose — pulse_times_from_tf
+    # reads it for ±SD pulse detection and must see the raw linear-TF signal.
+    for grp in ("wheel", "motion_energy", "pupil"):
         sl = groups.get(grp)
         if sl is None:
             continue
@@ -519,7 +544,7 @@ def tf_pulse_peth(values_per_bin, bin_edges, pulse_times, win, bin_s,
 
 
 def _tf_kernel(full_fit, design, cfg):
-    """Mean TF FIR kernel (Hz-weight per lag) averaged across folds."""
+    """Mean TF FIR kernel (octave-weight per lag) averaged across folds."""
     sl = design.col_groups.get("tf")
     if sl is None or not full_fit.coef_by_fold:
         return None
