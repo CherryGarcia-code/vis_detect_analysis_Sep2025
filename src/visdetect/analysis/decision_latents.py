@@ -141,14 +141,42 @@ def session_dprime(session):
     return float(compute_session_performance(session).get("d_prime", float("nan")))
 
 
-def assign_comprehension_flags(dprime_by_session, threshold=0.5):
-    """First chronological session with d′ ≥ threshold marks the pre→post
-    boundary; every session from there on is "post". (threshold=0.5 is the
-    low "knows-the-rule" bar, distinct from the QC 0.8 gate; spec §7.)"""
+def assign_comprehension_flags(dprime_by_session, threshold=0.5, rule="dprime",
+                               hitrate_by_session=None):
+    """First chronological session whose criterion clears ``threshold`` marks the
+    pre→post boundary; every session from there on is "post". (threshold=0.5 is
+    the low "knows-the-rule" bar, distinct from the QC 0.8 gate; spec §7.)
+
+    ``rule`` selects WHICH criterion crosses the boundary (fix f, "two
+    impulsivities" — pre- vs post-comprehension):
+
+      * ``"dprime"``       (default, back-compat): the first session with
+        ``dprime_by_session[s] >= threshold``. ``hitrate_by_session`` is ignored.
+      * ``"easy_hitrate"``: the first session whose EASY-change hit-rate
+        (``hitrate_by_session[s]``, e.g. P(lick) on the largest change-size go
+        trials) ``>= threshold`` (``threshold`` reinterpreted as a hit-rate bar).
+        Requires ``hitrate_by_session``; raises ``ValueError`` if it is None.
+
+    The chronological ordering (DDMMYYYY ids) and the "latch on, stays post"
+    semantics are identical across rules — only the per-session criterion differs.
+    """
+    if rule not in ("dprime", "easy_hitrate"):
+        raise ValueError(
+            f"assign_comprehension_flags: rule must be 'dprime' or 'easy_hitrate', "
+            f"got {rule!r}")
+    if rule == "easy_hitrate":
+        if hitrate_by_session is None:
+            raise ValueError(
+                "assign_comprehension_flags: rule='easy_hitrate' requires "
+                "hitrate_by_session (a {session: easy-change hit-rate} dict); got None")
+        criterion = hitrate_by_session
+    else:                                   # rule == "dprime"
+        criterion = dprime_by_session
+
     ordered = sorted(dprime_by_session, key=parse_session_date)
     flags, comprehended = {}, False
     for s in ordered:
-        if (dprime_by_session[s] or 0) >= threshold:
+        if (criterion.get(s) or 0) >= threshold:
             comprehended = True
         flags[s] = "post" if comprehended else "pre"
     return flags

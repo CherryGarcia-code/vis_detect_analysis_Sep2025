@@ -30,6 +30,51 @@ def test_assign_comprehension_flags_marks_boundary():
     assert flags["02072025"] == "post" and flags["03072025"] == "post"
 
 
+def test_assign_comprehension_flags_back_compat_default_rule_unchanged():
+    """fix(f): the default (no ``rule``) call must behave EXACTLY like the legacy
+    d′ rule — existing callers pass no ``rule`` and must be unaffected."""
+    dprime = {"30062025": 0.1, "01072025": 0.2, "02072025": 0.7, "03072025": 0.9}
+    default = dl.assign_comprehension_flags(dprime, threshold=0.5)
+    explicit = dl.assign_comprehension_flags(dprime, threshold=0.5, rule="dprime")
+    assert default == explicit
+    assert default == {"30062025": "pre", "01072025": "pre",
+                       "02072025": "post", "03072025": "post"}
+
+
+def test_assign_comprehension_flags_rule_changes_boundary():
+    """fix(f): both rules mark the EXPECTED pre→post boundary on a synthetic
+    chronology, and switching ``rule`` moves the boundary as designed.
+
+    Construction (4 chronological sessions): d′ first clears 0.5 on the 3rd
+    session (02072025), but the easy-change hit-rate already clears 0.5 on the
+    2nd session (01072025). So the d′ rule's boundary is one session LATER than
+    the easy-hitrate rule's — a ground-truth difference, not a coincidence."""
+    dprime = {"30062025": 0.1, "01072025": 0.2, "02072025": 0.7, "03072025": 0.9}
+    easy_hr = {"30062025": 0.2, "01072025": 0.6, "02072025": 0.7, "03072025": 0.95}
+
+    # d′ rule: boundary at 02072025 (first d′ ≥ 0.5)
+    by_dprime = dl.assign_comprehension_flags(dprime, threshold=0.5, rule="dprime")
+    assert by_dprime == {"30062025": "pre", "01072025": "pre",
+                         "02072025": "post", "03072025": "post"}
+
+    # easy-hitrate rule: boundary one session EARLIER, at 01072025 (first HR ≥ 0.5)
+    by_hr = dl.assign_comprehension_flags(
+        dprime, threshold=0.5, rule="easy_hitrate", hitrate_by_session=easy_hr)
+    assert by_hr == {"30062025": "pre", "01072025": "post",
+                     "02072025": "post", "03072025": "post"}
+
+    # switching the rule genuinely moved the boundary (01072025 flips pre→post)
+    assert by_dprime["01072025"] == "pre" and by_hr["01072025"] == "post"
+
+
+def test_assign_comprehension_flags_easy_hitrate_requires_hitrate_dict():
+    """fix(f): ``rule='easy_hitrate'`` with no ``hitrate_by_session`` must raise a
+    clear ValueError (not silently fall back to d′)."""
+    dprime = {"30062025": 0.1, "01072025": 0.7}
+    with pytest.raises(ValueError):
+        dl.assign_comprehension_flags(dprime, threshold=0.5, rule="easy_hitrate")
+
+
 def test_build_trial_table_filters_and_columns(synth_session, synth_state_labels):
     from visdetect.analysis import decision_latents as dl
     tab = dl.build_trial_table(synth_session, synth_state_labels, "07072025", dt=0.05)
