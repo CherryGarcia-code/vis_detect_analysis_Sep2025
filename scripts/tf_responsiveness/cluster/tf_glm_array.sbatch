@@ -46,9 +46,19 @@ export OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK:-2}
 export MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK:-2}
 
 echo "task ${SLURM_ARRAY_TASK_ID} on $(hostname) | $(date)"
+
+# Fail-fast import sanity check: if the lean env can't import the leaf modules,
+# say so loudly and exit non-zero (do NOT silently 'finish').
+python -c "import visdetect.analysis.tf_glm, visdetect.analysis.tf_glm_data; print('import OK')" || {
+    echo "IMPORT CHECK FAILED on $(hostname) — aborting task ${SLURM_ARRAY_TASK_ID}"
+    exit 1
+}
+
 python "$STAGE/code/scripts/tf_responsiveness/cluster/tf_glm_cluster_task.py" \
     --targets "$STAGE/targets.csv" \
     --task-id "$SLURM_ARRAY_TASK_ID" \
     --data-root "$DATA_ROOT" \
     --out-dir "$STAGE/results"
-echo "task ${SLURM_ARRAY_TASK_ID} finished | $(date)"
+rc=$?
+echo "task ${SLURM_ARRAY_TASK_ID} finished rc=$rc | $(date)"
+exit $rc
