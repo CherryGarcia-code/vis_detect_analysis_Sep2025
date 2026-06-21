@@ -359,3 +359,147 @@ def test_expectation_bump_decays_with_distance():
     phi = dlg.expectation_bump(mu + dist, mu, sigma)
     assert np.all(np.diff(phi) < 0)             # strictly decreasing away from mu
     assert abs(phi[0] - 1.0) < 1e-12            # peak at distance 0
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 1.3: ragged Design + build_design  (contract §A.5)
+# ════════════════════════════════════════════════════════════════════════════
+# Ground-truth tests (per brief): a 2-trial evidence frame (one ~3-bin short
+# trial, one ~200-bin long trial) plus state labels builds a ragged Design whose
+# A/phi lengths match each trial's n_bins, whose event_bin == n_bins-1, whose
+# mood_code indexes MAIN_MOODS, and which is sliceable via .subset(...). A trial
+# whose mood is not in MAIN_MOODS is dropped.
+
+from visdetect.analysis.decision_latents import MAIN_MOODS  # noqa: E402
+
+
+def _evidence_frame(specs):
+    """Build a trial_evidence_df from (trial_idx, n_bins, lick, censored) specs.
+
+    Each trial's evidence is a deterministic ramp of length n_bins so the leaky
+    accumulator output is non-trivial and its length is checkable.
+    """
+    rows = []
+    for trial_idx, n_bins, lick, censored in specs:
+        ev = np.linspace(-0.5, 0.5, n_bins)
+        rows.append({
+            "trial_idx": trial_idx,
+            "outcome": "hit" if lick else "miss",
+            "change_size": 2.0,
+            "change_time": 0.5,
+            "decision_time": n_bins * 0.05,
+            "lick": int(lick),
+            "censored": bool(censored),
+            "evidence": ev,
+            "n_bins": n_bins,
+        })
+    return pd.DataFrame(rows)
+
+
+def _state_labels(mapping):
+    """DataFrame indexed by trial_idx with a state_label column (load_state_labels form)."""
+    df = pd.DataFrame(
+        {"trial_idx": list(mapping.keys()), "state_label": list(mapping.values())}
+    )
+    return df.set_index("trial_idx")
+
+
+def test_build_design_two_trials_short_and_long():
+    """A 3-bin Impulsive trial + a 200-bin StimSens trial -> Design with len==2,
+    ragged A/phi of matching lengths, event_bin == [2, 199], mood_code indexing
+    MAIN_MOODS."""
+    ev_df = _evidence_frame([
+        (10, 3, 1, False),     # short, ~3 bins, Impulsive, lick
+        (20, 200, 0, True),    # long, ~200 bins, StimSens, censored miss
+    ])
+    labels = _state_labels({10: "Impulsive", 20: "StimSens"})
+    design = dlg.build_design(ev_df, labels, mu=0.5, sigma=0.8, dt=0.05)
+
+    assert len(design) == 2
+    # ragged A/phi lengths match each trial's n_bins
+    assert len(design.A[0]) == 3 and len(design.phi[0]) == 3
+    assert len(design.A[1]) == 200 and len(design.phi[1]) == 200
+    # event_bin == n_bins - 1
+    assert list(design.event_bin) == [2, 199]
+    # mood_code indexes MAIN_MOODS
+    assert MAIN_MOODS[design.mood_code[0]] == "Impulsive"
+    assert MAIN_MOODS[design.mood_code[1]] == "StimSens"
+    # lick / censored / trial_idx carried through
+    assert list(design.lick) == [1, 0]
+    assert list(design.censored.astype(bool)) == [False, True]
+    assert list(design.trial_idx) == [10, 20]
+    assert design.dt == 0.05
+
+
+def test_build_design_phi_matches_expectation_bump():
+    """phi[i] == expectation_bump(arange(n_bins)*dt, mu, sigma) for each trial."""
+    ev_df = _evidence_frame([(10, 3, 1, False), (20, 200, 0, True)])
+    labels = _state_labels({10: "Impulsive", 20: "StimSens"})
+    mu, sigma, dt = 0.7, 0.8, 0.05
+    design = dlg.build_design(ev_df, labels, mu=mu, sigma=sigma, dt=dt)
+    for i, n_bins in enumerate((3, 200)):
+        expected_phi = dlg.expectation_bump(np.arange(n_bins) * dt, mu, sigma)
+        assert np.allclose(design.phi[i], expected_phi)
+
+
+def test_build_design_A_matches_leaky_accumulate():
+    """A[i] == leaky_accumulate(evidence, dt, leak_tau, rectification)."""
+    ev_df = _evidence_frame([(10, 3, 1, False), (20, 200, 0, True)])
+    labels = _state_labels({10: "Impulsive", 20: "StimSens"})
+    design = dlg.build_design(ev_df, labels, mu=0.5, sigma=0.8, dt=0.05,
+                              leak_tau=0.27, rectification="signed")
+    for i, row in ev_df.reset_index(drop=True).iterrows():
+        expected_A = dlg.leaky_accumulate(row["evidence"], dt=0.05,
+                                          leak_tau=0.27, rectification="signed")
+        assert np.allclose(design.A[i], expected_A)
+
+
+def test_build_design_subset_keeps_only_long_trial():
+    """design.subset([1]) -> a 1-trial Design containing only the long trial."""
+    ev_df = _evidence_frame([(10, 3, 1, False), (20, 200, 0, True)])
+    labels = _state_labels({10: "Impulsive", 20: "StimSens"})
+    design = dlg.build_design(ev_df, labels, mu=0.5, sigma=0.8, dt=0.05)
+    sub = design.subset([1])
+    assert len(sub) == 1
+    assert len(sub.A[0]) == 200 and len(sub.phi[0]) == 200
+    assert list(sub.event_bin) == [199]
+    assert list(sub.trial_idx) == [20]
+    assert MAIN_MOODS[sub.mood_code[0]] == "StimSens"
+
+
+def test_build_design_drops_non_main_mood_trial():
+    """A trial whose mood is not in MAIN_MOODS (e.g. Disengaged) is dropped."""
+    ev_df = _evidence_frame([
+        (10, 3, 1, False),     # Impulsive -> kept
+        (20, 200, 0, True),    # StimSens  -> kept
+        (30, 5, 1, False),     # Disengaged -> dropped
+    ])
+    labels = _state_labels({10: "Impulsive", 20: "StimSens", 30: "Disengaged"})
+    design = dlg.build_design(ev_df, labels, mu=0.5, sigma=0.8, dt=0.05)
+    assert len(design) == 2
+    assert list(design.trial_idx) == [10, 20]
+
+
+def test_build_design_drops_untagged_trial():
+    """A trial with no state label (missing from state_labels) is dropped."""
+    ev_df = _evidence_frame([
+        (10, 3, 1, False),     # Impulsive -> kept
+        (20, 200, 0, True),    # not in labels -> dropped
+    ])
+    labels = _state_labels({10: "Impulsive"})
+    design = dlg.build_design(ev_df, labels, mu=0.5, sigma=0.8, dt=0.05)
+    assert len(design) == 1
+    assert list(design.trial_idx) == [10]
+    assert MAIN_MOODS[design.mood_code[0]] == "Impulsive"
+
+
+def test_build_design_array_dtypes():
+    """event_bin/mood_code/lick/trial_idx are int arrays; censored is bool."""
+    ev_df = _evidence_frame([(10, 3, 1, False), (20, 200, 0, True)])
+    labels = _state_labels({10: "Impulsive", 20: "StimSens"})
+    design = dlg.build_design(ev_df, labels, mu=0.5, sigma=0.8, dt=0.05)
+    assert np.issubdtype(design.event_bin.dtype, np.integer)
+    assert np.issubdtype(design.mood_code.dtype, np.integer)
+    assert np.issubdtype(design.lick.dtype, np.integer)
+    assert np.issubdtype(design.trial_idx.dtype, np.integer)
+    assert design.censored.dtype == bool

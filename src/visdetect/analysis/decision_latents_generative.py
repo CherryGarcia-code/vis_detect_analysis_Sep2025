@@ -22,6 +22,8 @@ Behaviour-only: no session loading, no spikes, no ``ddm`` imports here.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
 
@@ -162,3 +164,90 @@ def expectation_bump(t_grid, mu, sigma):
     """Gaussian temporal-expectation profile, peak 1.0 at mu (sigma FIXED, not fitted)."""
     t_grid = np.asarray(t_grid, float)
     return np.exp(-0.5 * ((t_grid - mu) / float(sigma)) ** 2)
+
+
+# ── Engine-A precompute (Task 1.3) — ragged Design (contract §A.5) ───────────
+@dataclass
+class Design:
+    A: list            # list[np.ndarray]  leaky-accumulated evidence per trial (len == n_bins_i)
+    phi: list          # list[np.ndarray]  urgency bump per trial (same lengths)
+    event_bin: np.ndarray   # int   index of the decision bin per trial (== n_bins_i - 1)
+    lick: np.ndarray        # int 0/1
+    censored: np.ndarray    # bool
+    mood_code: np.ndarray   # int   index into ParamSpec.moods
+    trial_idx: np.ndarray   # int
+    dt: float
+
+    def __len__(self):
+        return len(self.A)
+
+    def subset(self, idx):
+        idx = np.asarray(idx, int)
+        return Design(A=[self.A[i] for i in idx], phi=[self.phi[i] for i in idx],
+                      event_bin=self.event_bin[idx], lick=self.lick[idx],
+                      censored=self.censored[idx], mood_code=self.mood_code[idx],
+                      trial_idx=self.trial_idx[idx], dt=self.dt)
+
+
+def build_design(trial_evidence_df, state_labels, mu, sigma, dt=0.05,
+                 leak_tau=0.27, rectification="signed"):
+    """Precompute A (leaky_accumulate) and phi (expectation_bump on the trial's t-grid)
+    per trial; map mood to code (drop EXCLUDED_MOODS, keep MAIN_MOODS for fitting).
+    event_bin = n_bins-1 (decision in the last bin). Returns a Design.
+
+    Parameters
+    ----------
+    trial_evidence_df : pandas.DataFrame
+        Output of ``decision_latents.build_trial_evidence_corrected`` — columns
+        ``trial_idx, outcome, change_size, change_time, decision_time, lick,
+        censored, evidence(np.ndarray), n_bins``.
+    state_labels : pandas.DataFrame
+        Indexed by ``trial_idx`` with a ``state_label`` column (from
+        ``decision_latents.load_state_labels``). Trials whose mood is not in
+        ``MAIN_MOODS`` (Impulsive / StimSens) are dropped — Disengaged is handled
+        in reporting, Abort/untagged trials are dropped (Phase-1 rule).
+    mu, sigma : float
+        Temporal-expectation bump anchor (``mu`` = per-session empirical
+        change-time anchor) and FIXED width. ``phi`` is therefore fully
+        data-determined here and never depends on the fitted parameters.
+    dt, leak_tau, rectification :
+        Generative time-grid and leaky-accumulator settings (contract §A.3).
+    """
+    # MAIN_MOODS imported lazily to avoid a heavy import at module load.
+    from visdetect.analysis.decision_latents import MAIN_MOODS
+
+    A_list, phi_list = [], []
+    event_bin, lick, censored, mood_code, trial_idx = [], [], [], [], []
+
+    for row in trial_evidence_df.itertuples(index=False):
+        tidx = int(row.trial_idx)
+        # Look up the trial's mood; keep ONLY MAIN_MOODS (drop untagged / others).
+        if tidx not in state_labels.index:
+            continue
+        mood = state_labels.loc[tidx, "state_label"]
+        if mood not in MAIN_MOODS:
+            continue
+
+        A_i = leaky_accumulate(row.evidence, dt=dt, leak_tau=leak_tau,
+                               rectification=rectification)
+        n_bins_i = len(A_i)
+        phi_i = expectation_bump(np.arange(n_bins_i) * dt, mu, sigma)
+
+        A_list.append(A_i)
+        phi_list.append(phi_i)
+        event_bin.append(n_bins_i - 1)
+        lick.append(int(row.lick))
+        censored.append(bool(row.censored))
+        mood_code.append(MAIN_MOODS.index(mood))
+        trial_idx.append(tidx)
+
+    return Design(
+        A=A_list,
+        phi=phi_list,
+        event_bin=np.asarray(event_bin, int),
+        lick=np.asarray(lick, int),
+        censored=np.asarray(censored, bool),
+        mood_code=np.asarray(mood_code, int),
+        trial_idx=np.asarray(trial_idx, int),
+        dt=float(dt),
+    )
