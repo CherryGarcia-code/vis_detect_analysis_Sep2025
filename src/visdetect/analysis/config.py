@@ -22,6 +22,7 @@ Usage
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -271,6 +272,29 @@ def parse_session_date(session_int) -> Tuple[int, int, int]:
     return (yyyy, mm, dd)
 
 
+def session_date_key(session) -> Tuple[int, int, int]:
+    """Sortable (year, month, day) for ANY session-token format used across subjects.
+
+    Handles, in addition to the bare DDMMYYYY ints `parse_session_date` accepts:
+      - subject-prefixed tokens   BG_049_01092025  (the new subjects' registry form)
+      - 6-digit DDMMYY            050325 / BG_031_050325  ->  20YY
+      - 7-digit DMMYYYY           1072025 (BG_046, leading zero stripped)
+      - re-recording suffixes     BG_031_19052025_b, BG_039_01042025_v2 (date taken,
+                                  suffix ignored)
+
+    Unlike parse_session_date this is string-safe (no int() on a prefixed token).
+    """
+    s = re.sub(r"^BG_\d+_", "", str(session))      # drop subject prefix if present
+    m = re.match(r"(\d+)", s)                        # leading digit run (drops _b/_v2)
+    if not m:
+        raise ValueError(f"no date digits in session token {session!r}")
+    d = m.group(1)
+    if len(d) == 6:                                  # DDMMYY -> 20YY
+        return (2000 + int(d[4:6]), int(d[2:4]), int(d[:2]))
+    d = d.zfill(8)                                   # 7- or 8-digit -> DDMMYYYY
+    return (int(d[4:]), int(d[2:4]), int(d[:2]))
+
+
 def session_int_to_iso(session_int) -> str:
     """Convert DDMMYYYY int to 'YYYY-MM-DD' string."""
     s = str(int(session_int)).zfill(8)
@@ -322,6 +346,15 @@ def load_staging_manifest(
     from visdetect.analysis.behavior import filter_manifest_by_stage
 
     path = str(manifest_path) if manifest_path else STAGING_MANIFEST_PATH
+    if not os.path.exists(path):
+        # Subjects other than BG_046 (BG_031/038/039/049) have pkls + UM output but
+        # NO staging manifest. Degrade gracefully to an EMPTY manifest so callers
+        # fall back to 'Unknown' stage (cosmetic) instead of crashing on read_csv.
+        # Session lists for these subjects must come from the registry or
+        # list_pkl_sessions(), not the manifest.
+        return pd.DataFrame({c: [] for c in
+                             ["session_name", "date", "stage",
+                              "n_go", "n_catch", "dprime", "session_idx"]})
     manifest = pd.read_csv(path, dtype={"session_name": str, "date": str})
     if qc_only:
         manifest = manifest[manifest["stage"].isin(VALID_STAGES)].copy()
@@ -394,6 +427,9 @@ def load_filtered_manifest(
     from visdetect.analysis.behavior import filter_manifest_by_stage
 
     manifest = load_staging_manifest(qc_only=False, apply_filter=False)
+    if manifest.empty:                       # no staging manifest for this subject
+        manifest["session_idx"] = range(len(manifest))
+        return manifest
     manifest = filter_manifest_by_stage(
         manifest,
         include_stages=include_stages,
