@@ -70,6 +70,22 @@ def test_censored_hazard_bins_mid_bin_duration_correctly():
     assert np.isclose(hz[1], 1.0)  # the event lands in bin1
 
 
+def test_build_trial_evidence_corrected_reads_every_third_frame():
+    import numpy as np
+    from types import SimpleNamespace
+    from visdetect.analysis import decision_latents as dl
+    # bv: 60 Hz, each TF held 3 frames. Pre-change TF doubles every 3 frames: 1,1,1,2,2,2,4,4,4,...
+    bv = np.repeat([1.0, 2.0, 4.0, 8.0], 3)            # 12 frames = 0.2 s at 60 Hz
+    t = SimpleNamespace(trialoutcome="hit", change_size=4.0, change_time=10.0,
+                        reactiontimes={"RT": 0.10}, baseline_values=bv, n_seen=None)
+    sess = SimpleNamespace(trials=[t])
+    df = dl.build_trial_evidence_corrected(sess, dt=0.05, tf_base=1.0)
+    ev = df.iloc[0]["evidence"]
+    # bin k reads frame 3k: bv[0]=1->log2(1)=0, bv[3]=2->1, bv[6]=4->2 (pre-change, ct=10 s)
+    assert ev[0] == 0.0 and abs(ev[1] - 1.0) < 1e-9 and abs(ev[2] - 2.0) < 1e-9
+    assert df.iloc[0]["n_bins"] == int(round((10.0 + 0.10) / 0.05)) or df.iloc[0]["n_bins"] == 202
+
+
 def test_sharpness_scores_keys_and_dprime_direction():
     import numpy as np, pandas as pd
     from visdetect.analysis import decision_latents as dl

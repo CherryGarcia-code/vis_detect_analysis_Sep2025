@@ -27,6 +27,82 @@ SEPARATE_MOODS = ("Disengaged",)
 EXCLUDED_MOODS = ("Abort",)
 _DEFAULT_TAG_DIR = os.path.join("data", "cache", "state_tags")
 
+# Provisional response-window end (s) used as the Miss decision time. Mirrors
+# ddm.RESPONSE_WINDOW_S; there is no canonical response-window constant in
+# visdetect.analysis.constants — confirm against task params during the
+# real-data run (spec §10). Defined HERE (not imported from ddm) so Phase-2 code
+# never touches the buggy ddm evidence sampler.
+RESPONSE_WINDOW_S = 2.155
+
+
+def _decision_time_dl(trial):
+    """Return (decision_time_s, lick {0,1}, censored), aligned to Baseline_ON.
+
+    Phase-1 local mirror of ``ddm._decision_time`` (deliberately NOT imported
+    from ddm, to keep Phase-2 off the buggy ``ddm.build_trial_evidence`` sampler):
+
+    * ``hit``  → ``(change_time + RT, 1, False)``   (RT from reactiontimes RT/Hit/hit)
+    * ``fa``   → ``(FA_latency, 1, False)``          (from reactiontimes FA/fa/RT)
+    * ``miss`` → ``(change_time + RESPONSE_WINDOW_S, 0, True)`` (response-window end, censored)
+    * anything else (abort/ref) → ``(nan, 0, True)`` (handled by the caller)
+
+    ``trialoutcome`` is lowercased (real data may capitalize it).
+    """
+    oc = (getattr(trial, "trialoutcome", "") or "").lower()
+    rts = getattr(trial, "reactiontimes", {}) or {}
+    ct = float(getattr(trial, "change_time", np.nan) or np.nan)
+    if oc == "hit":
+        rt = rts.get("RT", rts.get("Hit", rts.get("hit")))
+        return (ct + float(rt), 1, False)
+    if oc == "fa":
+        rt = rts.get("FA", rts.get("fa", rts.get("RT")))
+        return (float(rt), 1, False)            # anticipatory lick, aligned to Baseline_ON
+    if oc == "miss":
+        return (ct + RESPONSE_WINDOW_S, 0, True)   # response-window end; no crossing (censored)
+    return (np.nan, 0, True)                     # abort/ref handled by caller
+
+
+def build_trial_evidence_corrected(session, dt=0.05, tf_base=None):
+    """Per-trial log2-TF evidence on the dt grid, truncated to [0, decision_time].
+    Returns DataFrame: trial_idx, outcome, change_size, change_time, decision_time,
+    lick, censored, evidence(np.ndarray, len==n_bins), n_bins.
+    Evidence bin k reads baseline frame index 3*k (60 Hz storage, 50 ms holds)."""
+    MONITOR_HZ = 60.0
+    frames_per_bin = int(round(dt * MONITOR_HZ))   # == 3 for dt=0.05
+    trials = getattr(session, "trials", []) or []
+    rows = []
+    for uid, t in enumerate(trials):
+        oc = (getattr(t, "trialoutcome", "") or "").lower()
+        if oc in ("abort", "ref"):
+            continue
+        bv = getattr(t, "baseline_values", None)
+        if bv is None:
+            continue
+        bv = np.asarray(bv, float).ravel()
+        if bv.size == 0:
+            continue
+        cs = float(getattr(t, "change_size", np.nan) or np.nan)
+        ct = float(getattr(t, "change_time", np.nan) or np.nan)
+        base = float(tf_base) if tf_base is not None else float(np.nanmedian(bv)) or 1.0
+        dec_t, lick, censored = _decision_time_dl(t)        # Phase-1 helper (Task 0.1 Step 1)
+        if not np.isfinite(dec_t) or dec_t <= 0:
+            continue
+        n_bins = int(round(dec_t / dt))
+        if n_bins < 1:
+            continue
+        ev = np.empty(n_bins, float)
+        for k in range(n_bins):
+            j = min(bv.size - 1, k * frames_per_bin)        # 60 Hz frame for this 50 ms bin
+            tau = k * dt
+            tf = bv[j] * cs if (np.isfinite(ct) and tau >= ct and cs > 1.0) else bv[j]
+            ev[k] = np.log2(tf / base) if tf > 0 else 0.0
+        ev = np.nan_to_num(ev, nan=0.0)
+        rows.append({"trial_idx": uid, "outcome": oc, "change_size": cs,
+                     "change_time": ct, "decision_time": dec_t, "lick": int(lick),
+                     "censored": bool(censored), "evidence": ev, "n_bins": n_bins})
+    import pandas as pd
+    return pd.DataFrame(rows)
+
 def load_state_labels(session_name, subject="BG_046", tag_dir=None):
     base = os.path.join(tag_dir or _DEFAULT_TAG_DIR, subject)
     candidates = [str(session_name)]
