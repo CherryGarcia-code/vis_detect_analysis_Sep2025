@@ -731,3 +731,191 @@ def test_hazard_nll_returns_python_float():
     design, theta, ps = _ragged_two_trial_design()
     val = dlg.hazard_nll(theta, design, ps)
     assert isinstance(val, float)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 3.1: simulate_licks + design_with_outcomes  (contract §A.8)
+# ════════════════════════════════════════════════════════════════════════════
+# Ground-truth, SURVIVAL-AWARE test (primary recovery-infrastructure test).
+#
+# The generative draw must reproduce the discrete-time survival law exactly:
+# for a per-bin hazard h_k, the probability the FIRST lick lands in bin k is
+#     P(lick at k) = h_k * Prod_{j<k}(1 - h_j),
+# and the probability of NO lick (censored at the last bin) is
+#     P(censor) = Prod_k (1 - h_k).
+# We build ONE single-bin-grid trial with a known A/phi/mood and a chosen
+# true_theta so the per-bin hazards are moderate (~0.11-0.22, a non-degenerate
+# lick/censor mix), repeat it N=5000x, and compare the empirical first-lick-bin
+# histogram (plus the censor bucket) to the THEORETICAL survival pmf with a
+# chi-square goodness-of-fit test. This is NOT tautological: the expected
+# frequencies come from the closed-form survival law, computed independently of
+# how simulate_licks walks the bins.
+
+
+def _single_trial_design(A, phi, mood_code, n_rep):
+    """A Design of `n_rep` IDENTICAL single trials (same A/phi/mood).
+
+    event_bin = len(A)-1 and lick/censored are placeholders (overwritten by the
+    simulator). Repeating the same trial lets us treat the draws as i.i.d.
+    samples from one trial's survival law.
+    """
+    n_bins = len(A)
+    return dlg.Design(
+        A=[np.asarray(A, float)] * n_rep,
+        phi=[np.asarray(phi, float)] * n_rep,
+        event_bin=np.full(n_rep, n_bins - 1, int),
+        lick=np.zeros(n_rep, int),
+        censored=np.zeros(n_rep, bool),
+        mood_code=np.full(n_rep, mood_code, int),
+        trial_idx=np.arange(n_rep, dtype=int),
+        dt=0.05,
+    )
+
+
+def test_simulate_licks_matches_theoretical_survival_law():
+    """N=5000 identical trials: empirical first-lick-bin distribution (+ censor)
+    matches the theoretical h_k*Prod_{j<k}(1-h_j) survival pmf (chi-square p>0.05),
+    and the empirical censor rate matches Prod_k(1-h_k)."""
+    from scipy import stats
+
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    # theta = [v_Imp, v_Stim, z_Imp, z_Stim, u_Imp, u_Stim]; mood 0 = Impulsive
+    # chosen so the per-bin hazards land ~0.11-0.22 (moderate) with ~32% censor.
+    theta = np.array([0.5, 0.5, -2.2, -2.2, 0.3, 0.3])
+    A = np.array([0.1, 0.3, 0.5, 0.7, 0.9, 1.1])
+    phi = np.array([0.2, 0.4, 0.6, 0.8, 1.0, 0.9])
+    n_bins = len(A)
+    N = 5000
+
+    # ── THEORETICAL survival pmf (computed independently of the simulator) ──
+    lp = -2.2 + 0.5 * A + 0.3 * phi          # mood-0 dials: v=0.5, z=-2.2, u=0.3
+    h = np.clip(dlg.hazard_from_lp(lp), 1e-12, 1 - 1e-12)
+    surv = np.concatenate([[1.0], np.cumprod(1.0 - h)[:-1]])  # Prod_{j<k}(1-h_j)
+    pmf_lick = h * surv                      # P(first lick in bin k)
+    p_censor = float(np.prod(1.0 - h))       # P(no lick at all)
+    expected_probs = np.concatenate([pmf_lick, [p_censor]])
+    assert abs(expected_probs.sum() - 1.0) < 1e-12        # proper distribution
+
+    # ── EMPIRICAL outcome of the generative draw ──
+    design = _single_trial_design(A, phi, mood_code=0, n_rep=N)
+    event_bin, lick, censored = dlg.simulate_licks(design, theta, ps, seed=12345)
+
+    # bin counts: index 0..n_bins-1 = first lick in that bin; index n_bins = censor
+    observed = np.zeros(n_bins + 1, float)
+    for eb, lk, cs in zip(event_bin, lick, censored):
+        if cs:
+            observed[n_bins] += 1
+        else:
+            assert lk == 1                   # a non-censored trial must have licked
+            observed[int(eb)] += 1
+    assert observed.sum() == N
+
+    # ── chi-square goodness-of-fit: empirical vs theoretical survival pmf ──
+    expected_counts = expected_probs * N
+    assert np.all(expected_counts > 5)       # chi-square validity (min ~464 here)
+    chi2, p_value = stats.chisquare(f_obs=observed, f_exp=expected_counts)
+    assert p_value > 0.05, (
+        f"empirical first-lick distribution departs from the survival law: "
+        f"chi2={chi2:.3f}, p={p_value:.4f}"
+    )
+
+    # ── censor rate matches Prod_k(1-h_k) within Monte-Carlo error ──
+    emp_censor = observed[n_bins] / N
+    se = np.sqrt(p_censor * (1.0 - p_censor) / N)
+    assert abs(emp_censor - p_censor) < 4.0 * se, (
+        f"censor rate {emp_censor:.4f} != theoretical {p_censor:.4f} (4 SE band)"
+    )
+
+
+def test_simulate_licks_asserts_theta_length():
+    """simulate_licks asserts len(true_theta) == param_spec.n_params()."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    design = _single_trial_design(np.array([0.1, 0.3, 0.5]),
+                                  np.array([0.2, 0.4, 0.6]), mood_code=0, n_rep=4)
+    with pytest.raises(AssertionError):
+        dlg.simulate_licks(design, np.zeros(ps.n_params() - 1), ps, seed=0)
+
+
+def test_simulate_licks_is_seed_reproducible():
+    """Same seed -> identical (event_bin, lick, censored); a different seed differs."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    theta = np.array([0.5, 0.5, -2.2, -2.2, 0.3, 0.3])
+    A = np.array([0.1, 0.3, 0.5, 0.7, 0.9, 1.1])
+    phi = np.array([0.2, 0.4, 0.6, 0.8, 1.0, 0.9])
+    design = _single_trial_design(A, phi, mood_code=0, n_rep=200)
+
+    eb1, lk1, cs1 = dlg.simulate_licks(design, theta, ps, seed=7)
+    eb2, lk2, cs2 = dlg.simulate_licks(design, theta, ps, seed=7)
+    assert np.array_equal(eb1, eb2) and np.array_equal(lk1, lk2) and np.array_equal(cs1, cs2)
+
+    eb3, _, _ = dlg.simulate_licks(design, theta, ps, seed=8)
+    assert not np.array_equal(eb1, eb3)          # different seed -> different draws
+
+
+def test_simulate_licks_outcome_invariants():
+    """Every trial is either a lick (lick==1, censored False, event_bin in range)
+    or a censor (lick==0, censored True, event_bin == n_bins-1)."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    theta = np.array([0.5, 0.5, -2.2, -2.2, 0.3, 0.3])
+    A = np.array([0.1, 0.3, 0.5, 0.7, 0.9, 1.1])
+    phi = np.array([0.2, 0.4, 0.6, 0.8, 1.0, 0.9])
+    n_bins = len(A)
+    design = _single_trial_design(A, phi, mood_code=0, n_rep=500)
+    event_bin, lick, censored = dlg.simulate_licks(design, theta, ps, seed=3)
+
+    assert event_bin.dtype.kind in "iu" and lick.dtype.kind in "iu"
+    assert censored.dtype == bool
+    # licks: censored False, event_bin within [0, n_bins-1]
+    lick_mask = lick == 1
+    assert np.all(~censored[lick_mask])
+    assert np.all((event_bin[lick_mask] >= 0) & (event_bin[lick_mask] <= n_bins - 1))
+    # censors: lick 0, event_bin pinned to the last bin
+    assert np.all(censored[~lick_mask])
+    assert np.all(event_bin[~lick_mask] == n_bins - 1)
+
+
+def test_design_with_outcomes_swaps_outcomes_keeps_A_phi():
+    """design_with_outcomes returns a Design with the simulated outcomes but the
+    SAME A/phi/mood/dt (so the simulated Design can be refit)."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    theta = np.array([0.5, 0.5, -2.2, -2.2, 0.3, 0.3])
+    A = np.array([0.1, 0.3, 0.5, 0.7, 0.9, 1.1])
+    phi = np.array([0.2, 0.4, 0.6, 0.8, 1.0, 0.9])
+    design = _single_trial_design(A, phi, mood_code=0, n_rep=50)
+    event_bin, lick, censored = dlg.simulate_licks(design, theta, ps, seed=1)
+
+    sim = dlg.design_with_outcomes(design, event_bin, lick, censored)
+    # outcomes swapped in
+    assert np.array_equal(sim.event_bin, event_bin)
+    assert np.array_equal(sim.lick, lick)
+    assert np.array_equal(sim.censored, censored)
+    # A/phi/mood/dt unchanged (same objects from the source design)
+    assert sim.A is design.A and sim.phi is design.phi
+    assert np.array_equal(sim.mood_code, design.mood_code)
+    assert sim.dt == design.dt
+    # the simulated Design must be a valid input to the likelihood
+    assert np.isfinite(dlg.hazard_nll(theta, sim, ps))
+
+
+def test_design_with_outcomes_does_not_mutate_source():
+    """design_with_outcomes returns a copy; the source design's outcomes are
+    untouched."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    theta = np.array([0.5, 0.5, -2.2, -2.2, 0.3, 0.3])
+    A = np.array([0.1, 0.3, 0.5, 0.7, 0.9, 1.1])
+    phi = np.array([0.2, 0.4, 0.6, 0.8, 1.0, 0.9])
+    design = _single_trial_design(A, phi, mood_code=0, n_rep=50)
+    orig_lick = design.lick.copy()
+    orig_censored = design.censored.copy()
+
+    event_bin, lick, censored = dlg.simulate_licks(design, theta, ps, seed=2)
+    _ = dlg.design_with_outcomes(design, event_bin, lick, censored)
+
+    assert np.array_equal(design.lick, orig_lick)
+    assert np.array_equal(design.censored, orig_censored)

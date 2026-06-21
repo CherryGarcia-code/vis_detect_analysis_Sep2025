@@ -328,3 +328,38 @@ def hazard_nll(theta, design, param_spec, l2=0.0, seed_theta=None):
     if l2 > 0 and seed_theta is not None:
         nll += float(l2) * np.sum((np.asarray(theta) - np.asarray(seed_theta)) ** 2)
     return float(nll)
+
+
+# ── Engine-A simulator (Task 3.1) — draw through the per-bin hazard (§A.8) ────
+def simulate_licks(design, true_theta, param_spec, seed=0):
+    """Generate (event_bin, lick, censored) by walking each trial's per-bin hazard.
+    Uses the SAME A/phi/mood as `design` (so a refit Design reuses them)."""
+    assert len(true_theta) == param_spec.n_params()
+    rng = np.random.default_rng(seed)
+    v, z, u = param_spec.per_trial(true_theta, design.mood_code)
+    n = len(design)
+    event_bin = np.empty(n, int); lick = np.zeros(n, int); censored = np.zeros(n, bool)
+    for i in range(n):
+        A, phi = design.A[i], design.phi[i]
+        h = np.clip(hazard_from_lp(z[i] + v[i] * A + u[i] * phi), 1e-12, 1 - 1e-12)
+        fired = -1
+        draws = rng.random(len(h))
+        for k in range(len(h)):
+            if draws[k] < h[k]:
+                fired = k; break
+        if fired >= 0:
+            event_bin[i] = fired; lick[i] = 1
+        else:
+            event_bin[i] = len(h) - 1; censored[i] = True
+    return event_bin, lick, censored
+
+
+def design_with_outcomes(design, event_bin, lick, censored):
+    """Return a copy of `design` with simulated outcomes (A/phi/mood unchanged), so it
+    can be refit. NOTE: trials are truncated at event_bin for the likelihood via
+    event_bin only; A/phi keep full length (hazard_nll reads only [:K+1])."""
+    import copy
+    d = copy.copy(design)
+    d.event_bin = np.asarray(event_bin, int); d.lick = np.asarray(lick, int)
+    d.censored = np.asarray(censored, bool)
+    return d
