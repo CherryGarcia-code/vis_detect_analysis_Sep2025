@@ -197,6 +197,74 @@ def test_timing_scores_peak_and_offset():
     assert "peak_offset" in sc and "lick_hazard_spread" in sc
 
 
+def test_change_time_anchor_recovers_median_not_late_hazard_peak():
+    """fix(d): the empirical change-time anchor must be the MEDIAN of the planned
+    change times over trials where the change was actually reached — NOT the
+    change-onset hazard peak, which is biased LATE by at-risk depletion.
+
+    Ground-truth construction: change times are drawn around 7 s (so the true
+    central tendency is ~7 s), but the change-onset hazard, being events / (#still
+    at risk), keeps rising into the right tail as the at-risk denominator shrinks —
+    so its argmax lands well AFTER 7 s. The anchor (a plain median over reached
+    changes) is robust to this and recovers ~7 s, and must be strictly EARLIER than
+    the hazard peak.
+
+    Also asserts ``timing_scores`` gains a ``change_time_anchor_median`` key while
+    KEEPING the existing ``change_hazard_peak_time`` / ``peak_offset`` keys (the
+    late-biased peak is retained for comparison)."""
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    rng = np.random.default_rng(0)
+    rows = []
+    # Reached changes drawn around 7 s (broad, slightly right-skewed) so the
+    # at-risk set depletes across the spread and the hazard argmax biases late.
+    for _ in range(400):
+        ct = 7.0 + rng.normal(0.0, 1.2) + rng.exponential(0.6) - 0.6
+        ct = max(ct, 1.0)
+        rows.append({"change_reached": True, "change_time_planned": ct,
+                     "lick": 1, "outcome": "hit", "decision_time": ct + 0.3})
+    df = pd.DataFrame(rows)
+
+    anchor = dl.change_time_anchor(df)
+    assert np.isfinite(anchor)
+    assert abs(anchor - 7.0) < 0.6                 # median recovers the ~7 s draw centre
+
+    # The change-onset hazard peaks LATE (at-risk depletion) → strictly after the anchor.
+    cc, ch, _ = dl.change_onset_hazard(df, dt=0.05)
+    peak = cc[int(np.argmax(ch))]
+    assert anchor < peak                           # anchor is earlier than the hazard peak
+
+    # timing_scores exposes the anchor AND keeps the existing peak keys.
+    sc = dl.timing_scores(df, dt=0.05)
+    assert "change_time_anchor_median" in sc
+    assert "change_hazard_peak_time" in sc and "peak_offset" in sc
+    assert np.isclose(sc["change_time_anchor_median"], anchor)
+    assert sc["change_time_anchor_median"] < sc["change_hazard_peak_time"]
+
+
+def test_change_time_anchor_uses_only_reached_changes_and_nan_when_none():
+    """The anchor is the median of ``change_time_planned`` over ``change_reached``
+    trials only — planned-but-never-reached (FA-censored) changes are excluded —
+    and is NaN when no change was ever reached."""
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    rows = [
+        {"change_reached": True, "change_time_planned": 6.0, "outcome": "hit"},
+        {"change_reached": True, "change_time_planned": 8.0, "outcome": "miss"},
+        # a planned-but-unreached change at 20 s must NOT drag the median up
+        {"change_reached": False, "change_time_planned": 20.0, "outcome": "fa"},
+    ]
+    anchor = dl.change_time_anchor(pd.DataFrame(rows))
+    assert np.isclose(anchor, 7.0)                 # median(6, 8), ignoring the unreached 20 s
+
+    # no reached change → NaN
+    none_reached = pd.DataFrame([
+        {"change_reached": False, "change_time_planned": 5.0, "outcome": "fa"},
+        {"change_reached": False, "change_time_planned": 9.0, "outcome": "abort"},
+    ])
+    assert np.isnan(dl.change_time_anchor(none_reached))
+
+
 def test_fa_lick_hazard_nonzero_in_fa_bins_and_reuses_censored_hazard():
     import numpy as np, pandas as pd
     from visdetect.analysis import decision_latents as dl

@@ -428,6 +428,29 @@ def fa_lick_hazard(trial_df, dt=0.05):
     return censored_hazard(censor_t, is_fa, dt=dt)
 
 
+def change_time_anchor(trial_df):
+    """Empirical per-(session/cell) change-time anchor μ (fix d, Phase 2).
+
+    Returns the MEDIAN of ``change_time_planned`` over trials where the change was
+    actually reached (``change_reached == True``); ``nan`` if no change was ever
+    reached. This is the robust central tendency of WHEN the change occurs.
+
+    It deliberately does NOT use the change-onset hazard peak: the hazard
+    (events / #still-at-risk) is biased LATE by at-risk depletion — as time passes
+    the at-risk denominator shrinks, so the hazard keeps rising into the right tail
+    and its argmax lands after the true change-time centre. Only reached changes
+    count: a change planned at 20 s but pre-empted by an FA-lick (``change_reached
+    == False``) never occurred, so it must not drag the anchor up.
+
+    This μ seeds the Phase-2 urgency bump (``expectation_bump`` mu; contract A.3)
+    and the ``expected_change_time`` latent.
+    """
+    reached = trial_df["change_reached"].values.astype(bool)
+    ct = trial_df["change_time_planned"].values.astype(float)
+    vals = ct[reached & np.isfinite(ct)]
+    return float(np.median(vals)) if vals.size else float("nan")
+
+
 def _peak_and_spread(centers, hazard):
     """Peak time (argmax of the hazard) and the std of the hazard-weighted time
     distribution. Returns ``(nan, nan)`` when the hazard is all-zero so an empty
@@ -446,7 +469,13 @@ def timing_scores(trial_df, dt=0.05):
 
     Returns a dict:
 
-    * ``change_hazard_peak_time`` — when the change-onset hazard peaks.
+    * ``change_time_anchor_median`` — the empirical change-time anchor μ
+      (``change_time_anchor``: median planned change time over reached changes).
+      This is the robust seed for the Phase-2 urgency bump and the
+      ``expected_change_time`` latent (fix d). The hazard ``*_peak_time`` keys are
+      KEPT alongside it for the late-bias comparison (the change-onset hazard peak
+      is biased LATE by at-risk depletion, so anchor < peak typically holds).
+    * ``change_hazard_peak_time`` — when the change-onset hazard peaks (late-biased).
     * ``lick_hazard_peak_time`` — when the lick hazard peaks.
     * ``lick_hazard_spread`` — std of the hazard-weighted lick-time distribution
       (how temporally dispersed the licking is).
@@ -457,7 +486,8 @@ def timing_scores(trial_df, dt=0.05):
     lc, lh, _ = lick_hazard(trial_df, dt=dt)
     ch_peak, _ = _peak_and_spread(cc, ch)
     l_peak, l_spread = _peak_and_spread(lc, lh)
-    return {"change_hazard_peak_time": ch_peak, "lick_hazard_peak_time": l_peak,
+    return {"change_time_anchor_median": change_time_anchor(trial_df),
+            "change_hazard_peak_time": ch_peak, "lick_hazard_peak_time": l_peak,
             "lick_hazard_spread": l_spread,
             "peak_offset": (l_peak - ch_peak) if np.isfinite(l_peak) and np.isfinite(ch_peak) else float("nan")}
 
