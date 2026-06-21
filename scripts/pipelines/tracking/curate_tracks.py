@@ -89,6 +89,11 @@ def main() -> int:
                          "UnitMatch-anchor estimator (starves on low-anchor sessions).")
     ap.add_argument("--drift-csv", type=Path, default=None,
                     help="intersession_drift.csv for --drift-source fingerprint")
+    ap.add_argument("--drop-sessions", nargs="*", default=None,
+                    help="Session tokens to EXCLUDE from the registry before curation "
+                         "(e.g. a duplicate re-sort like BG_039_23042025_v2). Restart "
+                         "chunks of the same day with DIFFERENT content should NOT be "
+                         "dropped — they are genuine separate sessions.")
     ap.add_argument("--rebuild-cache", action="store_true")
     args = ap.parse_args()
     subj = args.subject
@@ -105,6 +110,12 @@ def main() -> int:
     # ── Registry re-keyed on the chosen uid column ───────────────────────
     reg = pd.read_csv(args.registry)
     reg["session"] = reg["session"].astype(str)
+    if args.drop_sessions:
+        drop = set(args.drop_sessions)
+        n0 = len(reg)
+        reg = reg[~reg["session"].isin(drop)].copy()
+        print(f"dropped sessions {sorted(drop)}: {n0 - len(reg)} registry rows removed",
+              flush=True)
     reg["uid"] = reg[args.liberal_col].astype(int)
     span = reg.groupby("uid")["session"].nunique()
     keep_uids = set(span[span >= args.min_span].index.tolist())
