@@ -126,3 +126,19 @@ def select_expert_anchors(inventory_df: pd.DataFrame, min_d: float = 0.7,
 
     # ── fallback: cannot reach min_anchors even by pooling ──────────────────
     return {"anchors": qual_ids, "mode": "fallback"}
+
+
+# ── Engine-A math (Task 1.1) — leaky accumulator (contract §A.3) ─────────────
+def leaky_accumulate(evidence, dt=0.05, leak_tau=0.27, rectification="signed",
+                     g_up=1.0, g_down=1.0):
+    """A[k] = decay*A[k-1] + R(e[k])*dt, decay = exp(-dt/leak_tau)."""
+    from visdetect.analysis.ddm import rectify
+    kind = {"signed": "symmetric"}.get(rectification, rectification)   # ddm uses 'symmetric'
+    r = rectify(np.asarray(evidence, float), kind, g_up=g_up, g_down=g_down)
+    decay = np.exp(-dt / float(leak_tau))
+    A = np.empty(len(r), float)
+    acc = 0.0
+    for k in range(len(r)):
+        acc = decay * acc + r[k] * dt
+        A[k] = acc
+    return A

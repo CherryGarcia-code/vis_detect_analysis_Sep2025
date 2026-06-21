@@ -167,3 +167,101 @@ def real_inventory_csv():
     if not os.path.exists(p):
         pytest.skip(f"real inventory CSV not found at {p}")
     return p
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 1.1: leaky accumulator + rectification  (contract §A.3)
+# ════════════════════════════════════════════════════════════════════════════
+# Ground-truth tests (not structural): the accumulator must reach the analytic
+# steady state on constant evidence, rectification must gate negative evidence as
+# specified, and the exponential decay must always live in (0,1).
+#
+# Discrete-vs-continuous note: the recurrence A[k] = decay*A[k-1] + R*dt has the
+# exact fixed point  A* = R*dt/(1-decay)  with  decay = exp(-dt/tau).  This is the
+# genuine steady state of the *discrete* integrator and equals the continuous
+# R*tau only in the limit dt << tau (here  A* = R*tau * (dt/tau)/(1-e^{-dt/tau}),
+# a factor that is 1.0 as dt->0 but ~1.18 at dt/tau=1/3).  The brief's "approaches
+# R*tau within 5% after 5 tau" is the continuous-limit intuition; the precise,
+# implementation-faithful ground truth these tests assert is the discrete A*.
+
+
+def _discrete_fixed_point(R, dt, tau):
+    """Exact steady state of A[k] = exp(-dt/tau)*A[k-1] + R*dt."""
+    decay = np.exp(-dt / tau)
+    return R * dt / (1.0 - decay)
+
+
+def test_leaky_accumulate_steady_state_and_rectification():
+    """Brief's canonical test: approaches steady state on constant +evidence and
+    rectification gates negative evidence (halfwave zeros it, signed goes neg).
+
+    Asserts the exact discrete fixed point A* = R*dt/(1-decay) (the true steady
+    state of the recurrence) AND that A* is close to the continuous R*tau."""
+    R, dt, tau = 1.0, 0.05, 0.27
+    e = np.ones(int(5 * tau / dt))                          # ~5 tau of constant evidence
+    A = dlg.leaky_accumulate(e, dt=dt, leak_tau=tau, rectification="signed")
+    A_star = _discrete_fixed_point(R, dt, tau)
+    assert abs(A[-1] - A_star) < 0.01 * A_star             # within 1% of discrete steady state
+    assert abs(A_star - R * tau) < 0.2 * R * tau           # discrete A* ~ continuous R*tau
+
+    neg = -np.ones(20)
+    assert np.all(dlg.leaky_accumulate(neg, rectification="halfwave") == 0.0)
+    assert dlg.leaky_accumulate(neg, rectification="signed")[-1] < 0
+
+
+def test_steady_state_matches_discrete_fixed_point_for_several_taus():
+    """For constant positive evidence, A[-1] -> the discrete fixed point within 1%
+    after ~5 tau, for every swept leak constant (ground-truth, not just one tau)."""
+    dt, R = 0.05, 2.0
+    for tau in (0.15, 0.27, 0.40):
+        n = int(round(5 * tau / dt))
+        e = np.full(n, R)                                   # constant positive evidence
+        A = dlg.leaky_accumulate(e, dt=dt, leak_tau=tau, rectification="signed")
+        A_star = _discrete_fixed_point(R, dt, tau)
+        assert abs(A[-1] - A_star) < 0.01 * A_star
+
+
+def test_halfwave_zeros_negative_signed_drives_negative():
+    """Halfwave rectification ignores a purely-negative trace (A stays 0);
+    signed/symmetric rectification lets it accumulate negative."""
+    neg = -np.ones(20)
+    A_half = dlg.leaky_accumulate(neg, rectification="halfwave")
+    assert np.all(A_half == 0.0)
+    A_signed = dlg.leaky_accumulate(neg, rectification="signed")
+    assert A_signed[-1] < 0
+    assert np.all(A_signed <= 0.0)                          # monotone-negative under leak
+
+
+def test_decay_in_open_unit_interval():
+    """decay = exp(-dt/leak_tau) is strictly in (0,1) for every swept tau.
+    Probe it behaviourally: with constant unit evidence, A[1]/A[0] - and the
+    increment ratios - equal `decay`, so a value in (0,1) means each new bin
+    keeps a fraction of the old accumulator (no blow-up, no full reset)."""
+    dt = 0.05
+    for tau in (0.15, 0.27, 0.40):
+        decay = np.exp(-dt / tau)
+        assert 0.0 < decay < 1.0
+        # A[0] = R*dt ; A[1] = decay*A[0] + R*dt  -> (A[1]-R*dt)/A[0] == decay
+        e = np.ones(3)
+        A = dlg.leaky_accumulate(e, dt=dt, leak_tau=tau, rectification="signed")
+        r_dt = 1.0 * dt
+        recovered_decay = (A[1] - r_dt) / A[0]
+        assert abs(recovered_decay - decay) < 1e-9
+
+
+def test_signed_maps_to_ddm_symmetric_passthrough():
+    """rectification='signed' is the contract's alias for ddm's 'symmetric'
+    (identity R), so the first bin equals e[0]*dt exactly."""
+    dt = 0.05
+    e = np.array([1.7, -0.3, 0.5])
+    A = dlg.leaky_accumulate(e, dt=dt, leak_tau=0.27, rectification="signed")
+    assert abs(A[0] - 1.7 * dt) < 1e-12
+
+
+def test_output_shape_and_dtype():
+    """Output is a float ndarray with one value per evidence bin."""
+    e = np.linspace(-1.0, 1.0, 17)
+    A = dlg.leaky_accumulate(e)
+    assert isinstance(A, np.ndarray)
+    assert A.shape == (17,)
+    assert np.issubdtype(A.dtype, np.floating)
