@@ -124,6 +124,63 @@ def test_itchiness_scores_more_fa_higher_criterion_shift():
     assert "criterion_c" in hi and "baseline_hazard" in hi
 
 
+def test_itchiness_baseline_hazard_restricted_to_pre_change_window():
+    """fix(c): ``baseline_hazard`` must be computed over the PRE-CHANGE window
+    only — non-FA trials censored at ``change_time_planned`` (mirroring
+    ``fa_lick_hazard``) — so it is comparable across cells with different max
+    decision times and is INSENSITIVE to post-change lick density.
+
+    Construction: two cells identical except the post-change lick density of
+    their non-FA (hit) trials. Both share the same FA trials (early licks at
+    4.5 s) and the same change time (7.0 s). Cell A's hits resolve at 7.3 s,
+    Cell B's hits resolve much later at 12.0 s — purely post-change differences.
+
+      * NEW (pre-change window): non-FA trials censor at the change (7.0 s), so
+        no post-change bin ever contributes ⇒ ``baseline_hazard`` is EQUAL for A
+        and B and lower than the full-timeline value.
+      * OLD (full timeline): non-FA trials stay at risk to their decision_time,
+        so B's later, sparser timeline dilutes the mean differently ⇒ A != B,
+        and both differ from the new pre-change value.
+    """
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+
+    def make(hit_decision_time):
+        rows = []
+        for _ in range(4):
+            rows.append({"change_size": 2.0, "outcome": "fa", "lick": 1,
+                         "decision_time": 4.5, "change_time_planned": 7.0})
+        for _ in range(6):
+            rows.append({"change_size": 2.0, "outcome": "hit", "lick": 1,
+                         "decision_time": hit_decision_time, "change_time_planned": 7.0})
+        return pd.DataFrame(rows)
+
+    cell_a = make(7.3)   # hits resolve just after the change
+    cell_b = make(12.0)  # hits resolve much later (sparser post-change tail)
+    ba = dl.itchiness_scores(cell_a)["baseline_hazard"]
+    bb = dl.itchiness_scores(cell_b)["baseline_hazard"]
+
+    # NEW behaviour: insensitive to post-change lick density ⇒ A == B.
+    assert np.isclose(ba, bb)
+
+    # And it genuinely differs from the OLD full-timeline value (which censored
+    # non-FA trials at decision_time, letting the post-change tail leak in).
+    df = cell_a
+    is_fa = (df["outcome"] == "fa").values
+    _, old_h, _ = dl.censored_hazard(
+        df["decision_time"].values.astype(float), is_fa, dt=0.05)
+    old_baseline = float(np.nanmean(old_h))
+    assert not np.isclose(ba, old_baseline)
+
+    # Equivalence with the pre-change-censored hazard (the fa_lick_hazard pattern):
+    dtime = df["decision_time"].values.astype(float)
+    ctime = df["change_time_planned"].values.astype(float)
+    change_censor = np.where(np.isnan(ctime), dtime, np.minimum(ctime, dtime))
+    censor_t = np.where(is_fa, dtime, change_censor)
+    _, new_h, _ = dl.censored_hazard(censor_t, is_fa, dt=0.05)
+    assert np.isclose(ba, float(np.nanmean(new_h)))
+
+
 def test_timing_scores_peak_and_offset():
     import numpy as np, pandas as pd
     from visdetect.analysis import decision_latents as dl

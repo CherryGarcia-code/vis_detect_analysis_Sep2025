@@ -342,11 +342,15 @@ def itchiness_scores(trial_df, dt=0.05):
       gives a finite z.
     * ``fa_rate`` — fraction of trials whose ``outcome == "fa"`` (anticipatory
       lick; NOT the SDT false-alarm rate).
-    * ``baseline_hazard`` — mean lick hazard over the full decision timeline
-      (note: diluted by post-change bins; a pre-change-windowed version is a
-      Phase-2 refinement), computed from ``censored_hazard`` with FA-latency
-      events (``outcome == "fa"``) and ``decision_time`` durations (everything
-      else right-censored).
+    * ``baseline_hazard`` — mean FA (anticipatory-lick) hazard over the
+      PRE-CHANGE window only. An anticipatory lick can only occur before the
+      change, so non-FA trials are right-censored at ``change_time_planned``
+      (mirroring ``fa_lick_hazard``) — NaN change-times fall back to
+      ``decision_time``. This makes the baseline comparable across cells with
+      different max decision times: previously the hazard was averaged over the
+      full decision timeline, so post-change bins diluted it unevenly between
+      cells (fix c, Phase 2). Computed from ``censored_hazard`` with FA-latency
+      events (``outcome == "fa"``).
     """
     go = trial_df[trial_df["change_size"] > 1.0]
     catch = trial_df[np.isclose(trial_df["change_size"], 1.0)]
@@ -354,10 +358,16 @@ def itchiness_scores(trial_df, dt=0.05):
     FA = _loglinear(catch["lick"].mean() if len(catch) else 0.0, max(len(catch), 1))
     crit = -(norm.ppf(H) + norm.ppf(FA)) / 2.0
     fa_rate = float((trial_df["outcome"] == "fa").mean())
-    # baseline lick hazard: FA-latency events vs everything else censored at decision_time
+    # baseline lick hazard over the PRE-CHANGE window: FA-latency events, with
+    # non-FA trials censored at the change (min(change_time_planned, decision_time);
+    # NaN change_time falls back to decision_time) — the same censoring as
+    # fa_lick_hazard, so post-change bins never contaminate the baseline.
     is_fa = (trial_df["outcome"] == "fa").values
-    dur = trial_df["decision_time"].values.copy()
-    _, hz, _ = censored_hazard(dur, is_fa, dt=dt)
+    dtime = trial_df["decision_time"].values.astype(float)
+    ctime = trial_df["change_time_planned"].values.astype(float)
+    change_censor = np.where(np.isnan(ctime), dtime, np.minimum(ctime, dtime))
+    censor_t = np.where(is_fa, dtime, change_censor)
+    _, hz, _ = censored_hazard(censor_t, is_fa, dt=dt)
     return {"criterion_c": float(crit), "fa_rate": fa_rate,
             "baseline_hazard": float(np.nanmean(hz)) if hz.size else float("nan")}
 
