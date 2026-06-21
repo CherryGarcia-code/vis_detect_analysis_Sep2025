@@ -226,6 +226,14 @@ def _logistic(x, a, b):
     return 1.0 / (1.0 + np.exp(-(a + b * x)))
 
 
+def _logistic_lapse(x, a, b, lapse):
+    """Lapse-aware psychometric: a symmetric lapse rate floors AND ceilings the
+    logistic. ``P = lapse + (1 - 2*lapse) * logistic(a + b*x)`` so the lower
+    asymptote is ``lapse`` and the upper is ``1 - lapse`` (the mouse licks/withholds
+    by mistake at rate ``lapse`` regardless of evidence). ``x = log2(change_size)``."""
+    return lapse + (1.0 - 2.0 * lapse) / (1.0 + np.exp(-(a + b * x)))
+
+
 def sharpness_scores(trial_df):
     """Sharpness = how clearly the mouse tells the change happened.
 
@@ -239,6 +247,16 @@ def sharpness_scores(trial_df):
       ``psy_threshold = 2 ** x50``. NaN if the fit failed / ``psy_slope`` is NaN /
       ``abs(b) < 1e-3``; otherwise clamped to ``[1.0, 8.0]`` (change sizes span
       1.25–4.0, so this avoids wild extrapolation off a near-flat fit).
+    * ``psy_lapse`` / ``psy_threshold_lapse`` — a 3-param LAPSE-AWARE fit of the
+      SAME go-trial psychometric: ``P(lick|cs) = lapse + (1-2*lapse)*logistic(a +
+      b*log2(cs))`` (``_logistic_lapse``) with ``lapse ∈ [0, 0.3]``. This is the
+      psychometric the Phase-2 generative sharpness latent is validated against
+      (construct-validity F8), so both must measure the same thing. ``psy_lapse``
+      is the recovered lapse rate; ``psy_threshold_lapse = 2 ** (-a/b)`` clamped to
+      ``[1.0, 8.0]`` only when ``b > 0`` (the midpoint of the logistic core, where
+      P is the average of the two asymptotes). Both are NaN if the lapse fit fails
+      to converge or returns ``b <= 0``. Same go-trial support gate as the 2-param
+      fit (< 8 go trials or < 2 distinct change sizes → NaN).
     * ``dprime`` — ``calculate_dprime(hit_rate, fa_rate)`` with go-trial lick
       mean as the hit rate and catch-trial (``change_size ≈ 1.0``) lick mean as
       the FA rate. (``calculate_dprime`` log-linear-clips the rates.)
@@ -276,6 +294,24 @@ def sharpness_scores(trial_df):
         out["psy_threshold"] = float(np.clip(2.0 ** x50, 1.0, 8.0))
     else:
         out["psy_threshold"] = float("nan")
+    # 3-param LAPSE-AWARE fit on the SAME go-trial data (added alongside the
+    # 2-param keys for Phase-2 F8 construct validity). lapse bounded [0, 0.3];
+    # a/b kept wide. On convergence failure or non-increasing core (b<=0) → NaN.
+    out["psy_lapse"] = float("nan")
+    out["psy_threshold_lapse"] = float("nan")
+    if len(go) >= 8 and go["change_size"].nunique() >= 2:
+        xL = np.log2(go["change_size"].values); yL = go["lick"].values.astype(float)
+        try:
+            (aL, bL, lapseL), _ = curve_fit(
+                _logistic_lapse, xL, yL, p0=[0.0, 1.0, 0.05],
+                bounds=([-20.0, -20.0, 0.0], [20.0, 20.0, 0.3]), maxfev=10000)
+            if bL > 0:                       # threshold only defined for an increasing core
+                out["psy_lapse"] = float(lapseL)
+                x50L = -aL / bL
+                out["psy_threshold_lapse"] = float(np.clip(2.0 ** x50L, 1.0, 8.0))
+            # b<=0: a lapse rate off a flat/decreasing fit is not interpretable → leave NaN
+        except Exception:
+            pass                             # keep the NaN defaults set above
     hit_rate = float(go["lick"].mean()) if len(go) else float("nan")
     fa_rate = float(catch["lick"].mean()) if len(catch) else float("nan")
     out["dprime"] = float(calculate_dprime(hit_rate, fa_rate))
@@ -504,6 +540,10 @@ def descriptive_cell_table(all_trials_df, min_cell_trials=1, dt=0.05):
             s = sharpness_scores(cell)
             rec["psy_slope"] = s["psy_slope"]
             rec["psy_threshold"] = s["psy_threshold"]
+            # 3-param lapse-aware fit (Phase-2 F8 construct validity), carried
+            # alongside the 2-param keys on the same psychometric-support gate.
+            rec["psy_lapse"] = s["psy_lapse"]
+            rec["psy_threshold_lapse"] = s["psy_threshold_lapse"]
             for cs in CHANGE_SIZES:
                 rec[f"rt_mean_cs{cs}"] = s.get(f"rt_mean_cs{cs}", float("nan"))
                 rec[f"rt_cv_cs{cs}"] = s.get(f"rt_cv_cs{cs}", float("nan"))

@@ -245,6 +245,53 @@ def test_sharpness_threshold_nan_for_negative_slope():
     assert np.isnan(sc["psy_threshold"])  # ...so no threshold is reported
 
 
+def _make_lapse_go_rows(lapse, a, b, rng, n_per_cs=300):
+    """Generate GO-trial rows from a KNOWN lapse-aware psychometric.
+
+    P(lick | cs) = lapse + (1 - 2*lapse) * logistic(a + b*log2(cs)), sampled as
+    Bernoulli draws. With a steep ``b`` the asymptotes sit at ``lapse`` (lowest cs)
+    and ``1 - lapse`` (highest cs), so the lapse rate is identifiable from the
+    plateaus rather than from any single intercept. Only go trials (cs > 1.0)."""
+    rows = []
+    for cs in [1.25, 1.35, 1.5, 2.0, 4.0]:
+        x = np.log2(cs)
+        p = lapse + (1.0 - 2.0 * lapse) / (1.0 + np.exp(-(a + b * x)))
+        for _ in range(n_per_cs):
+            lick = int(rng.random() < p)
+            outcome = "hit" if lick else "miss"
+            ct = 7.0
+            rows.append({"change_size": cs, "lick": lick, "outcome": outcome,
+                         "change_time_planned": ct,
+                         "decision_time": ct + rng.uniform(0.2, 0.6) if lick else ct + 2.0})
+    return rows
+
+
+def test_sharpness_lapse_recovers_known_lapse_rate():
+    """Ground-truth: data generated with a KNOWN lapse=0.15 (steep slope) must be
+    recovered by the 3-param fit within +/-0.07, and lapse-free data must give
+    psy_lapse ~ 0. The 2-param keys stay present for back-compat."""
+    import pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    # steep, well-centred psychometric so the plateaus (lapse / 1-lapse) are sampled
+    a, b = -3.0, 6.0
+    rng = np.random.default_rng(20260621)
+    df_lapse = pd.DataFrame(_make_lapse_go_rows(0.15, a, b, rng, n_per_cs=400))
+    sc = dl.sharpness_scores(df_lapse)
+    # added keys present alongside the legacy 2-param ones
+    assert "psy_lapse" in sc and "psy_threshold_lapse" in sc
+    assert "psy_slope" in sc and "psy_threshold" in sc   # back-compat preserved
+    assert np.isfinite(sc["psy_lapse"])
+    assert abs(sc["psy_lapse"] - 0.15) <= 0.07           # recovers the planted lapse
+    assert 1.0 <= sc["psy_threshold_lapse"] <= 8.0       # threshold clamped, b>0
+
+    # lapse-FREE data → psy_lapse ~ 0 (well inside the +/-0.07 band of 0)
+    rng2 = np.random.default_rng(11)
+    df_nolapse = pd.DataFrame(_make_lapse_go_rows(0.0, a, b, rng2, n_per_cs=400))
+    sc0 = dl.sharpness_scores(df_nolapse)
+    assert np.isfinite(sc0["psy_lapse"])
+    assert sc0["psy_lapse"] <= 0.07                      # ~0, definitely below planted 0.15
+
+
 def test_cell_and_latent_tables(synth_session, synth_state_labels):
     from visdetect.analysis import decision_latents as dl
     tab = dl.build_trial_table(synth_session, synth_state_labels, "07072025")
@@ -254,7 +301,7 @@ def test_cell_and_latent_tables(synth_session, synth_state_labels):
     # QC columns always travel with every cell; psy_slope present (synth cells have
     # go-trials). The synth has NO catch trials and < 20-trial cells, so SDT/timing
     # scores legitimately DON'T fire — that's the per-metric gate working, not a bug.
-    assert {"psy_slope", "n_trials", "n_go",
+    assert {"psy_slope", "psy_lapse", "psy_threshold_lapse", "n_trials", "n_go",
             "usable_psychometric", "usable_sdt", "usable_rtcv", "usable_timing"}.issubset(cells.columns)
     assert not cells["usable_sdt"].any()   # no catch → SDT never usable on synth
     lat = dl.descriptive_latent_table(tab, cells)
