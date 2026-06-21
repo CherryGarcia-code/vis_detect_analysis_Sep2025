@@ -91,6 +91,19 @@ def test_uniform_inzone_provider_labels_all_valid(tmp_path):
     assert idx == [0, 1, 2, 3]
 
 
+def test_uniform_inzone_provider_handles_zero_trial_session(tmp_path):
+    # Subjects like BG_049 have pkls with units but NO behavioural trials; the
+    # provider must write an empty state table, not crash on the empty frame.
+    import numpy as np
+    sess = Session(trials=[],
+                   clusters=[Cluster(cluster_id=0, spike_times=np.array([0.1]))],
+                   subject="BG_049", session_name="BG_049_01092025",
+                   good_cluster_ids=[0], ni_events={})
+    out = sp.UniformInZoneStateProvider().write(sess, "BG_049_01092025", tmp_path)
+    assert out.exists()
+    assert sp.in_zone_trial_indices("BG_049_01092025", tmp_path) == []
+
+
 def test_canonical_from_hmm_label_maps_stimsens():
     # behavioral-state labeler vocabulary uses "StimSens" for the engaged state
     assert sp.canonical_from_hmm_label("StimSens") == "in_zone"

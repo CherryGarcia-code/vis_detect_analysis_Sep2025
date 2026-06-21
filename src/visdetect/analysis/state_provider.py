@@ -143,7 +143,12 @@ class UniformInZoneStateProvider:
     def write(self, session: Session, session_name: str, states_dir) -> Path:
         from visdetect.analysis.behavior import get_trial_dataframe
         df = get_trial_dataframe(session)
-        rows = [(int(i), IN_ZONE, 1.0) for i in df["trial_idx"].tolist()]
+        # Sessions with no behavioural trials (e.g. BG_049) yield an empty frame
+        # with no columns -> write an empty state table rather than crash.
+        if df.empty or "trial_idx" not in df.columns:
+            rows = []
+        else:
+            rows = [(int(i), IN_ZONE, 1.0) for i in df["trial_idx"].tolist()]
         return write_state_table(session_name, rows, states_dir)
 
 
