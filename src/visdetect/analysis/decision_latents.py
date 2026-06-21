@@ -507,6 +507,48 @@ QC_MIN_RT_PER_CS = 3      # >= 3 hit-RTs at a change-size for a stable per-cs RT
 QC_MIN_RTCV_CS = 2        # >= 2 such change-sizes for the aggregate rt_cv_by_cs
 QC_MIN_TIMING_TRIALS = 20  # hazards/peaks need a populated trial timeline
 
+# ── Generative-sufficiency gate (fix e, part 1) ────────────────────────────
+# The Phase-2 generative model (Engine A) fits a per-cell {hazard, urgency-bump,
+# sharpness} from the cell's behaviour. It can only IDENTIFY those dials when the
+# cell carries enough of each kind of signal. ``usable_generative`` ANDs four
+# distribution-justified floors so junk cells never enter the fit:
+#   * n_lick_events           — the lick (FA/Hit) EVENTS the hazard fits to.
+#   * n_censored              — right-censored (no-lick / Miss) trials; without
+#                               them the survival curve never bends and the hazard
+#                               SLOPE is unidentifiable (an all-lick cell is flat).
+#   * n_trials_spanning_anchor— trials whose decision_time reaches the change-time
+#                               anchor μ, so the urgency-bump region is OBSERVED.
+#   * n_evidence_excursions   — go-trials where the change actually happened; the
+#                               sharpness latent needs real evidence excursions.
+# THRESHOLDS SET FROM THE REAL CELL DISTRIBUTIONS (behavioral_qc_profile.py run,
+# 2026-06-21; n=115 session×mood cells). Each distribution is bimodal: a thin
+# DEGENERATE tail near 0 (mood-sliced cells that barely populate) separated by a
+# gap from a populated BULK whose median sits in the 20s–60s. Each floor is placed
+# in that gap, above the degenerate tail. Rationale + numbers next to each value.
+# Combined yield with these floors: 71/115 cells usable_generative (Impulsive
+# 24/37, StimSens 34/43, Disengaged 13/35) — the degenerate tail is excluded.
+#
+# n_lick_events: sorted low tail = [0,0,0,1,1,1,1,2,2,2,2,2,3,3,3,3,4,4,4,4,5,5,
+#   7,7,8, …, 20, …] (median 61, max 628). Clear GAP from 8 → 20 (p30=20). 15
+#   sits in the gap: drops the 33 cells <15 (events too few for the hazard rate
+#   to be anchored) while keeping the populated bulk.
+QC_GEN_MIN_LICK_EVENTS = 15
+# n_censored: sorted low tail = [0,1,1,1,1,1,2,2,3,3,3,3,3,4,4,4,4,5,5,5,6,6,6,6,
+#   6, …] (median 21, max 449). Several cells have ~0 censored (all-lick → flat
+#   survival, hazard SLOPE unidentifiable). 8 (drops 30 cells <8) guarantees the
+#   survival curve carries enough no-lick exits to actually bend.
+QC_GEN_MIN_CENSORED = 8
+# n_trials_spanning_anchor: sorted low tail = [1,1,1,1,2,3,3,4,4,4,4,6,6,7,8,9,9,
+#   11,11,12,13,13,13,14,15, …] (median 61, max 457). Gap around 9 → 11+. 12
+#   (drops 19 cells <12) keeps cells whose decision times meaningfully reach the
+#   change-time anchor μ, so the urgency-bump region is genuinely observed.
+QC_GEN_MIN_SPAN = 12
+# n_evidence_excursions: sorted low tail = [0,1,1,1,2,2,2,2,3,3,3,3,3,5,5,7,7,7,8,
+#   9,9,9,10,10,10, …] (median 49, max 358). Degenerate cluster ≤3 (13 cells)
+#   then a gap to 5,7,…. 10 (drops 22 cells <10) keeps cells with a real
+#   psychometric's worth of reached-change excursions for the sharpness dial.
+QC_GEN_MIN_EXCURSION = 10
+
 
 def compute_cell_qc(trial_df):
     """Per-(session × mood) cell QC metrics + per-metric usability flags.
@@ -522,6 +564,20 @@ def compute_cell_qc(trial_df):
     * ``usable_sdt`` — >= QC_MIN_GO go AND >= QC_MIN_CATCH catch trials (d′/criterion/fa).
     * ``usable_rtcv`` — >= QC_MIN_RTCV_CS change-sizes each with >= QC_MIN_RT_PER_CS hit-RTs.
     * ``usable_timing`` — >= QC_MIN_TIMING_TRIALS trials (hazard/peak support).
+
+    GENERATIVE-SUFFICIENCY (fix e, part 1): also returns four counts and the
+    boolean ``usable_generative`` that gate cells the Phase-2 generative model
+    can identify its dials on (see the ``QC_GEN_*`` constants for the rationale):
+
+    * ``n_lick_events`` — observed licks (``lick == 1``); the hazard's events.
+    * ``n_censored`` — right-censored (no-lick / Miss) trials; needed to identify
+      the hazard SLOPE (an all-lick cell has a flat survival curve).
+    * ``n_trials_spanning_anchor`` — trials whose ``decision_time >= μ``, where
+      ``μ = change_time_anchor(trial_df)``; the urgency-bump region is observed.
+      0 when μ is NaN (no change ever reached).
+    * ``n_evidence_excursions`` — go-trials with a real change excursion
+      (``change_size > 1.0`` AND ``change_reached``); sharpness support.
+    * ``usable_generative`` — all four counts at/above their ``QC_GEN_*`` floors.
     """
     go = trial_df[trial_df["change_size"] > 1.0]
     catch = trial_df[np.isclose(trial_df["change_size"], 1.0)]
@@ -535,6 +591,20 @@ def compute_cell_qc(trial_df):
                       >= QC_MIN_RT_PER_CS for cs in CHANGE_SIZES)
     else:
         n_cs_rt = 0
+    # ── generative-sufficiency counts (fix e, part 1) ──────────────────────
+    n_lick_events = int((trial_df["lick"] == 1).sum())
+    n_censored = int(trial_df["censored"].astype(bool).sum())
+    mu = change_time_anchor(trial_df)        # Task 0.4 change-time anchor μ
+    if np.isfinite(mu):
+        n_span = int((trial_df["decision_time"].astype(float) >= mu).sum())
+    else:
+        n_span = 0                           # no change ever reached → bump region unobserved
+    n_excursions = int(((trial_df["change_size"] > 1.0) & trial_df["change_reached"]).sum())
+    usable_generative = bool(
+        n_lick_events >= QC_GEN_MIN_LICK_EVENTS
+        and n_censored >= QC_GEN_MIN_CENSORED
+        and n_span >= QC_GEN_MIN_SPAN
+        and n_excursions >= QC_GEN_MIN_EXCURSION)
     return {
         "n_trials": n_trials, "n_go": n_go, "n_catch": n_catch,
         "n_distinct_cs": n_distinct, "n_cs_rt_support": n_cs_rt,
@@ -542,6 +612,9 @@ def compute_cell_qc(trial_df):
         "usable_sdt": bool(n_go >= QC_MIN_GO and n_catch >= QC_MIN_CATCH),
         "usable_rtcv": bool(n_cs_rt >= QC_MIN_RTCV_CS),
         "usable_timing": bool(n_trials >= QC_MIN_TIMING_TRIALS),
+        "n_lick_events": n_lick_events, "n_censored": n_censored,
+        "n_trials_spanning_anchor": n_span, "n_evidence_excursions": n_excursions,
+        "usable_generative": usable_generative,
     }
 
 

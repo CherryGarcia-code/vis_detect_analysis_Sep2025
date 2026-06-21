@@ -437,7 +437,10 @@ def test_cell_and_latent_tables(synth_session, synth_state_labels):
 
 def _mk_cell_rows(mood, go_specs, n_catch_lick=0, n_catch_nolick=0, n_fa=0):
     """Build realistic trial rows for one (session×mood) cell.
-    go_specs: list of (change_size, n_hits, n_miss). Hits lick after the change."""
+    go_specs: list of (change_size, n_hits, n_miss). Hits lick after the change.
+    ``censored`` follows the real-data rule: lick trials (hit/fa) are observed
+    (censored=False); no-lick trials (miss / withheld catch) are right-censored
+    (censored=True)."""
     import numpy as np
     rng = np.random.default_rng(7)
     rows, ti = [], 0
@@ -445,24 +448,73 @@ def _mk_cell_rows(mood, go_specs, n_catch_lick=0, n_catch_nolick=0, n_fa=0):
         for _ in range(n_hit):
             rows.append({"change_size": cs, "lick": 1, "outcome": "hit", "change_reached": True,
                          "change_time_planned": 7.0, "decision_time": 7.0 + rng.uniform(0.2, 0.6),
-                         "state_label": mood, "trial_in_session": ti}); ti += 1
+                         "censored": False, "state_label": mood, "trial_in_session": ti}); ti += 1
         for _ in range(n_miss):
             rows.append({"change_size": cs, "lick": 0, "outcome": "miss", "change_reached": True,
                          "change_time_planned": 7.0, "decision_time": 9.0,
-                         "state_label": mood, "trial_in_session": ti}); ti += 1
+                         "censored": True, "state_label": mood, "trial_in_session": ti}); ti += 1
     for k in range(n_catch_lick):     # catch trial, licked → SDT false alarm
         rows.append({"change_size": 1.0, "lick": 1, "outcome": "hit", "change_reached": True,
                      "change_time_planned": 7.0, "decision_time": 7.3,
-                     "state_label": mood, "trial_in_session": ti}); ti += 1
+                     "censored": False, "state_label": mood, "trial_in_session": ti}); ti += 1
     for k in range(n_catch_nolick):   # catch trial, correctly withheld
         rows.append({"change_size": 1.0, "lick": 0, "outcome": "miss", "change_reached": True,
                      "change_time_planned": 7.0, "decision_time": 9.0,
-                     "state_label": mood, "trial_in_session": ti}); ti += 1
+                     "censored": True, "state_label": mood, "trial_in_session": ti}); ti += 1
     for k in range(n_fa):             # anticipatory early lick before the change
         rows.append({"change_size": 2.0, "lick": 1, "outcome": "fa", "change_reached": False,
                      "change_time_planned": 7.0, "decision_time": 4.5,
-                     "state_label": mood, "trial_in_session": ti}); ti += 1
+                     "censored": False, "state_label": mood, "trial_in_session": ti}); ti += 1
     return rows
+
+
+def test_compute_cell_qc_usable_generative_needs_balanced_support():
+    """fix(e) part 1: ``usable_generative`` gates cells that the Phase-2 generative
+    model (Engine A) can actually identify its dials on. It needs FOUR things in
+    sufficient supply, each derived from the Phase-1 per-(session×mood) cell table
+    (which has NO per-trial evidence arrays):
+
+      * ``n_lick_events``           — observed licks (lick == 1): the events
+      * ``n_censored``              — right-censored (no-lick / Miss) trials: needed
+                                      to identify the hazard SLOPE (all-lick → flat)
+      * ``n_trials_spanning_anchor``— trials whose decision_time >= the change-time
+                                      anchor μ: the urgency-bump region is observed
+      * ``n_evidence_excursions``   — go-trials with a real change excursion
+                                      ((change_size > 1.0) & change_reached): sharpness
+
+    A cell with PLENTY of licks but ZERO censored trials cannot identify the hazard
+    slope → ``usable_generative == False``. A balanced cell (licks AND censored AND
+    spanning trials AND excursions all above threshold) → True."""
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+
+    # ── all-lick cell: every go-trial is a hit, no misses, no withheld catch ──
+    # plenty of lick events + excursions + spanning trials, but ZERO censored.
+    all_lick = pd.DataFrame(_mk_cell_rows(
+        "StimSens",
+        [(1.25, 12, 0), (1.35, 12, 0), (1.5, 12, 0), (2.0, 12, 0), (4.0, 12, 0)],
+        n_catch_lick=8))               # catch licks too — still NOTHING censored
+    qc_nolapse = dl.compute_cell_qc(all_lick)
+    assert qc_nolapse["n_lick_events"] >= dl.QC_GEN_MIN_LICK_EVENTS  # plenty of licks
+    assert qc_nolapse["n_censored"] == 0                              # but zero censored
+    assert qc_nolapse["usable_generative"] is False                  # → not identifiable
+
+    # ── balanced cell: hits AND misses AND withheld catch (censored) AND FAs ──
+    balanced = pd.DataFrame(_mk_cell_rows(
+        "StimSens",
+        [(1.25, 8, 8), (1.35, 8, 8), (1.5, 10, 6), (2.0, 12, 4), (4.0, 14, 2)],
+        n_catch_lick=4, n_catch_nolick=16, n_fa=10))
+    qcb = dl.compute_cell_qc(balanced)
+    assert qcb["n_lick_events"] >= dl.QC_GEN_MIN_LICK_EVENTS
+    assert qcb["n_censored"] >= dl.QC_GEN_MIN_CENSORED
+    assert qcb["n_trials_spanning_anchor"] >= dl.QC_GEN_MIN_SPAN
+    assert qcb["n_evidence_excursions"] >= dl.QC_GEN_MIN_EXCURSION
+    assert qcb["usable_generative"] is True
+
+    # the four counts are exposed as ints on every cell
+    for k in ("n_lick_events", "n_censored", "n_trials_spanning_anchor",
+              "n_evidence_excursions"):
+        assert isinstance(qcb[k], int)
 
 
 def test_compute_cell_qc_flags():

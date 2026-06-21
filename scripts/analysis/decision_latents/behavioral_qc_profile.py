@@ -28,13 +28,25 @@ from scipy.optimize import curve_fit
 
 from visdetect.suite.plotting import setup_style
 from visdetect.analysis.config import ROOT, SUBJECT, STATE_LABEL_COLORS, CHANGE_SIZES
-from visdetect.analysis.decision_latents import _logistic
+from visdetect.analysis import decision_latents as dl
+from visdetect.analysis.decision_latents import (
+    _logistic, compute_cell_qc,
+    QC_GEN_MIN_LICK_EVENTS, QC_GEN_MIN_CENSORED, QC_GEN_MIN_SPAN, QC_GEN_MIN_EXCURSION,
+)
 
 setup_style()
 FIG_DIR = os.path.join(ROOT, "FIGURES", "decision_latents", SUBJECT)
 CACHE_DIR = os.path.join(ROOT, "data", "cache", "decision_latents")
 TRIAL_CACHE = os.path.join(CACHE_DIR, "decision_latents_trialtable.csv")
 os.makedirs(FIG_DIR, exist_ok=True)
+
+
+def save_fig(fig, name):
+    """Write a presentation-ready PNG to FIGURES/decision_latents/<SUBJECT>/
+    (NOT suite.plotting.save_figure — keep new work out of analysis_suite)."""
+    p = os.path.join(FIG_DIR, f"{name}.png")
+    fig.savefig(p, dpi=300, bbox_inches="tight"); plt.close(fig)
+    return p
 
 # Current thresholds the pipeline uses (to be JUSTIFIED or REVISED by this profile)
 MIN_CELL_TRIALS = 20     # descriptive_cell_table
@@ -64,6 +76,9 @@ def build_cell_qc(trials):
         catch = cell[np.isclose(cell["change_size"], 1.0)]
         per_cs = [int((go["change_size"] == cs).sum()) for cs in CHANGE_SIZES]
         b = _fit_slope(go)
+        # the canonical generative-sufficiency counts + flag (single source of
+        # truth: compute_cell_qc), so this figure reflects the ACTUAL gate.
+        cq = compute_cell_qc(cell)
         rows.append({
             "session_name": sname, "state_label": mood,
             "n_trials": len(cell), "n_go": len(go), "n_catch": len(catch),
@@ -74,8 +89,62 @@ def build_cell_qc(trials):
             "n_fa": int((cell["outcome"] == "fa").sum()),
             "mean_state_conf": float(cell["state_confidence"].mean()),
             "session_idx": int(cell["session_idx"].iloc[0]),
+            # generative-sufficiency (fix e, part 1)
+            "n_lick_events": cq["n_lick_events"],
+            "n_censored": cq["n_censored"],
+            "n_trials_spanning_anchor": cq["n_trials_spanning_anchor"],
+            "n_evidence_excursions": cq["n_evidence_excursions"],
+            "usable_generative": cq["usable_generative"],
         })
     return pd.DataFrame(rows)
+
+
+def _summarize(vals, name):
+    """Print min/p10/median/p90/max for a per-cell count (the numbers that
+    justify each QC_GEN_* threshold)."""
+    v = np.asarray([x for x in vals if np.isfinite(x)], dtype=float)
+    if not v.size:
+        print(f"    {name:<26}: (no finite values)")
+        return
+    print(f"    {name:<26}: min={v.min():.0f} p10={np.percentile(v,10):.0f} "
+          f"median={np.median(v):.0f} p90={np.percentile(v,90):.0f} max={v.max():.0f}")
+
+
+def fig_generative_qc(cellqc):
+    """Presentation figure for the FOUR generative-sufficiency quantities the
+    Phase-2 model needs, with the chosen QC_GEN_* floor drawn in red. Plain
+    English: which (session×mood) cells carry enough of each kind of signal for
+    the generative model to estimate the mouse's behavioural 'dials'."""
+    specs = [
+        ("n_lick_events", QC_GEN_MIN_LICK_EVENTS,
+         "Lick events per cell", "n licks (Hit + FA) in the cell",
+         "the events the hazard model fits to"),
+        ("n_censored", QC_GEN_MIN_CENSORED,
+         "Censored (no-lick) trials per cell", "n right-censored (Miss / withheld) trials",
+         "needed so the survival curve bends — identifies the hazard slope"),
+        ("n_trials_spanning_anchor", QC_GEN_MIN_SPAN,
+         "Trials reaching the change-time anchor", "n trials with decision_time ≥ μ",
+         "so the urgency-bump region is actually observed"),
+        ("n_evidence_excursions", QC_GEN_MIN_EXCURSION,
+         "Real change excursions per cell", "n go-trials where the change occurred",
+         "the evidence the sharpness dial needs"),
+    ]
+    fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+    for ax, (col, thr, title, xlabel, why) in zip(axes.ravel(), specs):
+        _hist(ax, cellqc[col], thr, f"floor={thr}", bins=24)
+        ax.set_title(f"{title}\n({why})", fontsize=9.5)
+        ax.set_xlabel(xlabel); ax.set_ylabel("# session×mood cells")
+    n = len(cellqc)
+    n_usable = int(cellqc["usable_generative"].sum())
+    fig.suptitle(
+        "B8 Phase-2 generative-sufficiency QC — can the generative model estimate "
+        "each cell's behavioural dials?\n"
+        f"A cell is usable only when ALL four counts clear their red floor "
+        f"(set from where each distribution's mass sits).  "
+        f"{n_usable}/{n} cells pass (usable_generative).",
+        fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    return save_fig(fig, "fig_b8_P2_generative_qc_distributions")
 
 
 def _hist(ax, vals, thr=None, thr_label=None, bins=20, color="#888888", logy=False):
@@ -189,7 +258,24 @@ if __name__ == "__main__":
           f"moods={sorted(trials['state_label'].unique())}")
     cellqc = build_cell_qc(trials)
     cellqc["usable"] = report(cellqc)
+
+    # ── generative-sufficiency (fix e, part 1): distributions + gate yield ──
+    print(f"\n=== Generative-sufficiency counts (n={len(cellqc)} cells) ===")
+    for col in ("n_lick_events", "n_censored", "n_trials_spanning_anchor",
+                "n_evidence_excursions"):
+        _summarize(cellqc[col], col)
+    n_gen = int(cellqc["usable_generative"].sum())
+    print(f"  thresholds: lick>={QC_GEN_MIN_LICK_EVENTS} censored>={QC_GEN_MIN_CENSORED} "
+          f"span>={QC_GEN_MIN_SPAN} excursion>={QC_GEN_MIN_EXCURSION}")
+    print(f"  usable_generative: {n_gen}/{len(cellqc)} cells pass "
+          f"(drop {len(cellqc) - n_gen})")
+    print("  by mood:")
+    for mood in MOOD_ORDER:
+        m = cellqc["state_label"] == mood
+        print(f"    {mood:<11}: {int((cellqc['usable_generative'] & m).sum()):>3}/{int(m.sum())} usable_generative")
+
     out_csv = os.path.join(CACHE_DIR, "behavioral_qc_cell_table.csv")
     cellqc.to_csv(out_csv, index=False)
     print("\nfigure:", fig_qc(trials, cellqc))
+    print("generative-QC figure:", fig_generative_qc(cellqc))
     print("cell QC table:", out_csv)
