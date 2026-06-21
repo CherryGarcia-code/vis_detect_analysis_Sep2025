@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
-"""Curate the liberal UnitMatch registry into precision tracks.
+"""Curate the UnitMatch registry into precision tracks.
 
-Outputs (FIGURES/tracking_qc/curation/):
+Outputs (FIGURES/tracking_qc/<SUBJECT>/curation/):
     curated_links.csv    per-link audit trail
     curated_tracks.csv   per-track kept/skipped/dropped + confidence tier
 
 Usage:
-    py scripts/pipelines/tracking/curate_tracks.py [--min-span 2] [--rebuild-cache]
+    py scripts/pipelines/tracking/curate_tracks.py --subject BG_049 [--rebuild-cache]
 
-Registry note (revised June 2026): curate the ``global_uid`` registry
-(``all42/unit_index.csv``), NOT the ``batch_uid_liberal`` column. On BG_046 the
-"liberal" assignment over-merges into a few heterogeneous mega-blobs (e.g. a
-39-session uid spanning several distinct neurons) that the backward sweep cannot
-recover and truncates to span 1. The intermediate/``global_uid`` registry has the
-clean long tracks (61 span>=10 vs liberal's 23) the original QC used. Override with
-``--registry``/``--liberal-col`` to curate a different column.
+Registry note: curate the ``global_uid`` registry (``unit_index.csv``), NOT the
+``batch_uid_liberal`` column. The "liberal" assignment over-merges into a few
+heterogeneous mega-blobs that the backward sweep cannot recover and truncates to
+span 1; the intermediate/``global_uid`` registry has the clean long tracks. Override
+with ``--registry``/``--liberal-col`` to curate a different column.
+
+Multi-subject: --subject selects the UM output dir (all42 for BG_046, all_sessions
+otherwise) and all local paths; subjects without a staging manifest render as
+'Unknown' stage and (with no behavioural trials) skip the functional corroborator.
 """
 from __future__ import annotations
 
 import argparse
 import gc
+import os
 import pickle
 import sys
 from pathlib import Path
@@ -30,61 +33,49 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))      # for _subject_paths
 
-from visdetect.analysis import state_provider as sp                 # noqa: E402
-from visdetect.analysis import track_curation as tc                 # noqa: E402
-from visdetect.analysis.tracking_qc import (                        # noqa: E402
+
+def _early_subject(default: str = "BG_046") -> str:
+    for i, a in enumerate(sys.argv):
+        if a == "--subject" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        if a.startswith("--subject="):
+            return a.split("=", 1)[1]
+    return default
+
+
+os.environ["VISDETECT_SUBJECT"] = _early_subject()
+
+import _subject_paths as sjp                                    # noqa: E402
+from visdetect.analysis import state_provider as sp             # noqa: E402
+from visdetect.analysis import track_curation as tc            # noqa: E402
+from visdetect.analysis.tracking_qc import (                    # noqa: E402
     load_channel_positions, estimate_session_drift)
-from visdetect.core.session import load_session                     # noqa: E402
-from visdetect.suite.loader import load_filtered_manifest           # noqa: E402
-
-UM_ROOT = Path("X:/public/projects/BeJG_20230130_VisDetect/wEPhys/"
-               "BG_046/unit_match/output/all42")
-DEFAULT_REGISTRY = UM_ROOT / "unit_index.csv"          # reconciled global_uid registry
-DEFAULT_PROB_MATRIX = UM_ROOT / "batch0" / "output_prob_matrix.npy"
-DEFAULT_RAW_WF_ROOT = REPO_ROOT / "data" / "unit_match" / "input" / "BG_046"
-DEFAULT_PKL_DIR = REPO_ROOT / "data" / "pkls" / "BG_046"
-DEFAULT_STATES_DIR = REPO_ROOT / "data" / "cache" / "states" / "BG_046"
-DEFAULT_OUT_DIR = REPO_ROOT / "FIGURES" / "tracking_qc" / "curation"
-DEFAULT_CACHE = REPO_ROOT / "data" / "cache" / "curation_features.pkl"
-DEFAULT_DRIFT_CSV = REPO_ROOT / "FIGURES" / "tracking_qc" / "intersession_drift.csv"
-
-
-def _date_key(s: str) -> Tuple[int, int, int]:
-    p = str(s).zfill(8)
-    return (int(p[4:8]), int(p[2:4]), int(p[0:2]))
+from visdetect.core.session import load_session                 # noqa: E402
+from visdetect.suite.loader import load_filtered_manifest       # noqa: E402
 
 
 def _load_fingerprint_offsets(csv_path: Path) -> Dict[str, float]:
-    """Per-session drift offset (um) from the amplitude-depth fingerprint
-    diagnostic CSV (diagnose_intersession_drift.py). Keyed by zero-padded
-    session name; uses the cumulative `drift_vs_ref0_um` column.
-    """
+    """Per-session drift offset (um) from the fingerprint diagnostic CSV, keyed by
+    the raw session token (matches the registry)."""
     df = pd.read_csv(csv_path)
-    return {str(r["session"]).zfill(8): float(r["drift_vs_ref0_um"])
-            for _, r in df.iterrows()}
-
-
-def _session_pkl(pkl_dir: Path, sess: str):
-    for s in (sess, str(sess).zfill(8)):
-        p = pkl_dir / f"BG_046_{s}.pkl"
-        if p.exists():
-            return p
-    return None
+    return {str(r["session"]): float(r["drift_vs_ref0_um"]) for _, r in df.iterrows()}
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    ap.add_argument("--subject", default="BG_046")
+    ap.add_argument("--registry", type=Path, default=None)
     ap.add_argument("--liberal-col", default="global_uid",
                     help="UID column to curate. Default global_uid (clean long "
-                         "tracks); batch_uid_liberal over-merges into blobs here.")
-    ap.add_argument("--prob-matrix", type=Path, default=DEFAULT_PROB_MATRIX)
-    ap.add_argument("--raw-wf-root", type=Path, default=DEFAULT_RAW_WF_ROOT)
-    ap.add_argument("--pkl-dir", type=Path, default=DEFAULT_PKL_DIR)
-    ap.add_argument("--states-dir", type=Path, default=DEFAULT_STATES_DIR)
-    ap.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
-    ap.add_argument("--cache-path", type=Path, default=DEFAULT_CACHE)
+                         "tracks); batch_uid_liberal over-merges into blobs.")
+    ap.add_argument("--prob-matrix", type=Path, default=None)
+    ap.add_argument("--raw-wf-root", type=Path, default=None)
+    ap.add_argument("--pkl-dir", type=Path, default=None)
+    ap.add_argument("--states-dir", type=Path, default=None)
+    ap.add_argument("--out-dir", type=Path, default=None)
+    ap.add_argument("--cache-path", type=Path, default=None)
     ap.add_argument("--min-span", type=int, default=2)
     ap.add_argument("--min-confidence", type=float, default=0.0)
     ap.add_argument("--max-bridge-gap", type=int, default=tc.MAX_BRIDGE_GAP)
@@ -93,17 +84,25 @@ def main() -> int:
     ap.add_argument("--corroborator-ref", choices=["rolling", "expert"], default="rolling")
     ap.add_argument("--drift-source", choices=["none", "fingerprint", "match"],
                     default="none",
-                    help="Depth drift correction source. 'none' (default) = RAW depth "
-                         "(BG_046 whole-probe drift ~0 per the fingerprint diagnostic); "
+                    help="Depth drift correction source. 'none' (default) = RAW depth; "
                          "'fingerprint' = offsets from --drift-csv; 'match' = legacy "
                          "UnitMatch-anchor estimator (starves on low-anchor sessions).")
-    ap.add_argument("--drift-csv", type=Path, default=DEFAULT_DRIFT_CSV,
+    ap.add_argument("--drift-csv", type=Path, default=None,
                     help="intersession_drift.csv for --drift-source fingerprint")
     ap.add_argument("--rebuild-cache", action="store_true")
     args = ap.parse_args()
+    subj = args.subject
+    if args.registry is None: args.registry = sjp.um_registry(subj)
+    if args.prob_matrix is None: args.prob_matrix = sjp.um_prob_matrix(subj)
+    if args.raw_wf_root is None: args.raw_wf_root = sjp.raw_wf_root(subj)
+    if args.pkl_dir is None: args.pkl_dir = sjp.pkl_dir(subj)
+    if args.states_dir is None: args.states_dir = sjp.states_dir(subj)
+    if args.out_dir is None: args.out_dir = sjp.curation_out_dir(subj)
+    if args.cache_path is None: args.cache_path = sjp.features_cache(subj)
+    if args.drift_csv is None: args.drift_csv = sjp.drift_csv(subj)
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Registry re-keyed on the liberal column ──────────────────────────
+    # ── Registry re-keyed on the chosen uid column ───────────────────────
     reg = pd.read_csv(args.registry)
     reg["session"] = reg["session"].astype(str)
     reg["uid"] = reg[args.liberal_col].astype(int)
@@ -113,21 +112,17 @@ def main() -> int:
     uid_to_ks: Dict[int, Dict[str, int]] = {}
     for _, r in reg.iterrows():
         uid_to_ks.setdefault(int(r["uid"]), {})[str(r["session"])] = int(r["ks_unit_id"])
-    print(f"liberal cohort: {len(keep_uids)} uids span>={args.min_span}", flush=True)
+    print(f"{subj} cohort: {len(keep_uids)} uids span>={args.min_span} "
+          f"(col {args.liberal_col})", flush=True)
 
     manifest = load_filtered_manifest(
         include_stages=["Naive", "Learning", "Expert"],
         merge_naive_learning=True, min_trials=150, min_dprime=None)
-    stage_by_sess = {str(r["session_name"]).zfill(8): str(r["stage"])
+    stage_by_sess = {str(r["session_name"]): str(r["stage"])
                      for _, r in manifest.iterrows()}
 
-    # ── Drift offsets across all registry sessions ───────────────────────
-    # Default 'none': the depth gate uses RAW probe depth. The amplitude-depth
-    # fingerprint diagnostic (diagnose_intersession_drift.py) shows ~0 whole-probe
-    # inter-session drift on BG_046 (corr 0.88), and the legacy 'match' estimator
-    # starves on low-anchor sessions (NaN for ~26/42 sessions) and emits spurious
-    # large offsets where it does run — so correcting with it is worse than not.
-    all_sess = sorted(reg["session"].unique().tolist(), key=_date_key)
+    # ── Drift offsets (default 'none' = raw depth) ───────────────────────
+    all_sess = sorted(reg["session"].unique().tolist(), key=sjp.session_date_key)
     drift_offsets: Dict[str, float] = {}
     if args.drift_source == "match":
         if args.prob_matrix.exists():
@@ -138,28 +133,25 @@ def main() -> int:
     elif args.drift_source == "fingerprint":
         if args.drift_csv.exists():
             drift_offsets = _load_fingerprint_offsets(args.drift_csv)
-            print(f"fingerprint drift: {len(drift_offsets)} session offsets "
-                  f"from {args.drift_csv.name}", flush=True)
+            print(f"fingerprint drift: {len(drift_offsets)} offsets", flush=True)
         else:
-            print(f"drift csv {args.drift_csv} missing — depth uses raw (offset 0)",
-                  flush=True)
-    else:  # none
+            print(f"drift csv {args.drift_csv} missing — raw depth (offset 0)", flush=True)
+    else:
         print("drift-source=none — depth gate uses RAW depth (offset 0)", flush=True)
 
     # ── Build / load feature cache (outer loop by session) ───────────────
     if args.rebuild_cache or not args.cache_path.exists():
         features: Dict[Tuple[int, str], tc.CurationFeature] = {}
         for sess in all_sess:
-            pkl = _session_pkl(args.pkl_dir, sess)
+            pkl = sjp.session_pkl(subj, sess, args.pkl_dir)
             if pkl is None:
                 print(f"  skip {sess}: no pkl", flush=True); continue
             S = load_session(str(pkl))
             cp = load_channel_positions(args.raw_wf_root, sess)
             in_zone = sp.in_zone_trial_indices(sess, args.states_dir,
                                                min_confidence=args.min_confidence)
-            off = float(drift_offsets.get(str(sess).zfill(8),
-                        drift_offsets.get(sess, 0.0)))
-            stage = stage_by_sess.get(str(sess).zfill(8), "Unknown")
+            off = float(drift_offsets.get(sess, 0.0))
+            stage = stage_by_sess.get(sess, "Unknown")
             for uid, ksmap in uid_to_ks.items():
                 if sess not in ksmap:
                     continue
@@ -181,7 +173,7 @@ def main() -> int:
         print(f"loaded {len(features)} cached features", flush=True)
 
     # ── Sweep + write ────────────────────────────────────────────────────
-    uid_to_sessions = {uid: sorted(ks.keys(), key=_date_key)
+    uid_to_sessions = {uid: sorted(ks.keys(), key=sjp.session_date_key)
                        for uid, ks in uid_to_ks.items()}
     params = tc.CurationParams(
         max_bridge_gap=args.max_bridge_gap, min_inzone_trials=args.min_inzone_trials,

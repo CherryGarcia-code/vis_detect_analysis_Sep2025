@@ -2,12 +2,13 @@
 """Held-out-ISI AUC by confidence tier for a curated-track table (spec sec 8.2).
 
 Usage:
-    py scripts/pipelines/tracking/validate_curation.py
+    py scripts/pipelines/tracking/validate_curation.py --subject BG_049
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Dict, Tuple
@@ -17,33 +18,38 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src"))
-
-from visdetect.analysis import track_curation as tc                 # noqa: E402
-from visdetect.core.session import load_session                     # noqa: E402
-
-UM_ROOT = Path("X:/public/projects/BeJG_20230130_VisDetect/wEPhys/"
-               "BG_046/unit_match/output/all42")
-DEFAULT_REGISTRY = UM_ROOT / "unit_index.csv"          # reconciled global_uid registry
-DEFAULT_TRACKS = REPO_ROOT / "FIGURES" / "tracking_qc" / "curation" / "curated_tracks.csv"
-DEFAULT_PKL_DIR = REPO_ROOT / "data" / "pkls" / "BG_046"
-OUT_DIR = REPO_ROOT / "FIGURES" / "tracking_qc" / "curation"
+sys.path.insert(0, str(Path(__file__).resolve().parent))      # for _subject_paths
 
 
-def _session_pkl(pkl_dir: Path, sess: str):
-    for s in (sess, str(sess).zfill(8)):
-        p = pkl_dir / f"BG_046_{s}.pkl"
-        if p.exists():
-            return p
-    return None
+def _early_subject(default: str = "BG_046") -> str:
+    for i, a in enumerate(sys.argv):
+        if a == "--subject" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        if a.startswith("--subject="):
+            return a.split("=", 1)[1]
+    return default
+
+
+os.environ["VISDETECT_SUBJECT"] = _early_subject()
+
+import _subject_paths as sjp                                    # noqa: E402
+from visdetect.analysis import track_curation as tc             # noqa: E402
+from visdetect.core.session import load_session                 # noqa: E402
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tracks", type=Path, default=DEFAULT_TRACKS)
-    ap.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    ap.add_argument("--subject", default="BG_046")
+    ap.add_argument("--tracks", type=Path, default=None)
+    ap.add_argument("--registry", type=Path, default=None)
     ap.add_argument("--liberal-col", default="global_uid")
-    ap.add_argument("--pkl-dir", type=Path, default=DEFAULT_PKL_DIR)
+    ap.add_argument("--pkl-dir", type=Path, default=None)
     args = ap.parse_args()
+    subj = args.subject
+    out_dir = sjp.curation_out_dir(subj)
+    if args.tracks is None: args.tracks = out_dir / "curated_tracks.csv"
+    if args.registry is None: args.registry = sjp.um_registry(subj)
+    if args.pkl_dir is None: args.pkl_dir = sjp.pkl_dir(subj)
 
     tracks = pd.read_csv(args.tracks)
     reg = pd.read_csv(args.registry)
@@ -61,7 +67,7 @@ def main() -> int:
     # Build held-out ISI hist per (uid, session) — load each session once.
     holdout: Dict[Tuple[int, str], np.ndarray] = {}
     for sess in sorted({s for (_, s) in kept_pairs}):
-        pkl = _session_pkl(args.pkl_dir, sess)
+        pkl = sjp.session_pkl(subj, sess, args.pkl_dir)
         if pkl is None:
             continue
         S = load_session(str(pkl))
@@ -75,10 +81,10 @@ def main() -> int:
 
     result = tc.held_out_isi_auc_by_tier(tracks, holdout)
     print(json.dumps(result, indent=2))
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    with open(OUT_DIR / "curation_validation.json", "w") as f:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with open(out_dir / "curation_validation.json", "w") as f:
         json.dump(result, f, indent=2)
-    print(f"Wrote {OUT_DIR / 'curation_validation.json'}")
+    print(f"Wrote {out_dir / 'curation_validation.json'}")
     return 0
 
 
