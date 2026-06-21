@@ -363,3 +363,196 @@ def design_with_outcomes(design, event_bin, lick, censored):
     d.event_bin = np.asarray(event_bin, int); d.lick = np.asarray(lick, int)
     d.censored = np.asarray(censored, bool)
     return d
+
+
+# ── Engine-A fitter (Task 1.5) — penalized MLE + FitResult (contract §A.7) ────
+@dataclass
+class FitResult:
+    """Result of a single-anchor penalized-MLE fit (contract §A.7).
+
+    The ``dials`` structure is LOCKED here and consumed unchanged by Tasks
+    2.x/3.x/4.1: ``{mood: {"sharpness": v, "itchiness": z, "timing": u}}``.
+
+    Attributes
+    ----------
+    theta : np.ndarray
+        Best-fit parameter vector (length ``param_spec.n_params()``).
+    dials : dict
+        ``{mood: {"sharpness": v, "itchiness": z, "timing": u}}`` read out of
+        ``theta`` via ``param_spec.value``.
+    ll : float
+        PURE data log-likelihood at the optimum (``-hazard_nll(theta, ..., l2=0)``;
+        the L2 penalty, if any, is excluded).
+    n_params : int
+        ``param_spec.n_params()``.
+    cov : np.ndarray | None
+        Inverse Hessian (parameter covariance); ``None`` if the Hessian is
+        singular / non-invertible.
+    hessian : np.ndarray
+        Finite-difference (central-second-difference) Hessian of the unpenalized
+        ``hazard_nll`` at the optimum.
+    hessian_cond : float
+        ``np.linalg.cond(hessian)`` (``np.inf`` if it is singular / raises).
+    """
+    theta: np.ndarray
+    dials: dict
+    ll: float
+    n_params: int
+    cov: np.ndarray | None
+    hessian: np.ndarray
+    hessian_cond: float
+
+
+def _numerical_hessian(f, x, eps=1e-4):
+    """Central-difference Hessian of a scalar function ``f`` at ``x``.
+
+    Self-contained (no numdifftools / scipy dependency) so the fitter has no new
+    third-party requirement. Uses the standard central second-difference stencils::
+
+        H[i,i] = (f(x+e_i) - 2 f(x) + f(x-e_i)) / eps**2
+        H[i,j] = (f(x+e_i+e_j) - f(x+e_i-e_j)
+                  - f(x-e_i+e_j) + f(x-e_i-e_j)) / (4 eps**2)   (i != j)
+
+    The Hessian is symmetrised (``0.5 (H + H.T)``) to wash out tiny asymmetries
+    from finite-precision evaluation.
+    """
+    x = np.asarray(x, float)
+    n = x.size
+    H = np.zeros((n, n), float)
+    f0 = float(f(x))
+    e = eps
+    # diagonal: standard central second difference
+    for i in range(n):
+        xi = x.copy()
+        xi[i] += e
+        f_plus = float(f(xi))
+        xi[i] = x[i] - e
+        f_minus = float(f(xi))
+        H[i, i] = (f_plus - 2.0 * f0 + f_minus) / (e * e)
+    # off-diagonals: 4-point central difference
+    for i in range(n):
+        for j in range(i + 1, n):
+            xpp = x.copy(); xpp[i] += e; xpp[j] += e
+            xpm = x.copy(); xpm[i] += e; xpm[j] -= e
+            xmp = x.copy(); xmp[i] -= e; xmp[j] += e
+            xmm = x.copy(); xmm[i] -= e; xmm[j] -= e
+            val = (float(f(xpp)) - float(f(xpm))
+                   - float(f(xmp)) + float(f(xmm))) / (4.0 * e * e)
+            H[i, j] = val
+            H[j, i] = val
+    return 0.5 * (H + H.T)
+
+
+def fit_anchor(design, param_spec, seed_theta=None, l2=0.0, n_restarts=4, seed=0):
+    """Fit one anchor's generative decision-latents by penalized MLE (contract §A.7).
+
+    Plain English: find the three behavioural knobs per mood (sharpness ``v``,
+    itchiness ``z``, timing ``u``) that best explain *when* the mouse licked on
+    this anchor, by minimising the closed-form censored negative log-likelihood
+    (``hazard_nll``). Optimisation is L-BFGS-B from several inits (the
+    ``seed_theta`` if given, plus ``n_restarts`` random restarts); the lowest-NLL
+    fit wins. A finite-difference Hessian at the optimum gives the parameter
+    covariance and a conditioning diagnostic.
+
+    Parameters
+    ----------
+    design : Design
+        The anchor's ragged precompute (with the outcomes to fit).
+    param_spec : ParamSpec
+        Parameter layout (``theta`` <-> dial/mood mapping).
+    seed_theta : np.ndarray | None
+        Optional warm-start init (e.g. an L2-seeded backward fit's prior). When
+        given it is BOTH an optimisation init AND the ridge reference if ``l2>0``.
+    l2 : float
+        Ridge penalty strength toward ``seed_theta`` (only active when both
+        ``l2>0`` and ``seed_theta`` is not None). The reported ``ll`` always
+        excludes this penalty.
+    n_restarts : int
+        Number of random restarts (Normal(0, 1) around 0), drawn from
+        ``np.random.default_rng(seed)``.
+    seed : int
+        RNG seed for the random restarts (reproducible).
+
+    Returns
+    -------
+    FitResult
+        With the LOCKED ``dials`` structure
+        ``{mood: {"sharpness": v, "itchiness": z, "timing": u}}``.
+    """
+    from scipy.optimize import minimize
+
+    n_params = param_spec.n_params()
+
+    def objective(theta):
+        return hazard_nll(theta, design, param_spec, l2=l2, seed_theta=seed_theta)
+
+    # ── assemble inits: the seed (if any) + n_restarts random restarts ──
+    rng = np.random.default_rng(seed)
+    inits = []
+    if seed_theta is not None:
+        inits.append(np.asarray(seed_theta, float).copy())
+    for _ in range(int(n_restarts)):
+        inits.append(rng.normal(loc=0.0, scale=1.0, size=n_params))
+    if not inits:                       # n_restarts==0 and no seed -> one zero init
+        inits.append(np.zeros(n_params))
+
+    best = None
+    for x0 in inits:
+        try:
+            res = minimize(objective, x0, method="L-BFGS-B")
+        except Exception:
+            continue
+        if not np.all(np.isfinite(res.x)):
+            continue
+        nll = float(res.fun)
+        if not np.isfinite(nll):
+            continue
+        if best is None or nll < best[0]:
+            best = (nll, np.asarray(res.x, float))
+
+    if best is None:
+        # Pathological: every restart failed. Fall back to the first init's value.
+        theta = np.asarray(inits[0], float)
+    else:
+        theta = best[1]
+
+    # ── pure data log-likelihood (exclude the L2 penalty) ──
+    ll = -hazard_nll(theta, design, param_spec, l2=0.0)
+
+    # ── finite-difference Hessian of the UNPENALIZED nll at the optimum ──
+    def nll_data(theta_):
+        return hazard_nll(theta_, design, param_spec, l2=0.0)
+
+    hessian = _numerical_hessian(nll_data, theta, eps=1e-4)
+
+    try:
+        hessian_cond = float(np.linalg.cond(hessian))
+    except Exception:
+        hessian_cond = np.inf
+    if not np.isfinite(hessian_cond):
+        hessian_cond = np.inf
+
+    try:
+        cov = np.linalg.inv(hessian)
+    except np.linalg.LinAlgError:
+        cov = None
+
+    # ── locked dials structure ──
+    dials = {
+        mood: {
+            "sharpness": float(param_spec.value(theta, "v", mood)),
+            "itchiness": float(param_spec.value(theta, "z", mood)),
+            "timing": float(param_spec.value(theta, "u", mood)),
+        }
+        for mood in param_spec.moods
+    }
+
+    return FitResult(
+        theta=theta,
+        dials=dials,
+        ll=float(ll),
+        n_params=int(n_params),
+        cov=cov,
+        hessian=hessian,
+        hessian_cond=hessian_cond,
+    )

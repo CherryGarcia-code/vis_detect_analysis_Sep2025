@@ -919,3 +919,168 @@ def test_design_with_outcomes_does_not_mutate_source():
 
     assert np.array_equal(design.lick, orig_lick)
     assert np.array_equal(design.censored, orig_censored)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 1.5: fit_anchor + FitResult  (contract §A.7)
+# ════════════════════════════════════════════════════════════════════════════
+# Ground-truth, RECOVERY test (load-bearing, NOT a tautology).
+#
+# We build a Design on *genuinely identifiable* synthetic evidence: ~2000 trials
+# spanning both moods, with per-trial baseline log2-TF fluctuations AND a real
+# change-driven evidence excursion (a positive step after change_time on go
+# trials) so the sharpness dial `v` (which multiplies the leaky-accumulated
+# evidence) is identifiable; the trial grid is long enough for the urgency bump
+# to bite (so `u` is identifiable) and the censor/lick mix is non-degenerate (so
+# the itchiness baseline `z` is identifiable). We pick a known `true_theta` that
+# yields MODERATE per-bin hazards, simulate licks through the per-bin hazard,
+# refit with fit_anchor, and assert PER-DIAL PER-MOOD |recovered - true| < 0.3,
+# hessian_cond < 1e6, and the locked dials structure. Recovery here is a real
+# test of the fitter, not luck: each dial leaves a distinct signature in the
+# survival pattern.
+
+
+def _identifiable_recovery_design(n_trials=2000, dt=0.05, seed=0,
+                                  step=1.5, noise=0.25, go_p=0.7):
+    """Build an identifiable two-mood Design on synthetic per-trial evidence.
+
+    Each trial has:
+      * a fluctuating baseline log2-TF (small zero-mean noise around 0),
+      * on go trials, a sustained positive excursion (``step``) after a per-trial
+        change_time -> drives the leaky accumulator A upward, making `v`
+        identifiable,
+      * a trial length of ~30-60 bins (1.5-3.0 s) so the urgency bump phi (peaked
+        near the change) modulates the late hazard, making `u` identifiable.
+
+    Identifiability of the SHARPNESS dial `v` requires that lick *timing* tracks
+    the accumulated evidence — i.e. trials must SURVIVE long enough to reach the
+    post-change excursion before they lick. That only happens when the baseline
+    hazard is low (a very negative itchiness `z` in true_theta) and the evidence
+    step is the dominant driver. With a too-high baseline hazard, every trial
+    licks in the first few bins and `v` washes out. The default true_theta below
+    (z ~ -4) plus ``step=1.5`` yields a ~0.6 lick rate where v is recovered.
+    Moods alternate Impulsive / StimSens. mu is the median change_time.
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    change_times = []
+    for tidx in range(n_trials):
+        n_bins = int(rng.integers(30, 61))          # 1.5 - 3.0 s on the dt grid
+        ct = float(rng.uniform(0.5, 1.2))           # change time (s)
+        change_times.append(ct)
+        go = bool(rng.random() < go_p)              # mostly go trials
+        # fluctuating baseline log2-TF evidence (zero-mean), then a step on go
+        ev = rng.normal(0.0, noise, size=n_bins)
+        if go:
+            t_grid = np.arange(n_bins) * dt
+            ev = ev + np.where(t_grid >= ct, step, 0.0)  # sustained log2-TF excursion
+        rows.append({
+            "trial_idx": tidx,
+            "outcome": "hit" if go else "miss",
+            "change_size": 2.0 if go else 1.0,
+            "change_time": ct,
+            "decision_time": n_bins * dt,
+            "lick": 1,                              # placeholder (simulator sets it)
+            "censored": False,                      # placeholder
+            "evidence": ev,
+            "n_bins": n_bins,
+        })
+    ev_df = pd.DataFrame(rows)
+    # alternate moods across trials so both are well populated
+    labels = pd.DataFrame({
+        "trial_idx": np.arange(n_trials),
+        "state_label": [MAIN_MOODS[i % len(MAIN_MOODS)] for i in range(n_trials)],
+    }).set_index("trial_idx")
+    mu = float(np.median(change_times))
+    design = dlg.build_design(ev_df, labels, mu=mu, sigma=0.8, dt=dt)
+    return design
+
+
+def test_fit_anchor_recovers_ground_truth_per_dial_per_mood():
+    """Simulate outcomes from a known true_theta on an identifiable Design, refit
+    via fit_anchor, and assert per-dial per-mood |recovered - true| < 0.3, a
+    well-conditioned Hessian (cond < 1e6), and the locked dials structure."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    design = _identifiable_recovery_design(n_trials=2000, dt=0.05, seed=0)
+
+    # true_theta laid out as [v_Imp, v_Stim, z_Imp, z_Stim, u_Imp, u_Stim].
+    # Distinct per-mood values so recovery is non-trivial; itchiness z ~ -4 keeps
+    # the baseline hazard low so trials survive to the post-change evidence
+    # excursion (making sharpness v identifiable) -> a ~0.6 lick/censor mix.
+    true_theta = np.array([1.4, 0.9, -4.0, -4.4, 0.4, 0.2])
+    true = {
+        "Impulsive": {"sharpness": 1.4, "itchiness": -4.0, "timing": 0.4},
+        "StimSens":  {"sharpness": 0.9, "itchiness": -4.4, "timing": 0.2},
+    }
+
+    eb, lk, cs = dlg.simulate_licks(design, true_theta, ps, seed=42)
+    # sanity: a non-degenerate lick/censor mix (real survival information)
+    lick_rate = lk.mean()
+    assert 0.2 < lick_rate < 0.9, f"degenerate lick rate {lick_rate:.3f}"
+
+    sim_design = dlg.design_with_outcomes(design, eb, lk, cs)
+    result = dlg.fit_anchor(sim_design, ps, seed_theta=None,
+                            l2=0.0, n_restarts=4, seed=0)
+
+    # ── locked dials structure ──
+    assert set(result.dials.keys()) == set(ps.moods)
+    for mood in ps.moods:
+        assert set(result.dials[mood].keys()) == {"sharpness", "itchiness", "timing"}
+
+    # ── per-dial per-mood recovery within 0.3 ──
+    for mood in ps.moods:
+        for dial in ("sharpness", "itchiness", "timing"):
+            rec = result.dials[mood][dial]
+            tru = true[mood][dial]
+            assert abs(rec - tru) < 0.3, (
+                f"{mood}/{dial}: recovered {rec:.3f} vs true {tru:.3f} "
+                f"(|diff|={abs(rec - tru):.3f} >= 0.3)"
+            )
+
+    # ── well-conditioned Hessian ──
+    assert np.isfinite(result.hessian_cond)
+    assert result.hessian_cond < 1e6, f"hessian_cond {result.hessian_cond:.3e} >= 1e6"
+
+    # ── FitResult bookkeeping ──
+    assert result.n_params == ps.n_params()
+    assert result.theta.shape == (ps.n_params(),)
+    assert np.isfinite(result.ll)
+    assert result.hessian.shape == (ps.n_params(), ps.n_params())
+    if result.cov is not None:
+        assert result.cov.shape == (ps.n_params(), ps.n_params())
+
+
+def test_fit_anchor_ll_is_pure_data_loglik_no_l2():
+    """`ll` is the pure data log-likelihood (-hazard_nll with l2=0), even when the
+    fit used an L2 penalty toward a seed."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    design = _identifiable_recovery_design(n_trials=600, dt=0.05, seed=1)
+    true_theta = np.array([1.2, 1.0, -4.0, -4.2, 0.4, 0.3])
+    eb, lk, cs = dlg.simulate_licks(design, true_theta, ps, seed=7)
+    sim_design = dlg.design_with_outcomes(design, eb, lk, cs)
+
+    seed = np.zeros(ps.n_params())
+    result = dlg.fit_anchor(sim_design, ps, seed_theta=seed, l2=5.0,
+                            n_restarts=2, seed=0)
+    # ll must equal -hazard_nll at the optimum WITHOUT the penalty
+    expected_ll = -dlg.hazard_nll(result.theta, sim_design, ps, l2=0.0)
+    assert abs(result.ll - expected_ll) < 1e-6
+
+
+def test_fit_anchor_seed_theta_init_is_used():
+    """Passing a good seed_theta still yields a valid recovery (seed is one of the
+    inits, and the best restart wins)."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    design = _identifiable_recovery_design(n_trials=1200, dt=0.05, seed=2)
+    true_theta = np.array([1.3, 1.0, -4.0, -4.2, 0.4, 0.3])
+    eb, lk, cs = dlg.simulate_licks(design, true_theta, ps, seed=11)
+    sim_design = dlg.design_with_outcomes(design, eb, lk, cs)
+
+    result = dlg.fit_anchor(sim_design, ps, seed_theta=true_theta.copy(),
+                            l2=0.0, n_restarts=1, seed=0)
+    # recovery within tolerance with the true seed present
+    for mood, j in (("Impulsive", 0), ("StimSens", 1)):
+        assert abs(result.dials[mood]["sharpness"] - true_theta[0 + j]) < 0.4
