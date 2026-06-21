@@ -503,3 +503,231 @@ def test_build_design_array_dtypes():
     assert np.issubdtype(design.lick.dtype, np.integer)
     assert np.issubdtype(design.trial_idx.dtype, np.integer)
     assert design.censored.dtype == bool
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 1.4: ParamSpec layout + closed-form censored hazard NLL
+# (contract §A.4 + §A.6)
+# ════════════════════════════════════════════════════════════════════════════
+# Ground-truth tests (load-bearing, per brief):
+#   (a) LAYOUT-INVARIANCE — ParamSpec maps theta<->dial/mood by *name*, never by a
+#       hardcoded index. For two different state_terms orderings, `value(...)`
+#       must read the slot that genuinely holds that dial/mood's parameter.
+#   (b) RAGGED-SAFETY — hazard_nll over a Design mixing a 3-bin and a 200-bin trial
+#       must EQUAL the sum of the two trials' NLLs computed singly (via subset),
+#       and be finite.
+#   (c) L2 — l2>0 with seed_theta==theta adds exactly 0; seed_theta!=theta adds
+#       exactly l2*sum((theta-seed)**2).
+
+
+def _design_one_trial(A, phi, event_bin, lick, censored, mood_code):
+    """A 1-trial Design with explicit A/phi (so the NLL is hand-checkable)."""
+    return dlg.Design(
+        A=[np.asarray(A, float)],
+        phi=[np.asarray(phi, float)],
+        event_bin=np.asarray([event_bin], int),
+        lick=np.asarray([lick], int),
+        censored=np.asarray([censored], bool),
+        mood_code=np.asarray([mood_code], int),
+        trial_idx=np.asarray([0], int),
+        dt=0.05,
+    )
+
+
+def _ragged_two_trial_design():
+    """A Design with a 3-bin lick trial (Impulsive) and a 200-bin censored trial
+    (StimSens). Returns (design, theta, param_spec)."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"),
+                       state_terms=("v", "z", "u"))
+    # theta laid out as [v_Imp, v_Stim, z_Imp, z_Stim, u_Imp, u_Stim]
+    theta = np.array([1.2, 0.8, -2.0, -2.5, 0.5, 0.3])
+    rng = np.random.default_rng(0)
+    A_short = rng.standard_normal(3)
+    phi_short = rng.random(3)
+    A_long = rng.standard_normal(200)
+    phi_long = rng.random(200)
+    design = dlg.Design(
+        A=[A_short, A_long],
+        phi=[phi_short, phi_long],
+        event_bin=np.asarray([2, 199], int),       # n_bins - 1
+        lick=np.asarray([1, 0], int),
+        censored=np.asarray([False, True], bool),
+        mood_code=np.asarray([0, 1], int),          # Impulsive, StimSens
+        trial_idx=np.asarray([10, 20], int),
+        dt=0.05,
+    )
+    return design, theta, ps
+
+
+# ── (a) Layout-invariance ───────────────────────────────────────────────────
+def test_paramspec_n_params_two_moods_three_dials():
+    """2 moods x 3 per-mood dials -> n_params == 6."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"),
+                       state_terms=("v", "z", "u"))
+    assert ps.n_params() == 6
+
+
+def test_paramspec_value_layout_invariant_to_state_terms_order():
+    """`value(theta, dial, mood)` reads the correct slot regardless of the order
+    in which dials appear in `state_terms`/`dials`. We build a theta for each
+    ordering carrying *named* per-mood values and assert the read-back matches."""
+    moods = ("Impulsive", "StimSens")
+    # canonical per-(dial,mood) values we want value(...) to return
+    truth = {
+        ("v", "Impulsive"): 1.1, ("v", "StimSens"): 1.9,
+        ("z", "Impulsive"): -2.0, ("z", "StimSens"): -2.7,
+        ("u", "Impulsive"): 0.4, ("u", "StimSens"): 0.6,
+    }
+
+    def build_theta(ps):
+        theta = np.empty(ps.n_params())
+        for dial in ps.dials:
+            off = ps._offset(dial)
+            for j, mood in enumerate(ps.moods):
+                theta[off + j] = truth[(dial, mood)]
+        return theta
+
+    for order in (("v", "z", "u"), ("u", "z", "v")):
+        ps = dlg.ParamSpec(moods=moods, dials=order, state_terms=order)
+        theta = build_theta(ps)
+        for (dial, mood), want in truth.items():
+            got = ps.value(theta, dial, mood)
+            assert abs(float(got) - want) < 1e-12, (order, dial, mood)
+
+
+def test_paramspec_value_reordered_reads_correct_slot_directly():
+    """Concretely: with state_terms=('u','z','v'), the v-block lives LAST. A theta
+    whose last two entries are (v_Imp, v_Stim) must be read by value(...,'v',...)."""
+    moods = ("Impulsive", "StimSens")
+    ps = dlg.ParamSpec(moods=moods, dials=("u", "z", "v"), state_terms=("u", "z", "v"))
+    # layout: [u_Imp, u_Stim, z_Imp, z_Stim, v_Imp, v_Stim]
+    theta = np.array([0.4, 0.6, -2.0, -2.7, 1.1, 1.9])
+    assert abs(ps.value(theta, "v", "Impulsive") - 1.1) < 1e-12
+    assert abs(ps.value(theta, "v", "StimSens") - 1.9) < 1e-12
+    assert abs(ps.value(theta, "u", "Impulsive") - 0.4) < 1e-12
+    assert abs(ps.value(theta, "z", "StimSens") - (-2.7)) < 1e-12
+
+
+def test_paramspec_shared_dial_when_not_in_state_terms():
+    """A dial absent from state_terms is shared across moods -> 1 slot, both moods
+    read the same value, and n_params shrinks accordingly."""
+    moods = ("Impulsive", "StimSens")
+    # only z is per-mood; v and u are shared -> 1 + 2 + 1 = 4 params
+    ps = dlg.ParamSpec(moods=moods, dials=("v", "z", "u"), state_terms=("z",))
+    assert ps.n_params() == 4
+    # layout: [v_shared, z_Imp, z_Stim, u_shared]
+    theta = np.array([1.3, -2.0, -2.7, 0.5])
+    assert abs(ps.value(theta, "v", "Impulsive") - 1.3) < 1e-12
+    assert abs(ps.value(theta, "v", "StimSens") - 1.3) < 1e-12   # shared
+    assert abs(ps.value(theta, "u", "Impulsive") - 0.5) < 1e-12
+    assert abs(ps.value(theta, "z", "Impulsive") - (-2.0)) < 1e-12
+    assert abs(ps.value(theta, "z", "StimSens") - (-2.7)) < 1e-12
+
+
+def test_paramspec_per_trial_matches_value():
+    """per_trial(theta, mood_code) returns (v,z,u) arrays whose entries match
+    value(theta, dial, mood) for the mood each trial belongs to."""
+    moods = ("Impulsive", "StimSens")
+    ps = dlg.ParamSpec(moods=moods, dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    theta = np.array([1.2, 0.8, -2.0, -2.5, 0.5, 0.3])
+    mood_code = np.array([0, 1, 1, 0])
+    v, z, u = ps.per_trial(theta, mood_code)
+    for i, m in enumerate(mood_code):
+        mood = moods[m]
+        assert abs(v[i] - ps.value(theta, "v", mood)) < 1e-12
+        assert abs(z[i] - ps.value(theta, "z", mood)) < 1e-12
+        assert abs(u[i] - ps.value(theta, "u", mood)) < 1e-12
+
+
+# ── (b) Ragged-safety ───────────────────────────────────────────────────────
+def test_hazard_nll_ragged_equals_sum_of_singletons():
+    """NLL of a mixed 3-bin/200-bin Design == sum of the two single-trial NLLs
+    (built via design.subset), and is finite."""
+    design, theta, ps = _ragged_two_trial_design()
+    total = dlg.hazard_nll(theta, design, ps)
+    nll0 = dlg.hazard_nll(theta, design.subset([0]), ps)
+    nll1 = dlg.hazard_nll(theta, design.subset([1]), ps)
+    assert np.isfinite(total)
+    assert np.isfinite(nll0) and np.isfinite(nll1)
+    assert abs(total - (nll0 + nll1)) < 1e-9
+
+
+def test_hazard_nll_matches_hand_computed_lick_trial():
+    """For a single 3-bin lick trial, hazard_nll equals the closed-form
+    -(sum log(1-h[:K]) + log(h[K])) with lp = z + v*A + u*phi."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    theta = np.array([1.2, 0.8, -2.0, -2.5, 0.5, 0.3])
+    A = np.array([0.1, 0.2, 0.4])
+    phi = np.array([0.3, 0.6, 0.9])
+    design = _design_one_trial(A, phi, event_bin=2, lick=1, censored=False, mood_code=0)
+    # mood 0 = Impulsive -> v=1.2, z=-2.0, u=0.5
+    lp = -2.0 + 1.2 * A + 0.5 * phi
+    h = np.clip(dlg.hazard_from_lp(lp), 1e-12, 1 - 1e-12)
+    K = 2
+    expected = -(np.sum(np.log1p(-h[:K])) + np.log(h[K]))
+    assert abs(dlg.hazard_nll(theta, design, ps) - expected) < 1e-9
+
+
+def test_hazard_nll_matches_hand_computed_censored_trial():
+    """For a single censored trial, hazard_nll equals
+    -(sum log(1-h[:K]) + log(1-h[K]))."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    theta = np.array([1.2, 0.8, -2.0, -2.5, 0.5, 0.3])
+    A = np.array([0.1, 0.2, 0.4, 0.5])
+    phi = np.array([0.3, 0.6, 0.9, 1.0])
+    design = _design_one_trial(A, phi, event_bin=3, lick=0, censored=True, mood_code=1)
+    # mood 1 = StimSens -> v=0.8, z=-2.5, u=0.3
+    lp = -2.5 + 0.8 * A + 0.3 * phi
+    h = np.clip(dlg.hazard_from_lp(lp), 1e-12, 1 - 1e-12)
+    K = 3
+    expected = -(np.sum(np.log1p(-h[:K])) + np.log1p(-h[K]))
+    assert abs(dlg.hazard_nll(theta, design, ps) - expected) < 1e-9
+
+
+def test_hazard_nll_is_finite_and_nonnegative_for_reasonable_theta():
+    """A well-conditioned theta yields a finite, non-negative NLL."""
+    design, theta, ps = _ragged_two_trial_design()
+    val = dlg.hazard_nll(theta, design, ps)
+    assert np.isfinite(val)
+    assert val >= 0.0
+
+
+# ── (c) L2 regularisation ───────────────────────────────────────────────────
+def test_l2_zero_penalty_when_seed_equals_theta():
+    """l2>0 with seed_theta == theta adds exactly 0 to the NLL."""
+    design, theta, ps = _ragged_two_trial_design()
+    base = dlg.hazard_nll(theta, design, ps)
+    with_l2 = dlg.hazard_nll(theta, design, ps, l2=10.0, seed_theta=theta.copy())
+    assert abs(with_l2 - base) < 1e-9
+
+
+def test_l2_adds_exact_penalty_when_seed_differs():
+    """l2>0 with seed_theta != theta increases the NLL by exactly
+    l2 * sum((theta - seed)**2)."""
+    design, theta, ps = _ragged_two_trial_design()
+    base = dlg.hazard_nll(theta, design, ps)
+    seed = theta + np.array([0.1, -0.2, 0.3, 0.0, -0.1, 0.05])
+    l2 = 2.5
+    with_l2 = dlg.hazard_nll(theta, design, ps, l2=l2, seed_theta=seed)
+    expected_penalty = l2 * np.sum((theta - seed) ** 2)
+    assert with_l2 > base
+    assert abs((with_l2 - base) - expected_penalty) < 1e-9
+
+
+def test_l2_no_penalty_without_seed():
+    """l2>0 but seed_theta None -> no penalty (penalty needs a reference point)."""
+    design, theta, ps = _ragged_two_trial_design()
+    base = dlg.hazard_nll(theta, design, ps)
+    with_l2 = dlg.hazard_nll(theta, design, ps, l2=5.0, seed_theta=None)
+    assert abs(with_l2 - base) < 1e-9
+
+
+def test_hazard_nll_returns_python_float():
+    """hazard_nll returns a plain Python float (scipy.minimize requires it)."""
+    design, theta, ps = _ragged_two_trial_design()
+    val = dlg.hazard_nll(theta, design, ps)
+    assert isinstance(val, float)

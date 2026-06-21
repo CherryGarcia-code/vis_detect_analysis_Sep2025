@@ -251,3 +251,80 @@ def build_design(trial_evidence_df, state_labels, mu, sigma, dt=0.05,
         trial_idx=np.asarray(trial_idx, int),
         dt=float(dt),
     )
+
+
+# ── Engine-A parameter layout (Task 1.4) — ParamSpec (contract §A.4) ──────────
+@dataclass(frozen=True)
+class ParamSpec:
+    """Declarative ``theta`` <-> dial/mood mapping (contract §A.4).
+
+    Owns the layout so no downstream task hardcodes parameter indices. Three
+    dials -- ``v`` (sharpness), ``z`` (itchiness/caution), ``u`` (timing
+    amplitude) -- each carries a per-mood term when listed in ``state_terms``,
+    otherwise it is shared across moods (one slot). ``leak_tau`` and
+    ``urgency_sigma`` are FIXED (not fitted) and live here so the Design and the
+    likelihood agree on them.
+    """
+    moods: tuple = ("Impulsive", "StimSens")
+    dials: tuple = ("v", "z", "u")
+    state_terms: tuple = ("v", "z", "u")     # which dials carry a per-mood term
+    rectification: str = "signed"
+    leak_tau: float = 0.27
+    urgency_sigma: float = 0.8               # FIXED seconds
+
+    def _len(self, dial):
+        return len(self.moods) if dial in self.state_terms else 1
+
+    def n_params(self):
+        return sum(self._len(d) for d in self.dials)
+
+    def _offset(self, dial):
+        off = 0
+        for d in self.dials:
+            if d == dial:
+                return off
+            off += self._len(d)
+        raise KeyError(dial)
+
+    def value(self, theta, dial, mood):
+        off = self._offset(dial)
+        return theta[off + self.moods.index(mood)] if dial in self.state_terms else theta[off]
+
+    def per_trial(self, theta, mood_code):
+        """mood_code: int array indexing self.moods. Returns (v, z, u) per-trial arrays."""
+        out = {}
+        for dial in ("v", "z", "u"):
+            off = self._offset(dial)
+            if dial in self.state_terms:
+                vals = np.asarray([theta[off + m] for m in mood_code])
+            else:
+                vals = np.full(len(mood_code), theta[off])
+            out[dial] = vals
+        return out["v"], out["z"], out["u"]
+
+
+# ── Engine-A likelihood (Task 1.4) — closed-form censored NLL (contract §A.6) ─
+def hazard_nll(theta, design, param_spec, l2=0.0, seed_theta=None):
+    """Closed-form censored negative log-likelihood (contract §A.6).
+
+    Per trial the linear predictor is ``lp = z + v*A + u*phi`` and the per-bin
+    lick hazard is ``h = inv_cloglog(lp)``. A lick in bin ``K`` contributes
+    ``h_K * prod_{k<K}(1-h_k)``; a censored (no-lick / Miss) trial, right-censored
+    at ``K``, contributes ``prod_{k<=K}(1-h_k)``. ``l2>0`` with a ``seed_theta``
+    adds a ridge penalty toward the seed (used for L2-seeded backward fits).
+    """
+    v, z, u = param_spec.per_trial(theta, design.mood_code)
+    nll = 0.0
+    for i in range(len(design)):
+        A, phi = design.A[i], design.phi[i]
+        K = int(design.event_bin[i])                     # == len(A) - 1
+        lp = z[i] + v[i] * A + u[i] * phi                # linear predictor, len == K+1
+        h = np.clip(hazard_from_lp(lp), 1e-12, 1 - 1e-12)
+        log_surv = np.sum(np.log1p(-h[:K]))              # log Prod_{k<K}(1-h_k)
+        if design.lick[i] == 1 and not design.censored[i]:
+            nll -= log_surv + np.log(h[K])               # event in bin K
+        else:
+            nll -= log_surv + np.log1p(-h[K])            # survived through bin K (censored)
+    if l2 > 0 and seed_theta is not None:
+        nll += float(l2) * np.sum((np.asarray(theta) - np.asarray(seed_theta)) ** 2)
+    return float(nll)
