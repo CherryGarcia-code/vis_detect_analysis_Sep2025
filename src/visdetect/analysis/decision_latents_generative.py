@@ -31,6 +31,19 @@ LEAK_TAU_S = 0.27                   # default leak time-constant (s)
 LEAK_TAU_SWEEP = (0.15, 0.27, 0.40)  # leak sweep ("is tau learned" -> B1)
 
 
+# ── Engine-A math (Task 1.2) — cloglog hazard link (contract §A.1) ───────────
+def hazard_from_lp(lp):
+    """Inverse cloglog link: h = 1 - exp(-exp(lp)), numerically stable, h in (0,1)."""
+    exp_lp = np.exp(np.clip(lp, -30.0, 30.0))
+    return -np.expm1(-exp_lp)                      # 1 - exp(-exp(lp))
+
+
+def lp_from_hazard(h):
+    """Forward cloglog link: lp = log(-log(1-h))."""
+    h = np.clip(np.asarray(h, float), 1e-12, 1 - 1e-12)
+    return np.log(-np.log1p(-h))
+
+
 def _session_column(inventory_df: pd.DataFrame) -> str:
     """Return the session-id column name (accept `session` or `session_name`)."""
     for cand in ("session", "session_name"):
@@ -142,3 +155,10 @@ def leaky_accumulate(evidence, dt=0.05, leak_tau=0.27, rectification="signed",
         acc = decay * acc + r[k] * dt
         A[k] = acc
     return A
+
+
+# ── Engine-A math (Task 1.2) — temporal-expectation bump (contract §A.3) ─────
+def expectation_bump(t_grid, mu, sigma):
+    """Gaussian temporal-expectation profile, peak 1.0 at mu (sigma FIXED, not fitted)."""
+    t_grid = np.asarray(t_grid, float)
+    return np.exp(-0.5 * ((t_grid - mu) / float(sigma)) ** 2)

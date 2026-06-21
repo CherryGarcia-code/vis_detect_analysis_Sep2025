@@ -265,3 +265,97 @@ def test_output_shape_and_dtype():
     assert isinstance(A, np.ndarray)
     assert A.shape == (17,)
     assert np.issubdtype(A.dtype, np.floating)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 1.2: cloglog hazard link + temporal-expectation (urgency) bump
+# (contract §A.1 + §A.3)
+# ════════════════════════════════════════════════════════════════════════════
+# Ground-truth tests (not structural): the link's forward/inverse must round-trip,
+# the inverse must stay a valid probability (0,1) across an extreme linear-predictor
+# range without overflow, and the urgency bump must be a Gaussian peaked at 1.0 at
+# mu and symmetric about it.
+
+
+def test_hazard_lp_roundtrip_over_hazard_grid():
+    """hazard_from_lp(lp_from_hazard(h)) ~= h for h in {0.01, ..., 0.99}."""
+    h = np.linspace(0.01, 0.99, 99)
+    recovered = dlg.hazard_from_lp(dlg.lp_from_hazard(h))
+    assert np.allclose(recovered, h, atol=1e-9)
+
+
+def test_hazard_lp_roundtrip_scalar():
+    """Round-trip works for scalar inputs too (not just arrays)."""
+    for h in (0.01, 0.1, 0.5, 0.9, 0.99):
+        assert abs(float(dlg.hazard_from_lp(dlg.lp_from_hazard(h))) - h) < 1e-9
+
+
+def test_hazard_from_lp_stays_in_open_unit_interval_no_overflow():
+    """For lp in [-50, 50] the hazard is a valid probability with NO overflow.
+
+    The brief's load-bearing guarantee is "no overflow": every value is finite
+    (the clip to [-30,30] inside exp prevents inf/nan) and a lower bound > 0.
+    For lp above ~3.7 the inverse cloglog 1 - exp(-exp(lp)) rounds to exactly
+    1.0 in float64 (a genuine floating-point limit, NOT overflow), so the upper
+    bound is the closed (0,1] rather than the open interval at the extreme tail.
+    Strict (0,1) is asserted over the non-saturating range below."""
+    lp = np.linspace(-50.0, 50.0, 1001)
+    h = dlg.hazard_from_lp(lp)
+    assert np.all(np.isfinite(h))           # no overflow -> no inf/nan
+    assert np.all(h > 0.0)                  # lower tail never underflows to 0
+    assert np.all(h <= 1.0)                 # valid probability (saturates at 1.0)
+
+
+def test_hazard_from_lp_strictly_open_in_nonsaturating_range():
+    """Within the range where float64 does not saturate, the hazard is strictly
+    inside the open interval (0,1)."""
+    lp = np.linspace(-50.0, 3.0, 1001)      # 1 - exp(-exp(3)) ~ 1 - 2e-9 < 1.0
+    h = dlg.hazard_from_lp(lp)
+    assert np.all(h > 0.0)
+    assert np.all(h < 1.0)
+
+
+def test_hazard_from_lp_monotone_nondecreasing():
+    """The inverse-cloglog link is monotone non-decreasing in the linear
+    predictor (strictly increasing until it saturates at 1.0 in float64)."""
+    lp = np.linspace(-10.0, 10.0, 200)
+    h = dlg.hazard_from_lp(lp)
+    assert np.all(np.diff(h) >= 0)          # never decreases
+    # strictly increasing over the pre-saturation range
+    lp2 = np.linspace(-5.0, 3.0, 200)
+    assert np.all(np.diff(dlg.hazard_from_lp(lp2)) > 0)
+
+
+def test_hazard_from_lp_matches_closed_form_in_safe_range():
+    """In a numerically safe lp range, hazard equals the textbook 1-exp(-exp(lp))."""
+    lp = np.linspace(-5.0, 2.0, 50)
+    expected = 1.0 - np.exp(-np.exp(lp))
+    assert np.allclose(dlg.hazard_from_lp(lp), expected, atol=1e-12)
+
+
+def test_expectation_bump_peaks_one_at_mu():
+    """The urgency bump is exactly 1.0 at t == mu (Gaussian peak)."""
+    t_grid = np.arange(0, 40) * 0.05
+    mu, sigma = 1.0, 0.8
+    phi = dlg.expectation_bump(t_grid, mu, sigma)
+    k = int(np.argmin(np.abs(t_grid - mu)))     # bin nearest mu (here exactly t=1.0)
+    assert abs(phi[k] - 1.0) < 1e-12
+    assert np.max(phi) <= 1.0 + 1e-12           # peak never exceeds 1.0
+
+
+def test_expectation_bump_is_symmetric_about_mu():
+    """phi(mu - d) == phi(mu + d): the bump is symmetric about its peak."""
+    mu, sigma = 1.2, 0.5
+    offsets = np.array([0.1, 0.3, 0.7, 1.5])
+    left = dlg.expectation_bump(mu - offsets, mu, sigma)
+    right = dlg.expectation_bump(mu + offsets, mu, sigma)
+    assert np.allclose(left, right, atol=1e-12)
+
+
+def test_expectation_bump_decays_with_distance():
+    """The bump decreases monotonically as |t - mu| grows."""
+    mu, sigma = 1.0, 0.8
+    dist = np.linspace(0.0, 4.0, 50)
+    phi = dlg.expectation_bump(mu + dist, mu, sigma)
+    assert np.all(np.diff(phi) < 0)             # strictly decreasing away from mu
+    assert abs(phi[0] - 1.0) < 1e-12            # peak at distance 0
