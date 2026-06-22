@@ -125,7 +125,11 @@ for S in $SESSIONS; do
 done
 
 # ── 3) waveform extraction -> UM input on ceph  (resumable via _extraction_complete.txt) ──
+# --processed-root is REQUIRED on the cluster: the extractor otherwise defaults to a
+# hardcoded Windows X:\ path that doesn't exist on Linux -> every session skipped
+# "No binary data found" (it now exits nonzero if zero sessions yield waveforms).
 python scripts/analysis/prep_unitmatch_full_trial_waveforms.py --subject "$SUBJECT" \
+  --processed-root "$PROC" \
   --manifest "$MANIFEST" --output "$UM_INPUT" --n_workers "$NWORKERS" \
   || { echo "!!! EXTRACT FAIL -- aborting"; exit 1; }
 

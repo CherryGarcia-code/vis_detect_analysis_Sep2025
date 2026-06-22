@@ -72,18 +72,31 @@ def _resolve_ks_dirs(session_dir):
     return probe_dir, ks_out_dir, bin_path
 
 
-def get_session_paths(manifest_path, subject="BG_046"):
+def get_session_paths(manifest_path, subject="BG_046", processed_root=None):
     """
     Read the manifest to retrieve session info.
     We need:
     1. Session Name
     2. Path to pickle
     3. Path to Kilosort Raw Data (probe folder + KS-output folder)
+
+    ``processed_root`` overrides where the per-subject Processed-data folders
+    (each holding ``Kilosort&Phy/<probe>/*.ap.bin``) live. Pass the native ceph
+    path when running on the cluster (e.g.
+    ``/ceph/.../wEPhys/<subject>/Processed data``) -- there is NO ``X:`` drive on
+    Linux, so the default below resolves to a nonexistent path and every session
+    is skipped "No binary data found". If omitted it falls back to the Windows
+    ``X:`` mount for local BG_046 runs.
     """
     df = pd.read_csv(manifest_path, dtype={'session_name': str})
 
-    # Raw Kilosort locations live on X: (== /ceph cluster mount).
-    base_raw_dir = Path(r"X:\public\projects\BeJG_20230130_VisDetect\wEPhys") / subject / "Processed data"
+    # Per-subject Processed-data root holding Kilosort&Phy/<probe>/*.ap.bin.
+    # On the cluster this MUST be the native ceph path (passed via
+    # --processed-root); locally it defaults to the X: mount.
+    if processed_root:
+        base_raw_dir = Path(processed_root)
+    else:
+        base_raw_dir = Path(r"X:\public\projects\BeJG_20230130_VisDetect\wEPhys") / subject / "Processed data"
 
     sessions = []
     for _, row in df.iterrows():
@@ -347,6 +360,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prepare full-trial waveforms for UnitMatch")
     parser.add_argument('--subject', type=str, default='BG_046',
                         help='Subject ID; sets the X: Processed-data root')
+    parser.add_argument('--processed-root', type=str, default=None,
+                        help='Per-subject Processed-data root holding '
+                             'Kilosort&Phy/<probe>/*.ap.bin. Pass the native ceph path '
+                             'on the cluster (no X: drive on Linux); defaults to the X: '
+                             'mount for local BG_046 runs.')
     parser.add_argument('--manifest', type=str, default='data/BG_046_staging_manifest.csv',
                         help='Path to manifest CSV (needs session_name + path columns)')
     parser.add_argument('--output', type=str, default='data/unit_match/input/BG_046',
@@ -364,7 +382,8 @@ if __name__ == "__main__":
         print(f"Manifest not found: {manifest_path}")
         sys.exit(1)
 
-    sessions = get_session_paths(manifest_path, subject=args.subject)
+    sessions = get_session_paths(manifest_path, subject=args.subject,
+                                 processed_root=args.processed_root)
     print(f"Found {len(sessions)} sessions in manifest.")
     
     # Filter if sessions specified
@@ -403,7 +422,18 @@ if __name__ == "__main__":
         process_session(sess, output_path, args.n_workers,
                         skip_existing=not args.no_skip_existing)
     
+    # Fail LOUD if nothing was produced. The extractor prints "Skipping ...:
+    # No binary data found." per session and would otherwise exit 0 even when
+    # EVERY session was skipped (e.g. wrong --processed-root => no .ap.bin found),
+    # making a total no-op look like success ("PREP DONE"). UnitMatch needs >=1
+    # session with waveforms, so a zero-yield run must be a hard error.
+    done = [str(s['name']) for s in sessions
+            if (output_path / str(s['name']) / "_extraction_complete.txt").exists()]
     print(f"\n{'='*60}")
-    print("All sessions processed!")
+    print(f"{len(done)}/{len(sessions)} sessions have extracted waveforms.")
+    if not done:
+        print("ERROR: NO sessions produced waveforms. Check --processed-root points at "
+              "the dir holding Kilosort&Phy/<probe>/*.ap.bin (ceph path on the cluster).")
+        sys.exit(2)
     print(f"Waveforms saved to: {output_path}")
     print(f"{'='*60}")
