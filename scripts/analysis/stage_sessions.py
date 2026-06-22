@@ -55,6 +55,7 @@ src_dir = os.path.join(repo_root, 'src')
 
 from visdetect.core.session import load_session
 from visdetect.analysis.behavior import compute_session_performance
+from visdetect.analysis.config import session_date_key
 
 def stage_sessions(subject_dir, subject_name, output_csv, dprime_threshold=0.8, skip_dprime_gate=False):
     """Generate staging manifest with QC gates including optional d' threshold.
@@ -206,13 +207,15 @@ def stage_sessions(subject_dir, subject_name, output_csv, dprime_threshold=0.8, 
     WINDOW_SIZE      = 4
     REQUIRED_ABOVE   = 3
 
-    # Parse dates for chronological ordering
+    # Parse dates for chronological ordering. Use the subject-aware parser so
+    # 6-digit DDMMYY tokens (BG_031/038/039) and prefixed/suffixed tokens sort
+    # correctly — the old zfill(8)+strptime sent 6-digit names to datetime.min,
+    # scrambling the chronological staging.
     def parse_date_for_sort(date_str):
-        s = str(date_str).zfill(8)
         try:
-            return datetime.strptime(s, '%d%m%Y')
-        except ValueError:
-            return datetime.min
+            return session_date_key(date_str)
+        except Exception:
+            return (0, 0, 0)
 
     # Mark QC failures as Excluded
     df['stage'] = ''

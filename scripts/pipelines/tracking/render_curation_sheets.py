@@ -83,6 +83,9 @@ def main() -> int:
     ap.add_argument("--uids", type=int, nargs="*", default=None,
                     help="render only these curated UIDs (within the tier)")
     ap.add_argument("--max-uids", type=int, default=None)
+    ap.add_argument("--no-pair-scores", action="store_true",
+                    help="skip the UM match-probability bar (avoids loading the large "
+                         "prob_matrix; use to keep heavy I/O off the X: mount)")
     args = ap.parse_args()
     subj = args.subject
     cur_dir = sjp.curation_out_dir(subj)
@@ -156,8 +159,12 @@ def main() -> int:
 
     uid_to_sessions = {u: sorted(ks.keys(), key=sjp.session_date_key)
                        for u, ks in uid_to_ks.items()}
-    pair_scores = _pair_scores_from_paths(args.prob_matrix, args.prob_index,
-                                          uid_to_sessions, uid_to_ks)
+    if args.no_pair_scores:
+        print("  --no-pair-scores: skipping prob-matrix (no X: heavy read)", flush=True)
+        pair_scores = {}
+    else:
+        pair_scores = _pair_scores_from_paths(args.prob_matrix, args.prob_index,
+                                              uid_to_sessions, uid_to_ks)
 
     n = 0
     for u, iv in intermediates.items():
