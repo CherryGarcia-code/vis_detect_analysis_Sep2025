@@ -155,6 +155,13 @@ COL_STIM_FRAME_TIME = "frame_time"  # NEURAL-clock per-frame time (NOT vbl, whic
 COL_VALVE = "Valve_L_rise"        # per-trial reward (valve open) time
 COL_AIRPUFF = "Air_puff_rise"     # per-trial air-puff onset (NaN when none)
 COL_LICK_TIMES = "lick_times"     # per-trial array of lick times (object column)
+# PER-TRIAL per-frame arrays in trials.parquet (object columns). These are the
+# RELIABLE source for the TF regressor: the per-frame TF is tagged 'B' (baseline
+# grating), 'C' (change), 'G' (gray, TF=0), 'P' (probe). The flat ks.stim table
+# has the same column names but an unreliable trial_idx, so per-trial arrays win.
+COL_FRAME_TF = "TF"               # per-trial per-frame TF (Hz) array
+COL_FRAME_TIME = "frame_time"     # per-trial per-frame neural-clock time array
+COL_FRAME_TAG = "tag"             # per-trial per-frame phase tag (B/C/G/P/E)
 
 # Snap-to grid for the change ratio (matches tf_glm.CHANGE_SIZES).
 _CHANGE_SIZES = (1.0, 1.25, 1.35, 1.5, 2.0, 4.0)
@@ -189,6 +196,32 @@ def _resample_to_bins(times, values, bin_edges, bin_s, fill=0.0):
     nz = cnt > 0
     out[nz] = acc[nz] / cnt[nz]
     return out
+
+
+def _baseline_tf_and_phase(tf_arr, ft_arr, tag_arr, edges, bs, change_time):
+    """Baseline-only TF (Hz) per bin + reconstructed grating phase (deg).
+
+    Mirrors the authors' ``BaseTFFrames_to_ms.m``: use only the baseline grating
+    frames (tag=='B'; gray 'G'/TF=0 and change 'C' frames excluded), resampled
+    onto this trial's ``edges``; TF after change onset is zeroed (baseline-only).
+    Phase is reconstructed as the cumulative integral of TF (cycles) * 360 mod
+    360 over the baseline grating (phase is absent from the export). ``tf_bins``
+    stays LINEAR Hz (assemble_design applies the log2/0.25 octave transform);
+    phase is NaN outside the baseline grating.
+    """
+    if tag_arr is not None and tag_arr.size:
+        m = (tag_arr == "B") & np.isfinite(tf_arr) & (tf_arr > 0)
+    else:
+        m = np.isfinite(tf_arr) & (tf_arr > 0)   # nonzero grating frames
+    tf_bins = _resample_to_bins(ft_arr[m], tf_arr[m], edges, bs, fill=0.0)
+    if np.isfinite(change_time):
+        tf_bins[edges >= change_time] = 0.0      # defensive: baseline-only
+    cyc = np.where(tf_bins > 0, tf_bins * bs, 0.0)
+    phase = (np.cumsum(cyc) * 360.0) % 360.0
+    phase_bins = np.full(edges.size, np.nan)
+    grating = tf_bins > 0
+    phase_bins[grating] = phase[grating]
+    return tf_bins, phase_bins
 
 
 def _snap_change_size(ratio: float) -> float:
@@ -314,12 +347,23 @@ def khilkevich_trial_regressors(
     has_lick_col = COL_LICK_TIMES in tr.columns
     lick_col = tr[COL_LICK_TIMES].to_numpy(object) if has_lick_col else None
 
-    # Per-frame stimulus signal (neural-clock frame_time + linear TF).
-    stim = ks.stim
-    s_t = (stim[COL_STIM_FRAME_TIME].to_numpy(float)
-           if COL_STIM_FRAME_TIME in stim.columns else stim.iloc[:, 0].to_numpy(float))
-    s_tf = (stim[COL_TF_COL].to_numpy(float)
-            if COL_TF_COL in stim.columns else stim.iloc[:, 1].to_numpy(float))
+    # Per-frame stimulus signal: prefer the PER-TRIAL frame arrays in
+    # trials.parquet (TF/frame_time/tag), which carry the baseline grating
+    # fluctuations tagged 'B'. Fall back to the flat ks.stim table only if those
+    # columns are absent (older exports).
+    tf_frames = (tr[COL_FRAME_TF].to_numpy(object)
+                 if COL_FRAME_TF in tr.columns else None)
+    ft_frames = (tr[COL_FRAME_TIME].to_numpy(object)
+                 if COL_FRAME_TIME in tr.columns else None)
+    tag_frames = (tr[COL_FRAME_TAG].to_numpy(object)
+                  if COL_FRAME_TAG in tr.columns else None)
+    has_frame_arrays = tf_frames is not None and ft_frames is not None
+    if not has_frame_arrays:
+        stim = ks.stim
+        s_t = (stim[COL_STIM_FRAME_TIME].to_numpy(float)
+               if COL_STIM_FRAME_TIME in stim.columns else stim.iloc[:, 0].to_numpy(float))
+        s_tf = (stim[COL_TF_COL].to_numpy(float)
+                if COL_TF_COL in stim.columns else stim.iloc[:, 1].to_numpy(float))
 
     # Running wheel: col 0 = time (neural clock), col 1 = signed speed.
     if ks.running.size:
@@ -343,7 +387,23 @@ def khilkevich_trial_regressors(
             # Degenerate trial: emit an empty regressor so trial indexing holds.
             t1 = t0 + bs if np.isfinite(t0) else 0.0
         edges = trial_bin_edges(t0, t1, bs)
-        tf_bins = _resample_to_bins(s_t, s_tf, edges, bs, fill=0.0)
+        ct = chg[i] if (i < chg.size and np.isfinite(chg[i])) else np.nan
+        if has_frame_arrays:
+            _tf_i = (np.asarray(tf_frames[i], float).ravel()
+                     if tf_frames[i] is not None else np.zeros(0))
+            _ft_i = (np.asarray(ft_frames[i], float).ravel()
+                     if ft_frames[i] is not None else np.zeros(0))
+            _tag_i = (np.asarray(tag_frames[i]).ravel()
+                      if (tag_frames is not None and tag_frames[i] is not None) else None)
+            _nfr = min(_tf_i.size, _ft_i.size)
+            _tf_i, _ft_i = _tf_i[:_nfr], _ft_i[:_nfr]
+            if _tag_i is not None:
+                _tag_i = _tag_i[:_nfr]
+            tf_bins, phase_bins = _baseline_tf_and_phase(
+                _tf_i, _ft_i, _tag_i, edges, bs, ct)
+        else:
+            tf_bins = _resample_to_bins(s_t, s_tf, edges, bs, fill=0.0)
+            phase_bins = None
         wheel_bins = _resample_to_bins(run_t, run_v, edges, bs, fill=0.0)
 
         if has_lick_col and lick_col[i] is not None and np.ndim(lick_col[i]) > 0:
@@ -355,7 +415,6 @@ def khilkevich_trial_regressors(
         ratio = round(s2[i] / s1[i], 2) if (np.isfinite(s1[i]) and s1[i] != 0
                                             and np.isfinite(s2[i])) else 1.0
         change_size = _snap_change_size(ratio)
-        ct = chg[i] if (i < chg.size and np.isfinite(chg[i])) else np.nan
 
         rew = valve[i] if (i < valve.size and np.isfinite(valve[i])) else np.nan
         if not np.isfinite(rew) and ks.valve.size:
@@ -380,7 +439,7 @@ def khilkevich_trial_regressors(
         trials_regs.append(TrialRegressors(
             t_start=t0, t_end=t1, change_time=ct, change_size=change_size,
             tf_bins=tf_bins, lick_times=lk, reward_time=rew,
-            abort_time=abort_time, wheel_bins=wheel_bins, phase_bins=None,
+            abort_time=abort_time, wheel_bins=wheel_bins, phase_bins=phase_bins,
             motion_bins=motion_bins, pupil_bins=pupil_bins,
             airpuff_time=airpuff_time))
 

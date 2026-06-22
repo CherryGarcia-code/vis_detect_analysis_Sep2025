@@ -71,6 +71,17 @@ class TFGLMConfig:
     # regressors are the nuisance controls the paper's full model carries.
     include_movement: bool = False
     fast_fit: bool = False              # select ridge lambda ONCE/unit (not per outer fold)
+    # ── Faithful Khilkevich full-design options (Jun 2026) ──────────────────
+    # Added to match the authors' published FULL model on their own data, after
+    # a line-by-line diff vs their MATLAB (glmnet standardize=true; an 80x200ms
+    # tiled-baseline nuisance block; a 12-bin grating-phase block). See
+    # scripts/tf_responsiveness/cluster/ and the MEMORY note tf_glm_replication.
+    tf_encoding: str = "log2"           # "log2" (octaves/0.25, faithful) | "linear" (Hz; control)
+    standardize_design: bool = False    # z-score ALL design columns (matches glmnet standardize=true)
+    include_tiled_baseline: bool = False  # 80x200ms baseline tiles (replaces the single time_in_base ramp)
+    tiled_baseline_tile_s: float = 0.2  # tile width (their hardcoded 200 ms)
+    tiled_baseline_span_s: float = 16.0  # tiling span from baseline onset (their 16000 ms)
+    tiled_baseline_min_trials: int = 10  # drop tiles occupied by < this many trials (their penalty x1000)
 
 
 def trial_bin_edges(t_start: float, t_end: float, bin_s: float) -> np.ndarray:
@@ -231,6 +242,39 @@ def _ramp_col(tr, edges, bs):
     return ramp.reshape(-1, 1)
 
 
+def _tiled_baseline_block(trials, per_edges, cfg) -> np.ndarray:
+    """Authors' tiled-baseline nuisance: one-hot over fixed-width (200 ms) tiles
+    since baseline onset, spanning `tiled_baseline_span_s` (16 s => 80 tiles).
+
+    A bin is assigned to tile k = floor((t - t_start) / tile_s) when it lies in
+    the baseline period (t >= t_start and, if a change occurred, t < change_time).
+    Tiles occupied by fewer than `tiled_baseline_min_trials` trials are dropped
+    (the authors crush them with penalty_factor x1000; for a ridge fit, dropping
+    them is the clean equivalent). Replaces the single time-in-baseline ramp.
+    """
+    n_tiles = int(round(cfg.tiled_baseline_span_s / cfg.tiled_baseline_tile_s))
+    tile_s = cfg.tiled_baseline_tile_s
+    idx_parts, trials_per_tile = [], [set() for _ in range(n_tiles)]
+    for ti, (tr, e) in enumerate(zip(trials, per_edges)):
+        since = e - tr.t_start
+        valid = since >= 0
+        if np.isfinite(tr.change_time):
+            valid = valid & (e < tr.change_time)
+        idx = np.floor(since / tile_s).astype(int)
+        idx[~valid] = -1
+        idx[idx >= n_tiles] = -1
+        idx_parts.append(idx)
+        for k in np.unique(idx[idx >= 0]):
+            trials_per_tile[int(k)].add(ti)
+    all_idx = np.concatenate(idx_parts) if idx_parts else np.zeros(0, dtype=int)
+    keep = [k for k in range(n_tiles)
+            if len(trials_per_tile[k]) >= cfg.tiled_baseline_min_trials]
+    block = np.zeros((all_idx.size, len(keep)), dtype=float)
+    for j, k in enumerate(keep):
+        block[all_idx == k, j] = 1.0
+    return block
+
+
 def _blockwise(trials, per_edges, fn):
     blocks = [fn(tr, e) for tr, e in zip(trials, per_edges)]
     ncol = max((b.shape[1] for b in blocks), default=0)
@@ -273,15 +317,20 @@ def assemble_design(trials: List["TrialRegressors"], cfg: TFGLMConfig) -> Design
     #    log2(TF)/0.25 is symmetric (matching the authors' BaseTFFrames_to_ms.m)
     #    and already ~unit-variance, so the tf block is NOT per-column z-scored
     #    below. (design.tf_bins stays LINEAR for pulse_times_from_tf.)
+    _tf_xform = (_tf_octaves if cfg.tf_encoding == "log2"
+                 else (lambda v: np.asarray(v, float).ravel()))  # "linear" control
     _add("tf", _blockwise(trials, per_edges, lambda tr, e: fir_continuous(
-        _tf_octaves(_resize(tr.tf_bins, e.size)), cfg.kern["tf"], bs)))
-    # 2) trial start event
+        _tf_xform(_resize(tr.tf_bins, e.size)), cfg.kern["tf"], bs)))
+    # 2) trial start event (== their baseON)
     _add("trial_start", _blockwise(trials, per_edges, lambda tr, e: fir_event(
         np.array([tr.t_start]), e, cfg.kern["trial_start"], bs)))
-    # 3) time-in-baseline ramp (single graded column: seconds since t_start, 0
-    #    after change; >=1 s region per the paper)
-    _add("time_in_base", _blockwise(trials, per_edges, lambda tr, e:
-        _ramp_col(tr, e, bs)))
+    # 3) baseline nuisance: either the authors' 80x200ms tiled-baseline block
+    #    (faithful) OR our single time-in-baseline ramp (legacy/simplified).
+    if cfg.include_tiled_baseline:
+        _add("tiled_baseline", _tiled_baseline_block(trials, per_edges, cfg))
+    else:
+        _add("time_in_base", _blockwise(trials, per_edges, lambda tr, e:
+            _ramp_col(tr, e, bs)))
     # 4-9) six change onsets by change size
     for cs in CHANGE_SIZES:
         _add(f"change_{cs}", _blockwise(trials, per_edges, lambda tr, e, cs=cs:
@@ -319,26 +368,33 @@ def assemble_design(trials: List["TrialRegressors"], cfg: TFGLMConfig) -> Design
 
     X = np.concatenate(cols, axis=1) if cols else np.zeros((N, 0))
 
-    # Spec §4: standardize the continuous nuisance regressors (wheel, motion,
-    # pupil) to unit variance; leave event/ramp/phase indicators as-is (0/1).
-    # Guard against zero-variance columns — leave them unchanged.
-    # NOTE: the "tf" block is DELIBERATELY EXCLUDED — it is already in z-scored
-    # SD-octave units (log2(TF)/0.25, baseline log2 ~ N(0, 0.25) => ~unit var)
-    # and symmetric; per-column z-scoring would re-center/re-scale each lag and
-    # destroy that symmetric octave encoding.
-    # NOTE: design.tf_bins is left RAW (linear Hz) on purpose — pulse_times_from_tf
-    # reads it for ±SD pulse detection and must see the raw linear-TF signal.
-    for grp in ("wheel", "motion_energy", "pupil"):
-        sl = groups.get(grp)
-        if sl is None:
-            continue
-        block = X[:, sl]
-        mu = block.mean(axis=0)
-        sd = block.std(axis=0)
+    # Column normalization.
+    #  - standardize_design=True: z-score EVERY column to unit variance, matching
+    #    the authors' glmnet standardize=true (which internally standardizes ALL
+    #    predictors, including the TF block, before the ridge-Poisson fit). This
+    #    is required for a faithful replication: under a single shared ridge
+    #    lambda, columns at different raw scales are penalized inconsistently.
+    #  - standardize_design=False (legacy): z-score only the continuous nuisance
+    #    regressors (wheel/motion/pupil); leave events/ramp/phase/tf as-is.
+    # Either way design.tf_bins is left RAW (linear Hz) for pulse_times_from_tf.
+    if cfg.standardize_design:
+        mu = X.mean(axis=0)
+        sd = X.std(axis=0)
         keep = sd >= 1e-8
         if np.any(keep):
-            block[:, keep] = (block[:, keep] - mu[keep]) / sd[keep]
-            X[:, sl] = block
+            X[:, keep] = (X[:, keep] - mu[keep]) / sd[keep]
+    else:
+        for grp in ("wheel", "motion_energy", "pupil"):
+            sl = groups.get(grp)
+            if sl is None:
+                continue
+            block = X[:, sl]
+            mu = block.mean(axis=0)
+            sd = block.std(axis=0)
+            keep = sd >= 1e-8
+            if np.any(keep):
+                block[:, keep] = (block[:, keep] - mu[keep]) / sd[keep]
+                X[:, sl] = block
 
     return DesignMatrix(X=X, col_groups=groups, bin_edges=bin_edges,
                         trial_index=trial_index, tf_bins=tf_bins)

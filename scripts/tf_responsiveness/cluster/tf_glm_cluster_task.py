@@ -59,11 +59,13 @@ MIN_SPIKES = 500  # per-unit spike-count gate (paper-power floor), applied at fi
 
 OUT_COLS = [
     "task_id", "session_rel", "region", "unit", "n_spikes",
-    # movement-controlled TF test (the faithful paper full model)
-    "c2_p_move", "resp_move", "r_full_move", "r_red_move", "c1_r_move",
-    # no-movement TF test (movement regressors ablated)
-    "c2_p_nomove", "resp_nomove", "r_full_nomove", "r_red_nomove", "c1_r_nomove",
-    # TF kernel shape (from the movement-controlled full model)
+    # FAITHFUL full model (movement + tiled baseline + phase + standardized),
+    # log2(TF)/0.25 octave encoding = the authors' published encoding.
+    "c2_p_log2", "resp_log2", "r_full_log2", "r_red_log2", "c1_r_log2",
+    # Same full model with a LINEAR-Hz TF encoding = control for whether any
+    # responsiveness is an encoding artifact.
+    "c2_p_lin", "resp_lin", "r_full_lin", "r_red_lin", "c1_r_lin",
+    # TF kernel shape (from the log2 full model)
     "kernel_peak_t", "kernel_fwhm", "n_folds_used", "fit_s",
 ]
 
@@ -76,11 +78,14 @@ def _cols(design, key):
     return np.arange(*sl.indices(design.X.shape[1]), dtype=int)
 
 
-def _move_cols(design):
-    """Union of motion_energy + pupil + airpuff column indices."""
-    idx = np.concatenate([_cols(design, k)
-                          for k in ("motion_energy", "pupil", "airpuff")])
-    return np.unique(idx).astype(int)
+def _faithful_cfg(tf_encoding):
+    """The authors' full model: movement controls + 80x200ms tiled baseline +
+    12-bin phase + whole-design standardization (glmnet standardize=true),
+    fast_fit, C2 criterion. tf_encoding 'log2' (faithful) or 'linear' (control)."""
+    return TFGLMConfig(
+        include_movement=True, include_phase=True, include_tiled_baseline=True,
+        standardize_design=True, fast_fit=True, responsive_criterion="c2",
+        tf_encoding=tf_encoding)
 
 
 def _done_units(out_csv):
@@ -101,7 +106,7 @@ def _append(out_csv, row):
 
 
 def run_task(targets_csv, task_id, data_root, out_dir,
-             both_models=True, verbose=True):
+             with_linear=True, verbose=True):
     tg = pd.read_csv(targets_csv)
     sel = tg[tg["task_id"] == task_id]
     if not len(sel):
@@ -117,41 +122,29 @@ def run_task(targets_csv, task_id, data_root, out_dir,
     done = _done_units(out_csv)
     todo = [u for u in unit_ids if u not in done]
     print(f"[task {task_id}] {session_rel} | {region} | {len(unit_ids)} units "
-          f"({len(done)} cached, {len(todo)} to fit) | both_models={both_models}",
+          f"({len(done)} cached, {len(todo)} to fit) | with_linear={with_linear}",
           flush=True)
     if not todo:
         return 0
 
-    cfg = TFGLMConfig(include_movement=True, include_phase=False,
-                      fast_fit=True, responsive_criterion="c2")
+    # Build the faithful design ONCE per (session, region) in both encodings.
+    # The non-TF columns are identical (and identically standardized) between
+    # them, so the reduced (TF-zeroed) model is shared across encodings.
+    cfg_log = _faithful_cfg("log2")
     ks = load_khilkevich_session(session_dir)
-    trials, units = khilkevich_trial_regressors(ks, cfg, region=region)
-    design = assemble_design(trials, cfg)
-    folds = make_trial_folds(design.trial_index, cfg.n_folds, cfg.seed)
-
-    X = design.X
-    tf_cols = _cols(design, "tf")
-    mv_cols = _move_cols(design)
+    trials, units = khilkevich_trial_regressors(ks, cfg_log, region=region)
+    d_log = assemble_design(trials, cfg_log)
+    folds = make_trial_folds(d_log.trial_index, cfg_log.n_folds, cfg_log.seed)
+    tf_cols = _cols(d_log, "tf")
     if tf_cols.size == 0:
-        print(f"[task {task_id}] FATAL: no TF columns in design; aborting",
-              flush=True)
+        print(f"[task {task_id}] FATAL: no TF columns in design; aborting", flush=True)
         return 2
-    if both_models and mv_cols.size == 0:
-        print(f"[task {task_id}] WARN: no movement columns found; "
-              f"falling back to movement-only model", flush=True)
-        both_models = False
-
-    def zeroed(*cols):
-        Z = X.copy()
-        for c in cols:
-            if len(c):
-                Z[:, c] = 0.0
-        return Z
-
-    X_red_move = zeroed(tf_cols)              # full_move = X (everything)
-    if both_models:
-        X_full_nomove = zeroed(mv_cols)       # - movement
-        X_red_nomove = zeroed(tf_cols, mv_cols)  # - TF - movement
+    d_lin = assemble_design(trials, _faithful_cfg("linear")) if with_linear else None
+    X_red = d_log.X.copy(); X_red[:, tf_cols] = 0.0   # TF ablated (encoding-free)
+    print(f"[task {task_id}] design X={d_log.X.shape} "
+          f"(tiled_baseline={_cols(d_log,'tiled_baseline').size}, "
+          f"phase={_cols(d_log,'phase').size}, movement="
+          f"{_cols(d_log,'motion_energy').size+_cols(d_log,'pupil').size})", flush=True)
 
     for k, uid in enumerate(todo):
         try:
@@ -159,50 +152,44 @@ def run_task(targets_csv, task_id, data_root, out_dir,
                 print(f"  [task {task_id}] unit {uid} absent from region "
                       f"{region}; skip", flush=True)
                 continue
-            y = count_vector(trials, units[uid], design)
+            y = count_vector(trials, units[uid], d_log)
             ns = float(y.sum())
             if ns < MIN_SPIKES:
                 print(f"  [task {task_id}] unit {uid}: {int(ns)} < {MIN_SPIKES} "
                       f"spk; skip", flush=True)
                 continue
             t0 = time.time()
-            fit_fm = fit_poisson_cv(X, y, cfg, folds)
-            fit_rm = fit_poisson_cv(X_red_move, y, cfg, folds)
-            out_m = identify_tf_responsive(design, y, fit_fm, fit_rm, cfg)
+            red = fit_poisson_cv(X_red, y, cfg_log, folds)
+            full_log = fit_poisson_cv(d_log.X, y, cfg_log, folds)
+            o_log = identify_tf_responsive(d_log, y, full_log, red, cfg_log)
             rec = dict(
                 task_id=task_id, session_rel=session_rel, region=region,
                 unit=uid, n_spikes=ns,
-                c2_p_move=float(out_m["c2_p"]),
-                resp_move=bool(out_m["is_responsive"]),
-                r_full_move=float(out_m["r_full_mean"]),
-                r_red_move=float(out_m["r_red_mean"]),
-                c1_r_move=float(out_m["c1_r"]),
-                kernel_peak_t=float(out_m["kernel_peak_t"]),
-                kernel_fwhm=float(out_m["kernel_fwhm"]),
-                n_folds_used=int(out_m["n_folds_used"]),
+                c2_p_log2=float(o_log["c2_p"]), resp_log2=bool(o_log["is_responsive"]),
+                r_full_log2=float(o_log["r_full_mean"]),
+                r_red_log2=float(o_log["r_red_mean"]), c1_r_log2=float(o_log["c1_r"]),
+                kernel_peak_t=float(o_log["kernel_peak_t"]),
+                kernel_fwhm=float(o_log["kernel_fwhm"]),
+                n_folds_used=int(o_log["n_folds_used"]),
             )
-            if both_models:
-                fit_fn = fit_poisson_cv(X_full_nomove, y, cfg, folds)
-                fit_rn = fit_poisson_cv(X_red_nomove, y, cfg, folds)
-                out_n = identify_tf_responsive(design, y, fit_fn, fit_rn, cfg)
+            if with_linear:
+                full_lin = fit_poisson_cv(d_lin.X, y, cfg_log, folds)
+                o_lin = identify_tf_responsive(d_lin, y, full_lin, red, cfg_log)
                 rec.update(
-                    c2_p_nomove=float(out_n["c2_p"]),
-                    resp_nomove=bool(out_n["is_responsive"]),
-                    r_full_nomove=float(out_n["r_full_mean"]),
-                    r_red_nomove=float(out_n["r_red_mean"]),
-                    c1_r_nomove=float(out_n["c1_r"]),
+                    c2_p_lin=float(o_lin["c2_p"]), resp_lin=bool(o_lin["is_responsive"]),
+                    r_full_lin=float(o_lin["r_full_mean"]),
+                    r_red_lin=float(o_lin["r_red_mean"]), c1_r_lin=float(o_lin["c1_r"]),
                 )
             else:
-                rec.update(c2_p_nomove=np.nan, resp_nomove=False,
-                           r_full_nomove=np.nan, r_red_nomove=np.nan,
-                           c1_r_nomove=np.nan)
+                rec.update(c2_p_lin=np.nan, resp_lin=False, r_full_lin=np.nan,
+                           r_red_lin=np.nan, c1_r_lin=np.nan)
             rec["fit_s"] = round(time.time() - t0, 1)
             _append(out_csv, rec)
             if verbose:
                 print(f"  [task {task_id}] unit {uid} ({k+1}/{len(todo)}): "
-                      f"{int(ns)}spk | move resp={rec['resp_move']} "
-                      f"p={rec['c2_p_move']:.1e} | nomove resp={rec['resp_nomove']} "
-                      f"p={rec['c2_p_nomove'] if both_models else float('nan'):.1e} "
+                      f"{int(ns)}spk | log2 resp={rec['resp_log2']} "
+                      f"dR={rec['r_full_log2']-rec['r_red_log2']:+.4f} "
+                      f"p={rec['c2_p_log2']:.1e} | lin resp={rec['resp_lin']} "
                       f"[{rec['fit_s']}s]", flush=True)
         except Exception as e:  # one bad unit must not kill the whole task
             print(f"  [task {task_id}] unit {uid} FAILED: {e}\n"
@@ -219,12 +206,11 @@ def main(argv=None):
     p.add_argument("--data-root", required=True,
                    help="npx_converted root (ceph on cluster, X: on Windows)")
     p.add_argument("--out-dir", required=True)
-    p.add_argument("--no-both-models", action="store_true",
-                   help="fit ONLY the movement-controlled model (half the fits; "
-                        "skips the no-movement survival comparison)")
+    p.add_argument("--no-linear", action="store_true",
+                   help="skip the linear-encoding control (one fewer fit/unit)")
     a = p.parse_args(argv)
     return run_task(a.targets, a.task_id, a.data_root, a.out_dir,
-                    both_models=not a.no_both_models)
+                    with_linear=not a.no_linear)
 
 
 if __name__ == "__main__":
