@@ -808,7 +808,10 @@ def backward_sweep(anchor_designs, anchors_chrono, param_spec, l2=1.0, seed=0):
     """
     results: dict[str, FitResult] = {}
 
-    # Walk most-expert -> oldest: reverse of the chronological list.
+    # Walk most-expert -> oldest: reverse of the chronological list. Iteration is
+    # over ``anchors_chrono`` ONLY: any EXTRA key in ``anchor_designs`` that is not
+    # a chronological anchor is never visited (so it cannot be fit out of order),
+    # and a missing one is fetched with ``.get`` -> ``None`` (no KeyError).
     prev_theta = None                       # last successfully-fit theta (the seed)
     expert_done = False                     # has the free expert reference been fit?
     for a in reversed(list(anchors_chrono)):
