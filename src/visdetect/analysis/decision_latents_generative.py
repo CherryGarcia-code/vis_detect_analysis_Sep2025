@@ -758,3 +758,74 @@ def build_anchor_designs(sessions, param_spec, mu_by_session, sigma, dt=0.05,
             del sess
             gc.collect()
     return out
+
+
+# ── Engine-A anchored sweep (Task 2.1) — expert-first, backward-seeded ────────
+def backward_sweep(anchor_designs, anchors_chrono, param_spec, l2=1.0, seed=0):
+    """Fit every anchor's generative decision-latents, expert-first and backward-seeded.
+
+    Plain English: learning is a *ramp*, so we fit the mouse at its BEST first —
+    the most-expert anchor — where the three behavioural knobs (sharpness ``v``,
+    itchiness ``z``, timing ``u``) are most identifiable, and use that fit as a
+    template to anchor the earlier, noisier sessions. Concretely:
+
+    1. The MOST-EXPERT anchor (the LAST element of ``anchors_chrono``, i.e. the
+       newest / most-expert session) is fit FIRST and FREE — ``seed_theta=None``
+       and ``l2=0`` — giving the identifiable reference template.
+    2. We then walk BACKWARD in reverse-chronological order (newest-1, ..., oldest).
+       Each anchor is fit with ``seed_theta`` set to its more-expert (newer)
+       neighbour's just-fitted ``theta`` and the passed ``l2`` ridge strength, so
+       the expert template informs — but does not erase — the earlier fits
+       (an L2-seeded backward fit; contract §A.6 ridge-toward-seed).
+
+    A session listed in ``anchors_chrono`` but ABSENT from ``anchor_designs`` (e.g.
+    QC-omitted by :func:`build_anchor_designs`) is SKIPPED: it is not fit and not
+    returned, and the next (earlier) present anchor is seeded from the last
+    successfully-fit ``theta`` — never from a missing one.
+
+    Parameters
+    ----------
+    anchor_designs : dict[str, Design]
+        Per-session ragged Designs to fit (from :func:`build_anchor_designs`).
+        Sessions missing here are skipped.
+    anchors_chrono : list[str]
+        Session ids in CHRONOLOGICAL order (oldest -> newest). The last element is
+        the most-expert anchor (fit first); the sweep walks this list in reverse.
+    param_spec : ParamSpec
+        Parameter layout (``theta`` <-> dial/mood mapping), passed to each
+        :func:`fit_anchor`.
+    l2 : float
+        Ridge strength toward the more-expert neighbour's theta for every
+        backward (non-expert) fit. The expert anchor is always fit with ``l2=0``.
+    seed : int
+        RNG seed for each ``fit_anchor`` random restarts (reproducible).
+
+    Returns
+    -------
+    dict[str, FitResult]
+        ``{session_id: FitResult}`` for every anchor present in
+        ``anchor_designs`` (missing anchors are omitted).
+    """
+    results: dict[str, FitResult] = {}
+
+    # Walk most-expert -> oldest: reverse of the chronological list.
+    prev_theta = None                       # last successfully-fit theta (the seed)
+    expert_done = False                     # has the free expert reference been fit?
+    for a in reversed(list(anchors_chrono)):
+        design = anchor_designs.get(a)
+        if design is None:                  # QC-omitted: skip, keep prev_theta
+            continue
+
+        if not expert_done:
+            # most-expert present anchor: free reference fit (no seed, no ridge)
+            res = fit_anchor(design, param_spec, seed_theta=None, l2=0.0, seed=seed)
+            expert_done = True
+        else:
+            # earlier anchor: L2-seeded from the more-expert neighbour's theta
+            res = fit_anchor(design, param_spec, seed_theta=prev_theta, l2=l2,
+                             seed=seed)
+
+        results[a] = res
+        prev_theta = res.theta
+
+    return results

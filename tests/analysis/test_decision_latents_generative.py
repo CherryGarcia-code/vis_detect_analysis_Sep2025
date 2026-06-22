@@ -1493,3 +1493,272 @@ def test_build_anchor_designs_filters_to_usable_moods_only(_patch_anchor_io):
     # only the usable Impulsive cell's trials survive into the Design
     assert len(design) > 0
     assert all(MAIN_MOODS[mc] == "Impulsive" for mc in design.mood_code)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 2.1: backward_sweep — expert-first, backward-seeded anchored sweep
+# (contract §A.7 fit_anchor/FitResult; §A.10 item 3)
+# ════════════════════════════════════════════════════════════════════════════
+# Ground-truth, RAMP-RECOVERY test (load-bearing, NOT structural).
+#
+# Three synthetic anchors are arranged in CHRONOLOGICAL order (oldest -> mid ->
+# expert) with a TRUE sharpness `v` ramp across learning (v_old < v_mid <
+# v_expert, same for both moods). Each anchor's licks are simulated from its OWN
+# true_theta on an identifiable Design (low baseline itchiness z so trials
+# survive to the post-change evidence excursion — recall Task 1.5: v needs
+# survival to be identifiable). `backward_sweep`:
+#   1. fits the MOST-EXPERT anchor FIRST (last of anchors_chrono), free
+#      (seed_theta=None, l2=0 implicitly) — the identifiable reference template;
+#   2. walks BACKWARD in reverse-chronological order, each anchor L2-seeded from
+#      its more-expert (newer) neighbour's fitted theta.
+# We assert (a) the recovered v ramps in the right direction (v_old < v_mid <
+# v_expert, averaged over moods), and (b) the EXPERT anchor (fit FIRST, free,
+# l2=0) is more faithful to its true v than the SAME expert data would be if it
+# were L2-shrunk toward a naive (low-v) prior — i.e. fitting the expert free is
+# the right call (shrinking it toward an earlier session pulls it AWAY from its
+# true, higher v). If the ramp does NOT recover, that is a real signal — the test
+# is NOT loosened to force a pass.
+#
+# CONCERN documented by this test (a real Phase-2 recovery limit, NOT a bug):
+# the ABSOLUTE LEVEL of the sharpness dial v is only weakly identifiable at HIGH
+# v. The likelihood is flat along a v<->z ridge (lp = z + v*A + ...), so as true
+# v grows the MLE shrinks v and compensates with z; recovery is biased toward
+# smaller v (e.g. true v_expert=1.8 recovers ~1.2, a ~0.6 downward bias, stable
+# across restarts with a well-conditioned Hessian). The RAMP DIRECTION is robust;
+# the absolute v LEVEL at the expert end is biased low. Downstream comparisons of
+# v should therefore lead with the ramp/ordering, treating absolute high-v levels
+# as descriptive (consistent with the recovery-gate philosophy, contract §A.9).
+# This is exactly why claim (b) is framed as free-beats-wrong-prior-shrinkage
+# rather than "expert recovers v closest" (which the high-v bias makes false for
+# an increasing ramp).
+
+
+def _ramp_anchor_design(v_level, n_trials=900, dt=0.05, seed=0,
+                        step=1.6, noise=0.2, go_p=0.75):
+    """Build an identifiable two-mood Design whose true sharpness is ``v_level``.
+
+    Mirrors ``_identifiable_recovery_design`` (Task 1.5): fluctuating baseline
+    log2-TF evidence + a sustained post-change positive excursion on go trials so
+    the leaky accumulator A rises and `v` is identifiable, with trial lengths long
+    enough for the urgency bump to bite. Returns ``(design, true_theta)`` where
+    ``true_theta`` carries ``v_level`` in BOTH moods' sharpness slot; z is very
+    negative so the baseline hazard is low (trials survive to the excursion).
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    change_times = []
+    for tidx in range(n_trials):
+        n_bins = int(rng.integers(30, 61))           # 1.5 - 3.0 s on the dt grid
+        ct = float(rng.uniform(0.5, 1.2))
+        change_times.append(ct)
+        go = bool(rng.random() < go_p)
+        ev = rng.normal(0.0, noise, size=n_bins)
+        if go:
+            t_grid = np.arange(n_bins) * dt
+            ev = ev + np.where(t_grid >= ct, step, 0.0)
+        rows.append({
+            "trial_idx": tidx,
+            "outcome": "hit" if go else "miss",
+            "change_size": 2.0 if go else 1.0,
+            "change_time": ct,
+            "decision_time": n_bins * dt,
+            "lick": 1,                               # placeholder (simulator sets)
+            "censored": False,                       # placeholder
+            "evidence": ev,
+            "n_bins": n_bins,
+        })
+    ev_df = pd.DataFrame(rows)
+    labels = pd.DataFrame({
+        "trial_idx": np.arange(n_trials),
+        "state_label": [MAIN_MOODS[i % len(MAIN_MOODS)] for i in range(n_trials)],
+    }).set_index("trial_idx")
+    mu = float(np.median(change_times))
+    design = dlg.build_design(ev_df, labels, mu=mu, sigma=0.8, dt=dt)
+    # true_theta = [v_Imp, v_Stim, z_Imp, z_Stim, u_Imp, u_Stim]; v ramps via v_level.
+    true_theta = np.array([v_level, v_level, -4.0, -4.0, 0.4, 0.3])
+    return design, true_theta
+
+
+def test_backward_sweep_recovers_v_ramp_and_free_expert_beats_shrunk():
+    """Three anchors with a TRUE v ramp (v_old < v_mid < v_expert): the expert is
+    fit FIRST (free), then earlier anchors are L2-seeded backward. Assert (a) the
+    recovered v ramps in the right direction, and (b) fitting the expert FREE
+    (as the sweep does) is more faithful to its true v than L2-shrinking that
+    same expert data toward a naive (low-v) prior would be."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+
+    # CHRONOLOGICAL order: oldest -> mid -> expert (a sharpening v ramp).
+    v_old, v_mid, v_expert = 0.7, 1.2, 1.8
+    specs = [
+        ("OLD", v_old, 10),
+        ("MID", v_mid, 20),
+        ("EXPERT", v_expert, 30),
+    ]
+    anchors_chrono = [name for name, _, _ in specs]
+
+    anchor_designs = {}
+    true_v = {}
+    for name, v_level, sd in specs:
+        design, true_theta = _ramp_anchor_design(v_level, n_trials=900, seed=sd)
+        eb, lk, cs = dlg.simulate_licks(design, true_theta, ps, seed=sd + 100)
+        # non-degenerate lick/censor mix carries the survival information for v
+        assert 0.2 < lk.mean() < 0.95, f"{name}: degenerate lick rate {lk.mean():.3f}"
+        sim_design = dlg.design_with_outcomes(design, eb, lk, cs)
+        anchor_designs[name] = sim_design
+        true_v[name] = v_level
+
+    results = dlg.backward_sweep(anchor_designs, anchors_chrono, ps,
+                                 l2=1.0, seed=0)
+
+    # ── all anchors fit; FitResult per anchor ──
+    assert set(results.keys()) == set(anchors_chrono)
+    for name in anchors_chrono:
+        assert isinstance(results[name], dlg.FitResult)
+
+    # ── recovered v = mean of the two moods' sharpness per anchor ──
+    def rec_v_from(dials):
+        return 0.5 * (dials["Impulsive"]["sharpness"] + dials["StimSens"]["sharpness"])
+
+    def rec_v(name):
+        return rec_v_from(results[name].dials)
+
+    rv_old, rv_mid, rv_expert = rec_v("OLD"), rec_v("MID"), rec_v("EXPERT")
+
+    # (a) PRIMARY: the recovered v ramps in the right direction (monotone up).
+    assert rv_old < rv_mid < rv_expert, (
+        f"recovered v did not ramp old->mid->expert: "
+        f"{rv_old:.3f} < {rv_mid:.3f} < {rv_expert:.3f}")
+
+    # (b) The sweep fits the expert FREE. Show that is the right call: the same
+    # expert data L2-shrunk toward a NAIVE (low-v) prior is pulled FURTHER from
+    # the expert's true (high) v than the free fit is. (The absolute high-v level
+    # is biased low either way — see the module-level CONCERN note — but free is
+    # strictly more faithful than wrong-prior shrinkage.)
+    expert_design = anchor_designs["EXPERT"]
+    free_err = abs(rec_v("EXPERT") - true_v["EXPERT"])      # the sweep's free fit
+    naive_prior = np.array([v_old, v_old, -4.0, -4.0, 0.4, 0.3])
+    shrunk = dlg.fit_anchor(expert_design, ps, seed_theta=naive_prior,
+                            l2=5.0, n_restarts=4, seed=0)
+    shrunk_err = abs(rec_v_from(shrunk.dials) - true_v["EXPERT"])
+    assert free_err < shrunk_err, (
+        f"free expert fit (err {free_err:.3f}) should beat shrink-toward-naive "
+        f"(err {shrunk_err:.3f}); fitting the expert free is the right call")
+
+    # The expert's free fit is well-conditioned (the bias is structural, not an
+    # optimizer failure): the level is weakly identified, the FIT is not broken.
+    assert np.isfinite(results["EXPERT"].hessian_cond)
+    assert results["EXPERT"].hessian_cond < 1e6
+
+
+def test_backward_sweep_fits_expert_first_free_then_seeds_backward(monkeypatch):
+    """The MOST-EXPERT anchor (last of anchors_chrono) is fit FIRST with
+    seed_theta=None and l2=0; each earlier anchor is then fit with seed_theta =
+    its more-expert (newer) neighbour's fitted theta and the passed l2. Verified
+    by recording the (name, seed_theta, l2) of every fit_anchor call."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+
+    specs = [("OLD", 0.7, 10), ("MID", 1.2, 20), ("EXPERT", 1.8, 30)]
+    anchors_chrono = [name for name, _, _ in specs]
+    anchor_designs = {}
+    for name, v_level, sd in specs:
+        design, true_theta = _ramp_anchor_design(v_level, n_trials=300, seed=sd)
+        eb, lk, cs = dlg.simulate_licks(design, true_theta, ps, seed=sd + 100)
+        anchor_designs[name] = dlg.design_with_outcomes(design, eb, lk, cs)
+
+    # map each design object back to its anchor name (identity)
+    design_name = {id(d): n for n, d in anchor_designs.items()}
+    calls = []
+    real_fit = dlg.fit_anchor
+
+    def spy_fit(design, param_spec, seed_theta=None, l2=0.0, **kw):
+        calls.append({
+            "name": design_name[id(design)],
+            "seed_is_none": seed_theta is None,
+            "l2": l2,
+        })
+        return real_fit(design, param_spec, seed_theta=seed_theta, l2=l2, **kw)
+
+    monkeypatch.setattr(dlg, "fit_anchor", spy_fit)
+    dlg.backward_sweep(anchor_designs, anchors_chrono, ps, l2=1.0, seed=0)
+
+    # exactly one call per anchor, in EXPERT-first reverse-chronological order
+    assert [c["name"] for c in calls] == ["EXPERT", "MID", "OLD"]
+    # expert fit first: free (no seed, l2 == 0)
+    assert calls[0]["seed_is_none"] is True
+    assert calls[0]["l2"] == 0.0
+    # earlier anchors: L2-seeded (seed present, l2 == passed l2)
+    for c in calls[1:]:
+        assert c["seed_is_none"] is False
+        assert c["l2"] == 1.0
+
+
+def test_backward_sweep_skips_missing_anchor_and_seeds_from_last_fit(monkeypatch):
+    """A session in anchors_chrono but absent from anchor_designs (QC-omitted) is
+    skipped; the NEXT (earlier) present anchor is seeded from the last
+    successfully-fit theta — NOT from the missing one."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+
+    # chronological: OLD, MID(omitted), EXPERT.  MID has no Design.
+    specs = [("OLD", 0.7, 10), ("EXPERT", 1.8, 30)]
+    anchors_chrono = ["OLD", "MID", "EXPERT"]
+    anchor_designs = {}
+    for name, v_level, sd in specs:
+        design, true_theta = _ramp_anchor_design(v_level, n_trials=300, seed=sd)
+        eb, lk, cs = dlg.simulate_licks(design, true_theta, ps, seed=sd + 100)
+        anchor_designs[name] = dlg.design_with_outcomes(design, eb, lk, cs)
+
+    design_name = {id(d): n for n, d in anchor_designs.items()}
+    calls = []
+    real_fit = dlg.fit_anchor
+
+    def spy_fit(design, param_spec, seed_theta=None, l2=0.0, **kw):
+        res = real_fit(design, param_spec, seed_theta=seed_theta, l2=l2, **kw)
+        calls.append({
+            "name": design_name[id(design)],
+            "seed_is_none": seed_theta is None,
+            "seed_theta": None if seed_theta is None else np.asarray(seed_theta).copy(),
+            "l2": l2,
+            "fitted_theta": res.theta.copy(),
+        })
+        return res
+
+    monkeypatch.setattr(dlg, "fit_anchor", spy_fit)
+    out = dlg.backward_sweep(anchor_designs, anchors_chrono, ps, l2=1.0, seed=0)
+
+    # only the present anchors are returned; MID is skipped entirely
+    assert set(out.keys()) == {"OLD", "EXPERT"}
+    # call order: EXPERT first (free), then OLD (MID skipped, not fit)
+    assert [c["name"] for c in calls] == ["EXPERT", "OLD"]
+    assert calls[0]["seed_is_none"] is True            # expert free
+    # OLD is seeded from EXPERT's fitted theta (the last successfully-fit theta),
+    # NOT from a missing MID
+    assert calls[1]["seed_is_none"] is False
+    assert np.allclose(calls[1]["seed_theta"], calls[0]["fitted_theta"])
+
+
+def test_backward_sweep_single_anchor_is_free_fit(monkeypatch):
+    """With a single anchor, it is the most-expert -> fit free (seed_theta None,
+    l2 0); the result is keyed by its id."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    design, true_theta = _ramp_anchor_design(1.5, n_trials=300, seed=5)
+    eb, lk, cs = dlg.simulate_licks(design, true_theta, ps, seed=55)
+    anchor_designs = {"ONLY": dlg.design_with_outcomes(design, eb, lk, cs)}
+
+    calls = []
+    real_fit = dlg.fit_anchor
+
+    def spy_fit(design, param_spec, seed_theta=None, l2=0.0, **kw):
+        calls.append({"seed_is_none": seed_theta is None, "l2": l2})
+        return real_fit(design, param_spec, seed_theta=seed_theta, l2=l2, **kw)
+
+    monkeypatch.setattr(dlg, "fit_anchor", spy_fit)
+    out = dlg.backward_sweep(anchor_designs, ["ONLY"], ps, l2=1.0, seed=0)
+
+    assert set(out.keys()) == {"ONLY"}
+    assert len(calls) == 1
+    assert calls[0]["seed_is_none"] is True
+    assert calls[0]["l2"] == 0.0
