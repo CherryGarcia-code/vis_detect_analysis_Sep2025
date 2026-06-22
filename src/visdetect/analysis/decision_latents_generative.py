@@ -832,3 +832,337 @@ def backward_sweep(anchor_designs, anchors_chrono, param_spec, l2=1.0, seed=0):
         prev_theta = res.theta
 
     return results
+
+
+# ── Engine-A learning ladder (Task 2.2) — which dial moves across anchors ──────
+# The five rungs and the dial each lets vary ACROSS anchors (the rest are SHARED
+# across anchors). "which-dial-moves" is an ANCHOR-level partition, orthogonal to
+# the per-mood split that ParamSpec already owns (each dial stays per-mood).
+_LADDER_VARYING = {
+    "M_shared": (),                 # all dials shared across anchors
+    "M_sharpness": ("v",),          # only sharpness v varies per anchor
+    "M_caution": ("z",),            # only itchiness z varies per anchor
+    "M_timing": ("u",),             # only timing u varies per anchor
+    "M_full": ("v", "z", "u"),      # all three vary per anchor
+}
+_LADDER_RUNGS = tuple(_LADDER_VARYING)
+
+
+def _ladder_k_params(rung, param_spec, n_anchors):
+    """GLM degrees of freedom for a ladder rung (contract §A.10-3).
+
+    Plain English: count the free coefficients of the combined GLM for this rung.
+    A dial that is SHARED across anchors contributes ONE per-mood block (counted
+    once); a dial that VARIES across anchors contributes one per-mood block PER
+    anchor. This is the genuine GLM dof — **NOT** pyddm's ``4 + len(keys)*(n-1)``
+    formula (which is rejected by the contract).
+
+    With ``n_mood = len(param_spec.moods)`` per-mood slots per dial::
+
+        k = (n_shared_dials * n_mood) + (n_varying_dials * n_mood * n_anchors)
+
+    For the default 2 moods / 3 dials / 2 anchors this gives M_shared=6,
+    M_sharpness=M_caution=M_timing=8, M_full=12.
+    """
+    n_mood = len(param_spec.moods)
+    varying = _LADDER_VARYING[rung]
+    n_vary = len(varying)
+    n_dials = len(param_spec.dials)
+    n_shared = n_dials - n_vary
+    return int(n_shared * n_mood + n_vary * n_mood * n_anchors)
+
+
+def _ladder_layout(rung, param_spec, n_anchors):
+    """Index map for a rung's COMBINED parameter vector.
+
+    The combined theta is laid out as one SHARED block followed by one block PER
+    anchor::
+
+        [ shared_dials (per-mood) | anchor_0 varying_dials (per-mood) | anchor_1 ... ]
+
+    Returns ``(total_len, shared_slices, anchor_slices)`` where
+
+    * ``shared_slices``  : ``{dial: slice}`` into the combined theta for each
+      SHARED dial (one block, per-mood, used by every anchor);
+    * ``anchor_slices``  : ``list[{dial: slice}]`` — for each anchor, the slices
+      of its VARYING dials' per-mood blocks.
+
+    These slices let :func:`_ladder_effective_theta` reassemble, for any anchor,
+    the standard 6-vector ``theta`` that the existing :class:`ParamSpec` /
+    :func:`hazard_nll` consume unchanged (so no new likelihood code is needed).
+    """
+    n_mood = len(param_spec.moods)
+    varying = set(_LADDER_VARYING[rung])
+    shared_dials = [d for d in param_spec.dials if d not in varying]
+    vary_dials = [d for d in param_spec.dials if d in varying]
+
+    off = 0
+    shared_slices = {}
+    for d in shared_dials:
+        shared_slices[d] = slice(off, off + n_mood)
+        off += n_mood
+
+    anchor_slices = []
+    for _a in range(n_anchors):
+        slc = {}
+        for d in vary_dials:
+            slc[d] = slice(off, off + n_mood)
+            off += n_mood
+        anchor_slices.append(slc)
+
+    return off, shared_slices, anchor_slices
+
+
+def _ladder_effective_theta(combined, param_spec, shared_slices, anchor_slice):
+    """Reassemble one anchor's standard 6-vector ``theta`` from the combined vector.
+
+    For each dial, the per-mood block comes from this anchor's block if the dial
+    VARIES, else from the single SHARED block. The output ordering matches
+    ``param_spec`` exactly, so the existing :func:`hazard_nll` reads it correctly.
+    """
+    n_mood = len(param_spec.moods)
+    theta = np.empty(param_spec.n_params(), float)
+    for d in param_spec.dials:
+        off = param_spec._offset(d)
+        if d in anchor_slice:                       # dial varies -> anchor block
+            theta[off:off + n_mood] = combined[anchor_slice[d]]
+        else:                                       # dial shared -> shared block
+            theta[off:off + n_mood] = combined[shared_slices[d]]
+    return theta
+
+
+def _fit_ladder_rung(rung, designs, param_spec, n_restarts=4, seed=0):
+    """Fit one ladder rung's COMBINED model over the pooled anchor trials.
+
+    Builds the combined parameter vector (one shared block + one varying block per
+    anchor) and minimises the SUMMED censored NLL across anchors (each anchor's
+    contribution is the standard :func:`hazard_nll` on its effective theta). The
+    summed data log-likelihood and the GLM k_params are therefore exactly
+    consistent for AIC/BIC.
+
+    Returns ``(ll, combined_theta)`` where ``ll`` is the pooled data
+    log-likelihood (``-summed_nll``).
+    """
+    from scipy.optimize import minimize
+
+    n_anchors = len(designs)
+    total_len, shared_slices, anchor_slices = _ladder_layout(
+        rung, param_spec, n_anchors)
+
+    def objective(combined):
+        nll = 0.0
+        for a_idx, design in enumerate(designs):
+            theta_a = _ladder_effective_theta(
+                combined, param_spec, shared_slices, anchor_slices[a_idx])
+            nll += hazard_nll(theta_a, design, param_spec, l2=0.0)
+        return nll
+
+    rng = np.random.default_rng(seed)
+    inits = [np.zeros(total_len)]
+    for _ in range(int(n_restarts)):
+        inits.append(rng.normal(loc=0.0, scale=1.0, size=total_len))
+
+    best = None
+    for x0 in inits:
+        try:
+            res = minimize(objective, x0, method="L-BFGS-B")
+        except Exception:
+            continue
+        if not np.all(np.isfinite(res.x)):
+            continue
+        nll = float(res.fun)
+        if not np.isfinite(nll):
+            continue
+        if best is None or nll < best[0]:
+            best = (nll, np.asarray(res.x, float))
+
+    if best is None:
+        combined = np.asarray(inits[0], float)
+        ll = -objective(combined)
+    else:
+        ll = -best[0]
+        combined = best[1]
+    return float(ll), combined
+
+
+def _ladder_rung_cvll(rung, designs, param_spec, k=5, seed=0, n_restarts=2):
+    """Held-out k-fold CV log-likelihood for a ladder rung.
+
+    Plain English: the only honest way to ask "does letting THIS dial vary across
+    anchors genuinely help?" is to score on data the model was NOT fit to. We split
+    EACH anchor's trials into the SAME ``k`` folds (one shared fold split per
+    anchor, RNG-seeded), refit the rung's combined model on the train folds, and
+    evaluate the summed held-out data log-likelihood on the test folds. Summed
+    across folds and anchors, higher = better. A rung that spends a per-anchor
+    block on a dial that does not truly differ buys no held-out LL (and is
+    penalised by AIC/BIC in-sample) — so the minimal correct rung wins.
+
+    The fold split is computed ONCE per anchor from ``np.random.default_rng(seed)``
+    and reused for every rung (fairness): all rungs see identical train/test
+    partitions, so CV-LL differences reflect the model, not fold noise.
+    """
+    n_anchors = len(designs)
+
+    # ── per-anchor fold indices, fixed once (shared across rungs by the caller
+    # passing the same seed). Each anchor shuffled by its own offset stream so a
+    # single tiny anchor cannot collapse a fold. ──
+    fold_idx = []
+    usable = True
+    for a_idx, design in enumerate(designs):
+        n = len(design)
+        if n < k or n == 0:
+            usable = False
+            break
+        idx = np.arange(n)
+        np.random.default_rng(seed + a_idx).shuffle(idx)
+        fold_idx.append(np.array_split(idx, k))
+    if not usable:
+        return -np.inf
+
+    total_len, shared_slices, anchor_slices = _ladder_layout(
+        rung, param_spec, n_anchors)
+
+    from scipy.optimize import minimize
+
+    cv_ll = 0.0
+    for f in range(k):
+        train_designs, test_designs = [], []
+        ok = True
+        for a_idx, design in enumerate(designs):
+            test_i = fold_idx[a_idx][f]
+            train_i = np.concatenate(
+                [fold_idx[a_idx][j] for j in range(k) if j != f])
+            if len(test_i) == 0 or len(train_i) == 0:
+                ok = False
+                break
+            train_designs.append(design.subset(train_i))
+            test_designs.append(design.subset(test_i))
+        if not ok:
+            return -np.inf
+
+        # fit the rung's combined model on the TRAIN folds
+        def objective(combined, _trains=train_designs):
+            nll = 0.0
+            for a_idx, d in enumerate(_trains):
+                theta_a = _ladder_effective_theta(
+                    combined, param_spec, shared_slices, anchor_slices[a_idx])
+                nll += hazard_nll(theta_a, d, param_spec, l2=0.0)
+            return nll
+
+        rng = np.random.default_rng(seed)
+        inits = [np.zeros(total_len)]
+        for _ in range(int(n_restarts)):
+            inits.append(rng.normal(loc=0.0, scale=1.0, size=total_len))
+        best = None
+        for x0 in inits:
+            try:
+                res = minimize(objective, x0, method="L-BFGS-B")
+            except Exception:
+                continue
+            if not np.all(np.isfinite(res.x)) or not np.isfinite(res.fun):
+                continue
+            if best is None or float(res.fun) < best[0]:
+                best = (float(res.fun), np.asarray(res.x, float))
+        combined = best[1] if best is not None else np.asarray(inits[0], float)
+
+        # held-out data log-likelihood on the TEST folds
+        for a_idx, d in enumerate(test_designs):
+            theta_a = _ladder_effective_theta(
+                combined, param_spec, shared_slices, anchor_slices[a_idx])
+            cv_ll += -hazard_nll(theta_a, d, param_spec, l2=0.0)
+
+    return float(cv_ll)
+
+
+def learning_ladder(anchor_designs, param_spec, dt=0.05, k=5, seed=0,
+                    n_restarts=4, return_ll=False):
+    """Which dial moves across anchors? Model-comparison ladder (Task 2.2).
+
+    Plain English: the science question is *which* behavioural knob learning turns
+    — does the mouse get sharper (``v``), less itchy (``z``), or better-timed
+    (``u``) across anchors? We answer it by a nested model comparison. Each rung
+    lets a SUBSET of the three dials VARY across anchors while the rest are SHARED
+    across anchors:
+
+      * ``M_shared``    — all dials shared (one combined fit on the pooled trials);
+      * ``M_sharpness`` — only ``v`` varies per anchor (``z``, ``u`` shared);
+      * ``M_caution``   — only ``z`` varies per anchor;
+      * ``M_timing``    — only ``u`` varies per anchor;
+      * ``M_full``      — all three vary per anchor.
+
+    Each rung is fit as a single COMBINED GLM over all anchors' pooled trials: a
+    shared per-mood block for the shared dials plus one per-mood block per anchor
+    for the varying dials. The pooled data log-likelihood is the SUM across anchors
+    of the standard censored :func:`hazard_nll` (so no new likelihood is needed;
+    the existing :class:`ParamSpec` layout is reused per anchor).
+
+    Scoring (contract §A.10-3 — **GLM dof, NOT** pyddm's ``4 + len(keys)*(n-1)``):
+
+      * ``AIC = 2*k_params - 2*LL``
+      * ``BIC = k_params*ln(N) - 2*LL``        (``N`` = total trials across anchors)
+
+    where ``k_params`` is the rung's GLM degrees of freedom
+    (:func:`_ladder_k_params`): shared dials counted once (per-mood), varying dials
+    counted per anchor (per-mood). The held-out **CV-LL** is a ``k``-fold
+    cross-validated data log-likelihood (per-anchor folds via :meth:`Design.subset`,
+    refit per fold; :func:`_ladder_rung_cvll`). ``winner`` = ``argmin AIC``.
+
+    dof accounting (the load-bearing bookkeeping, default 2 moods / 3 dials /
+    2 anchors)::
+
+        M_shared    : 3 dials shared * 2 moods                       = 6
+        M_sharpness : (z,u shared: 2*2) + (v per anchor: 1*2*2)      = 8
+        M_caution   : (v,u shared: 2*2) + (z per anchor: 1*2*2)      = 8
+        M_timing    : (v,z shared: 2*2) + (u per anchor: 1*2*2)      = 8
+        M_full      : 3 dials per anchor * 2 moods * 2 anchors       = 12
+
+    Parameters
+    ----------
+    anchor_designs : dict[str, Design]
+        Per-anchor ragged Designs (from :func:`build_anchor_designs`). At least two
+        anchors are required for a meaningful comparison; order is irrelevant (the
+        ladder is symmetric in the anchors).
+    param_spec : ParamSpec
+        Parameter layout (``theta`` <-> dial/mood mapping); each dial stays
+        per-mood. The ladder partitions ACROSS anchors orthogonally to the moods.
+    dt : float
+        Generative time grid (accepted for interface symmetry; the Designs already
+        encode their own ``dt``).
+    k : int
+        Number of CV folds (per anchor) for the held-out CV-LL.
+    seed : int
+        RNG seed for the per-fold refits and the fold split (reproducible; the same
+        split is reused across rungs for a fair comparison).
+    n_restarts : int
+        Random restarts for each in-sample combined fit.
+    return_ll : bool
+        If True, also return the per-rung pooled data log-likelihood under an
+        ``"ll"`` key (lets callers/tests reconstruct AIC/BIC).
+
+    Returns
+    -------
+    dict
+        ``{"winner": str, "aic": {rung: float}, "bic": {rung: float},
+        "cvll": {rung: float}}`` (plus ``"ll"`` when ``return_ll``).
+    """
+    designs = list(anchor_designs.values())
+    n_anchors = len(designs)
+    N = int(sum(len(d) for d in designs))
+    log_N = np.log(N) if N > 0 else 0.0
+
+    aic, bic, cvll, ll_by_rung = {}, {}, {}, {}
+    for rung in _LADDER_RUNGS:
+        ll, _theta = _fit_ladder_rung(
+            rung, designs, param_spec, n_restarts=n_restarts, seed=seed)
+        k_params = _ladder_k_params(rung, param_spec, n_anchors)
+        aic[rung] = 2.0 * k_params - 2.0 * ll
+        bic[rung] = k_params * log_N - 2.0 * ll
+        cvll[rung] = _ladder_rung_cvll(
+            rung, designs, param_spec, k=k, seed=seed)
+        ll_by_rung[rung] = ll
+
+    winner = min(aic, key=aic.get)
+    out = {"winner": winner, "aic": aic, "bic": bic, "cvll": cvll}
+    if return_ll:
+        out["ll"] = ll_by_rung
+    return out

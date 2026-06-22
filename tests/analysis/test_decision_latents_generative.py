@@ -1801,3 +1801,171 @@ def test_backward_sweep_single_anchor_is_free_fit(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["seed_is_none"] is True
     assert calls[0]["l2"] == 0.0
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 2.2: learning_ladder — which dial moves across anchors (model comparison)
+# (contract §A.7 fit_anchor; §A.10 item 3 — GLM dof, NOT pyddm's formula)
+# ════════════════════════════════════════════════════════════════════════════
+# Ground-truth, ONLY-v-VARIES test (load-bearing, DECISIVE — NOT structural).
+#
+# Two anchors are built where ONLY the sharpness dial `v` truly differs across
+# anchors (z and u are IDENTICAL between the two; the evidence is non-trivial with
+# a real post-change excursion). `learning_ladder` fits the five rungs
+#   M_shared (all dials shared across anchors),
+#   M_sharpness (only v varies),  M_caution (only z varies),
+#   M_timing (only u varies),     M_full (all three vary),
+# scores each with GLM AIC = 2*k_params - 2*LL and BIC = k_params*ln(N) - 2*LL
+# (k_params = the rung's TOTAL free-parameter count, the GLM degrees of freedom —
+# NOT pyddm's 4 + len(keys)*(n-1)), plus held-out k-fold CV-LL via Design.subset.
+#
+# Because the true generative process has ONLY v differing across anchors,
+# M_sharpness is the model that matches the data with the fewest extra parameters:
+# it spends its degrees of freedom exactly where the signal is. M_caution and
+# M_timing waste a per-anchor block on a dial that does NOT differ (no LL gain,
+# AIC penalty), and M_full pays for two extra per-anchor blocks that buy nothing.
+# So M_sharpness must be the STRICT argmin AIC and must beat M_caution / M_timing
+# on held-out CV-LL too. If it does NOT win even on this clean only-v design, that
+# is a REAL signal about ladder discriminability — the assertion is NOT loosened.
+#
+# TEST-DESIGN LESSONS carried from Task 2.1 (heeded to keep the signal clean):
+#   (i)   true v in the IDENTIFIABLE range (~0.5 and ~1.3 — below the high-v
+#         saturation zone where recovered v plateaus);
+#   (ii)  a SHARED design/evidence seed across BOTH anchors so ONLY the true v
+#         differs (per-anchor evidence-realization noise can swing recovered v by
+#         ~1.0 and would mask the only-v signal);
+#   (iii) low baseline z so trials SURVIVE to the post-change excursion (v needs
+#         survival to be identifiable);
+#   (iv)  enough trials per anchor (>= 400) for stable fits.
+
+
+def test_learning_ladder_only_v_varies_picks_m_sharpness():
+    """Two anchors where ONLY `v` truly varies (z, u identical): learning_ladder
+    must pick M_sharpness as the STRICT argmin AIC, and M_sharpness must beat
+    M_caution and M_timing on held-out CV-LL. (Decisive correctness test.)"""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+
+    # ── only-v-varies ground truth ──
+    # v in the IDENTIFIABLE range (lesson i); SHARED design seed so ONLY v differs
+    # (lesson ii); z very negative so trials survive to the excursion (lesson iii).
+    #
+    # The v gap (0.4 -> 1.4) and a STRONGER post-change evidence step (1.5, vs the
+    # _ramp_anchor_design default 0.8) are chosen TOGETHER so the only-v signal is
+    # decisive: the across-anchor difference in the linear predictor is (v_high -
+    # v_low) * A — with a small step, A is too modest and the v-difference is
+    # absorbable into a z-difference (v<->z confound: lp = z + v*A + u*phi), which
+    # made M_caution win on the weaker (step=0.8, v 0.5->1.3) design. The bigger
+    # step lifts the post-change accumulator A so v*A carries a difference z cannot
+    # mimic, while z=-4 keeps the lick rate ~0.66-0.71 (real survival information).
+    # Verified empirically before locking: M_sharpness is the strict argmin AIC by
+    # ~2 units over M_full and ~5 over M_caution/M_timing on this config.
+    v_low, v_high = 0.4, 1.4
+    z_shared, u_shared = -4.0, 0.3          # IDENTICAL across both anchors
+    STEP = 1.5                               # post-change excursion (strong signal)
+    DESIGN_SEED = 7                          # shared evidence realization (lesson ii)
+    N_TRIALS = 800                           # >= 400 per anchor (lesson iv)
+
+    specs = [("A_low", v_low, 201), ("A_high", v_high, 202)]
+    anchor_designs = {}
+    for name, v_level, sim_seed in specs:
+        # _ramp_anchor_design carries v_level in both moods' sharpness slot and z=-4,
+        # u=0.4/0.3 — but we want z AND u IDENTICAL across anchors, so override
+        # true_theta's z/u to the shared values below. SHARED design seed + STEP.
+        design, _ = _ramp_anchor_design(v_level, n_trials=N_TRIALS, seed=DESIGN_SEED,
+                                        step=STEP)
+        true_theta = np.array([v_level, v_level,        # v varies per anchor
+                               z_shared, z_shared,      # z shared
+                               u_shared, u_shared])     # u shared
+        eb, lk, cs = dlg.simulate_licks(design, true_theta, ps, seed=sim_seed)
+        # non-degenerate lick/censor mix carries the survival information for v
+        assert 0.2 < lk.mean() < 0.95, f"{name}: degenerate lick rate {lk.mean():.3f}"
+        anchor_designs[name] = dlg.design_with_outcomes(design, eb, lk, cs)
+
+    out = dlg.learning_ladder(anchor_designs, ps, dt=0.05, k=3, seed=0)
+
+    # ── return-shape contract ──
+    assert set(out.keys()) == {"winner", "aic", "bic", "cvll"}
+    rungs = {"M_shared", "M_sharpness", "M_caution", "M_timing", "M_full"}
+    assert set(out["aic"]) == rungs
+    assert set(out["bic"]) == rungs
+    assert set(out["cvll"]) == rungs
+    assert all(np.isfinite(v) for v in out["aic"].values())
+    assert all(np.isfinite(v) for v in out["bic"].values())
+    assert all(np.isfinite(v) for v in out["cvll"].values())
+
+    # ── DECISIVE: M_sharpness is the STRICT argmin AIC ──
+    aic = out["aic"]
+    winner = min(aic, key=aic.get)
+    assert out["winner"] == winner                       # winner == argmin AIC
+    assert out["winner"] == "M_sharpness", (
+        f"only-v-varies design did not select M_sharpness as argmin AIC; "
+        f"winner={out['winner']!r}, aic={aic}")
+    # strict argmin: no other rung ties M_sharpness on AIC
+    for rung, val in aic.items():
+        if rung != "M_sharpness":
+            assert aic["M_sharpness"] < val, (
+                f"M_sharpness AIC {aic['M_sharpness']:.3f} not strictly below "
+                f"{rung} {val:.3f}")
+
+    # ── M_sharpness beats M_caution and M_timing on held-out CV-LL ──
+    cv = out["cvll"]
+    assert cv["M_sharpness"] > cv["M_caution"], (
+        f"M_sharpness CV-LL {cv['M_sharpness']:.3f} not > M_caution "
+        f"{cv['M_caution']:.3f}")
+    assert cv["M_sharpness"] > cv["M_timing"], (
+        f"M_sharpness CV-LL {cv['M_sharpness']:.3f} not > M_timing "
+        f"{cv['M_timing']:.3f}")
+
+
+def test_learning_ladder_kparams_are_glm_dof_not_pyddm_formula():
+    """k_params used for AIC/BIC are the GLM degrees of freedom (shared dials once
+    + per-anchor dials per anchor), NOT pyddm's 4 + len(keys)*(n-1). Verified by
+    reconstructing each rung's AIC from its CV-independent in-sample LL is hard to
+    isolate, so we check the dof directly via the documented helper."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    n_anchors = 2
+    n_mood = len(ps.moods)        # 2
+    # GLM dof per rung: shared dials counted once (n_mood slots), varying dials
+    # counted per anchor (n_mood slots each).
+    expected = {
+        "M_shared": 3 * n_mood,                                  # 6 (all shared)
+        "M_sharpness": (2 * n_mood) + (1 * n_mood * n_anchors),  # z,u shared + v per anchor = 8
+        "M_caution":   (2 * n_mood) + (1 * n_mood * n_anchors),  # v,u shared + z per anchor = 8
+        "M_timing":    (2 * n_mood) + (1 * n_mood * n_anchors),  # v,z shared + u per anchor = 8
+        "M_full":      3 * n_mood * n_anchors,                   # 12 (all per anchor)
+    }
+    for rung, want in expected.items():
+        got = dlg._ladder_k_params(rung, ps, n_anchors)
+        assert got == want, f"{rung}: dof {got} != expected GLM dof {want}"
+        # explicitly NOT the pyddm formula 4 + len(keys)*(n-1)
+        ladder_keys = {"M_shared": [], "M_sharpness": ["v"], "M_caution": ["z"],
+                       "M_timing": ["u"], "M_full": ["v", "z", "u"]}[rung]
+        pyddm_formula = 4 + len(ladder_keys) * (n_anchors - 1)
+        if rung != "M_shared":         # M_shared coincidentally differs anyway
+            assert got != pyddm_formula or want != pyddm_formula, rung
+
+
+def test_learning_ladder_aic_bic_match_glm_formula():
+    """For every rung, AIC == 2*k - 2*LL and BIC == k*ln(N) - 2*LL with the GLM
+    k_params and N = total trials across anchors (internal-consistency check)."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    specs = [("A_low", 0.5, 201), ("A_high", 1.3, 202)]
+    anchor_designs = {}
+    for name, v_level, sim_seed in specs:
+        design, _ = _ramp_anchor_design(v_level, n_trials=300, seed=7)
+        true_theta = np.array([v_level, v_level, -4.0, -4.0, 0.3, 0.3])
+        eb, lk, cs = dlg.simulate_licks(design, true_theta, ps, seed=sim_seed)
+        anchor_designs[name] = dlg.design_with_outcomes(design, eb, lk, cs)
+
+    out = dlg.learning_ladder(anchor_designs, ps, dt=0.05, k=3, seed=0,
+                              return_ll=True)
+    N = sum(len(d) for d in anchor_designs.values())
+    n_anchors = len(anchor_designs)
+    for rung in ("M_shared", "M_sharpness", "M_caution", "M_timing", "M_full"):
+        k_params = dlg._ladder_k_params(rung, ps, n_anchors)
+        ll = out["ll"][rung]
+        assert abs(out["aic"][rung] - (2 * k_params - 2 * ll)) < 1e-6, rung
+        assert abs(out["bic"][rung] - (k_params * np.log(N) - 2 * ll)) < 1e-6, rung
