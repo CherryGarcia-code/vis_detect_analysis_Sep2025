@@ -38,10 +38,10 @@ def _early_subject(default: str = "BG_046") -> str:
 
 os.environ["VISDETECT_SUBJECT"] = _early_subject()
 
+import pandas as pd                                            # noqa: E402
 import _subject_paths as sjp                                   # noqa: E402
 from visdetect.analysis import state_provider as sp            # noqa: E402
 from visdetect.core.session import load_session                # noqa: E402
-from visdetect.suite.loader import load_filtered_manifest      # noqa: E402
 
 
 def _tag_csv(tags_dir, sess):
@@ -52,15 +52,22 @@ def _tag_csv(tags_dir, sess):
     return None
 
 
-def _session_tokens(manifest, subject: str, pkl_dir):
-    """Sessions to write states for. When a staging manifest exists (BG_046) use
-    its session_name tokens (bare dates); otherwise (new subjects) enumerate every
-    pkl's full stem, which IS the registry/curation session token."""
-    if not manifest.empty:
-        return [str(r["session_name"]) for _, r in manifest.iterrows()]
+def _session_tokens(registry_path, subject: str, pkl_dir):
+    """Canonical curation session tokens. Prefer the UM registry's `session` column —
+    the EXACT tokens curate_tracks/render key on (prefixed BG_049_01092025 for new
+    subjects, bare 1072025 for BG_046) — so the state tables we write are found by the
+    curation's in_zone lookup. Falls back to pkl stems if the registry is unreadable."""
+    try:
+        reg = pd.read_csv(registry_path)
+        toks = sorted(reg["session"].astype(str).unique().tolist(),
+                      key=sjp.session_date_key)
+        if toks:
+            return toks, "registry"
+    except Exception as e:
+        print(f"  registry unreadable ({e}); using pkl dir", flush=True)
     toks = [Path(p).name[:-4]
             for p in glob.glob(str(Path(pkl_dir) / f"{subject}_*.pkl"))]
-    return sorted(toks, key=sjp.session_date_key)
+    return sorted(toks, key=sjp.session_date_key), "pkl-dir"
 
 
 def _run_tags(args, tokens) -> int:
@@ -97,6 +104,10 @@ def main() -> int:
                     help="tags mode: keep ungated trials (state_gated == -1) too")
     ap.add_argument("--pkl-dir", type=Path, default=None)
     ap.add_argument("--states-dir", type=Path, default=None)
+    ap.add_argument("--registry", type=Path, default=None,
+                    help="UM registry whose 'session' column gives the canonical "
+                         "session tokens curate_tracks keys on (default: the subject's "
+                         "all_sessions/all42 unit_index.csv).")
     args = ap.parse_args()
     if args.pkl_dir is None:
         args.pkl_dir = sjp.pkl_dir(args.subject)
@@ -104,13 +115,11 @@ def main() -> int:
         args.states_dir = sjp.states_dir(args.subject)
     if args.tags_dir is None:
         args.tags_dir = sjp.tags_dir(args.subject)
+    if args.registry is None:
+        args.registry = sjp.um_registry(args.subject)
 
-    manifest = load_filtered_manifest(
-        include_stages=["Naive", "Learning", "Expert"],
-        merge_naive_learning=True, min_trials=150, min_dprime=None)
-    tokens = _session_tokens(manifest, args.subject, args.pkl_dir)
-    print(f"{args.subject}: {len(tokens)} sessions "
-          f"({'manifest' if not manifest.empty else 'pkl-dir'} source)", flush=True)
+    tokens, src = _session_tokens(args.registry, args.subject, args.pkl_dir)
+    print(f"{args.subject}: {len(tokens)} sessions ({src} source)", flush=True)
 
     if args.provider == "tags":
         return _run_tags(args, tokens)
