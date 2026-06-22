@@ -168,12 +168,15 @@ def _hex_to_rgb01(h: str):
     return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
 
 
-def render_raster(ax, raster_df, change_size_shading: bool = False, episodes=None):
+def render_raster(ax, raster_df, change_size_shading: bool = False, episodes=None,
+                  catch_lw: float = 0.6):
     """Draw the outcome raster on ``ax``: one colored bar per trial.
 
-    Catch trials get a black outline. With ``change_size_shading``, go-trial hits
-    and genuine (go-trial) misses are shaded by change size. ``episodes`` (list of
-    StateEpisode) are drawn as translucent state spans behind the ticks.
+    Catch trials get a black outline (``catch_lw`` sets its width; use a smaller
+    value, e.g. 0.3, to keep dense many-trial rasters from looking busy on a
+    slide). With ``change_size_shading``, go-trial hits and genuine (go-trial)
+    misses are shaded by change size. ``episodes`` (list of StateEpisode) are
+    drawn as translucent state spans behind the ticks.
     """
     import matplotlib.patches as mpatches  # deferred so the library imports without matplotlib
 
@@ -196,7 +199,7 @@ def render_raster(ax, raster_df, change_size_shading: bool = False, episodes=Non
             color = base
         edge = "#111111" if row.is_catch else "none"
         ax.add_patch(mpatches.Rectangle((i - 0.5, 0), 1.0, 1.0, facecolor=color,
-                                        edgecolor=edge, linewidth=0.6))
+                                        edgecolor=edge, linewidth=catch_lw))
     ax.set_xlim(-0.5, max(n - 0.5, 0.5))
     ax.set_ylim(0, 1)
     ax.set_yticks([])
