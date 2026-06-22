@@ -556,3 +556,118 @@ def fit_anchor(design, param_spec, seed_theta=None, l2=0.0, n_restarts=4, seed=0
         hessian=hessian,
         hessian_cond=hessian_cond,
     )
+
+
+# ── Engine-A model selection (Task 1.6) — rectification by CV-LL (§A.3) ───────
+def select_rectification(design_builder, expert_trial_evidence, state_labels,
+                         mu, sigma, candidates=("signed", "halfwave", "asym"),
+                         k=5, seed=0):
+    """Pick the evidence rectification by k-fold cross-validated log-likelihood.
+
+    Plain English: should the accumulator integrate the *full* signed evidence
+    (``signed`` — TF dips below base count as negative evidence), only the
+    *positive* deflections (``halfwave`` — slow/below-base pulses ignored), or an
+    asymmetrically-gained version (``asym``)? We answer it empirically: for each
+    candidate we rebuild the trial Design with that rectification (which changes
+    the accumulated ``A``), then score it by **held-out** log-likelihood under a
+    refit hazard model. The candidate whose generative model best predicts
+    *when* the mouse licks on data it was not fitted to wins. The winner is
+    frozen for the downstream sweep (the caller's job).
+
+    Cross-validation (FAIR comparison): the fold split is computed **once**, from
+    a single ``np.random.default_rng(seed)`` shuffle of ``[0..n)`` via
+    ``np.array_split``, and the SAME folds are reused for every candidate. The
+    per-fold ``fit_anchor`` is given a SAME fixed seed for every candidate too.
+    This is load-bearing: candidates that build identical Designs (e.g. ``asym``
+    with default unit gains reduces to ``signed``) must score identically — any
+    per-candidate reshuffle of the folds or per-candidate fit seed would make the
+    comparison apples-to-oranges and the winner CV-noise. For each fold we
+    ``fit_anchor`` on the train subset (``Design.subset(train_idx)``) and evaluate
+    the held-out **data log-likelihood**
+    ``= -hazard_nll(fit.theta, Design.subset(test_idx), param_spec, l2=0.0)``,
+    then sum across folds. The score reported per candidate is this summed
+    held-out log-likelihood (higher = better). Each candidate uses a default
+    ``ParamSpec(rectification=cand)`` so the fit's parameter layout matches; the
+    Design's ``A`` is already built with that rectification (so the rectification
+    field on the spec is metadata here — ``A`` is precomputed).
+
+    Parameters
+    ----------
+    design_builder : callable
+        The ``build_design`` callable (passed in for testability). Invoked as
+        ``design_builder(expert_trial_evidence, state_labels, mu, sigma,
+        rectification=cand)`` for each candidate.
+    expert_trial_evidence : pandas.DataFrame
+        Per-trial evidence frame (``build_trial_evidence_corrected`` form) for the
+        expert anchor(s).
+    state_labels : pandas.DataFrame
+        Trial-indexed mood labels (``build_design`` form).
+    mu, sigma : float
+        Temporal-expectation bump anchor and FIXED width (passed through).
+    candidates : tuple[str]
+        Rectifications to compare (default the three contract rectifications).
+    k : int
+        Number of CV folds.
+    seed : int
+        RNG seed for the fold split (reproducible).
+
+    Returns
+    -------
+    dict
+        ``{"scores": {cand: cv_loglik}, "winner": argmax_candidate}``.
+    """
+    # ── build every candidate's Design ONCE (rectification only changes A) ──
+    designs = {
+        cand: design_builder(expert_trial_evidence, state_labels, mu, sigma,
+                             rectification=cand)
+        for cand in candidates
+    }
+
+    # All candidates are rebuilt from the SAME evidence/labels, so they keep the
+    # SAME trials in the SAME order (rectification changes A values, not which
+    # trials survive). Verify, then compute ONE fold split shared by all.
+    n_set = {len(d) for d in designs.values()}
+    if len(n_set) != 1:
+        raise ValueError(
+            "candidate Designs differ in trial count "
+            f"{ {c: len(d) for c, d in designs.items()} }; cannot CV-compare "
+            "them on a shared fold split")
+    n = n_set.pop()
+
+    if n < k or n == 0:
+        # too few trials to split into k folds -> every candidate unusable
+        scores = {cand: -np.inf for cand in candidates}
+        return {"scores": scores, "winner": max(scores, key=scores.get)}
+
+    # ── ONE shuffled fold split, reused for EVERY candidate (fairness) ──
+    idx = np.arange(n)
+    np.random.default_rng(seed).shuffle(idx)
+    folds = np.array_split(idx, k)
+
+    scores = {}
+    for cand in candidates:
+        design = designs[cand]
+        param_spec = ParamSpec(rectification=cand)
+
+        cv_loglik = 0.0
+        ok = True
+        for f in range(k):
+            test_idx = folds[f]
+            if len(test_idx) == 0:
+                continue
+            train_idx = np.concatenate([folds[j] for j in range(k) if j != f])
+            if len(train_idx) == 0:
+                ok = False
+                break
+            train_design = design.subset(train_idx)
+            test_design = design.subset(test_idx)
+            # SAME fixed fit seed for every candidate & fold (apples-to-apples)
+            fit = fit_anchor(train_design, param_spec, seed_theta=None,
+                             l2=0.0, n_restarts=2, seed=seed)
+            held_out_ll = -hazard_nll(fit.theta, test_design, param_spec, l2=0.0)
+            cv_loglik += float(held_out_ll)
+
+        scores[cand] = cv_loglik if ok else -np.inf
+
+    winner = max(scores, key=scores.get)
+    return {"scores": scores, "winner": winner}

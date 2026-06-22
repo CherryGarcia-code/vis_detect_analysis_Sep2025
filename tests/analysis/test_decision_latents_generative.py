@@ -1084,3 +1084,195 @@ def test_fit_anchor_seed_theta_init_is_used():
     # recovery within tolerance with the true seed present
     for mood, j in (("Impulsive", 0), ("StimSens", 1)):
         assert abs(result.dials[mood]["sharpness"] - true_theta[0 + j]) < 0.4
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 1.6: rectification selection by cross-validated log-likelihood
+# (contract §A.3 rectification; §A.5 build_design/subset; §A.7 fit_anchor)
+# ════════════════════════════════════════════════════════════════════════════
+# Ground-truth, NON-VACUOUS test (load-bearing, NOT a tautology).
+#
+# We simulate EXPERT data from a SIGNED-evidence ground truth where DOWN-
+# deflections genuinely carry information: each trial's baseline log2-TF evidence
+# fluctuates ABOVE *and* BELOW base, and on go trials a sustained POSITIVE
+# excursion follows the change. Under SIGNED rectification the accumulator A sees
+# the full (positive AND negative) evidence, so its value — and hence the lick
+# hazard — tracks the net signed evidence. We simulate licks through that signed
+# hazard and bake the outcomes back into the evidence frame.
+#
+# `select_rectification` then rebuilds a Design per candidate from the SAME
+# evidence via the SAME builder (changing only the rectification of A) and scores
+# each by k-fold CV log-likelihood. HALFWAVE zeros every down-deflection, so its
+# accumulator is systematically too high on trials where negative evidence
+# suppressed the (signed-driven) lick — it cannot reproduce the timing structure.
+# The test asserts a REAL CV-LL margin: signed strictly beats halfwave by > a
+# meaningful gap and is the winner. (Identical scores would be a vacuous pass.)
+
+
+def _signed_information_evidence_frame(n_trials=900, dt=0.05, seed=0,
+                                       pos_step=1.2, neg_amp=1.2, noise=0.15,
+                                       go_p=0.6):
+    """Evidence frame where SIGNED down-deflections carry real information.
+
+    Each trial:
+      * baseline log2-TF evidence fluctuates ABOVE and BELOW base (zero-mean
+        noise PLUS, on a random subset of bins, a sustained NEGATIVE excursion of
+        amplitude ``neg_amp`` — a genuine "TF dropped below base" episode),
+      * on go trials, a sustained POSITIVE excursion (``pos_step``) after a
+        per-trial change_time.
+
+    The signed accumulator integrates both signs, so its trajectory (and the
+    lick hazard built from it) genuinely depends on the negative episodes. A
+    halfwave accumulator zeros them and is blind to that information.
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    change_times = []
+    for tidx in range(n_trials):
+        n_bins = int(rng.integers(30, 61))           # 1.5 - 3.0 s on the dt grid
+        ct = float(rng.uniform(0.5, 1.2))
+        change_times.append(ct)
+        go = bool(rng.random() < go_p)
+        t_grid = np.arange(n_bins) * dt
+        ev = rng.normal(0.0, noise, size=n_bins)
+        # a sustained NEGATIVE episode in a random early window (TF below base)
+        neg_start = int(rng.integers(2, max(3, n_bins // 2)))
+        neg_len = int(rng.integers(4, 12))
+        neg_end = min(n_bins, neg_start + neg_len)
+        ev[neg_start:neg_end] -= neg_amp
+        if go:
+            ev = ev + np.where(t_grid >= ct, pos_step, 0.0)
+        rows.append({
+            "trial_idx": tidx,
+            "outcome": "hit" if go else "miss",
+            "change_size": 2.0 if go else 1.0,
+            "change_time": ct,
+            "decision_time": n_bins * dt,
+            "lick": 1,                               # placeholder (simulator sets)
+            "censored": False,                       # placeholder
+            "evidence": ev,
+            "n_bins": n_bins,
+        })
+    ev_df = pd.DataFrame(rows)
+    labels = pd.DataFrame({
+        "trial_idx": np.arange(n_trials),
+        "state_label": [MAIN_MOODS[i % len(MAIN_MOODS)] for i in range(n_trials)],
+    }).set_index("trial_idx")
+    mu = float(np.median(change_times))
+    return ev_df, labels, mu
+
+
+def test_select_rectification_signed_beats_halfwave_on_signed_truth():
+    """Expert data simulated from a SIGNED ground truth (down-deflections carry
+    information): select_rectification must score `signed` STRICTLY above
+    `halfwave` by a real CV-LL margin and pick `signed` as the winner."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    sigma = 0.8
+    ev_df, labels, mu = _signed_information_evidence_frame(
+        n_trials=900, dt=0.05, seed=0)
+
+    # ── ground truth Design uses SIGNED accumulation; pick a true_theta with a
+    # sizeable sharpness v so the (signed) negative episodes really suppress the
+    # hazard and shape lick timing. z keeps baseline hazard low so trials survive
+    # to integrate the signed evidence; u adds the urgency bump. ──
+    truth_design = dlg.build_design(ev_df, labels, mu=mu, sigma=sigma, dt=0.05,
+                                    rectification="signed")
+    true_theta = np.array([1.8, 1.8, -3.6, -3.6, 0.5, 0.5])
+    eb, lk, cs = dlg.simulate_licks(truth_design, true_theta, ps, seed=42)
+    lick_rate = lk.mean()
+    assert 0.2 < lick_rate < 0.95, f"degenerate lick rate {lick_rate:.3f}"
+
+    # ── bake the SIGNED-simulated outcomes back into the evidence frame, keyed by
+    # the Design's trial_idx (build_design may have dropped untagged trials; here
+    # every trial is MAIN_MOODS so order is preserved). ──
+    by_tidx = {int(t): (int(e), int(l), bool(c))
+               for t, e, l, c in zip(truth_design.trial_idx, eb, lk, cs)}
+    out_lick, out_cens, out_dec = [], [], []
+    for row in ev_df.itertuples(index=False):
+        tidx = int(row.trial_idx)
+        if tidx in by_tidx:
+            e_bin, l, c = by_tidx[tidx]
+            out_lick.append(l)
+            out_cens.append(c)
+            # truncate decision_time to the realised event bin so the rebuilt
+            # Design's event_bin matches the simulated outcome
+            out_dec.append((e_bin + 1) * 0.05)
+        else:                                        # untagged (none here)
+            out_lick.append(int(row.lick))
+            out_cens.append(bool(row.censored))
+            out_dec.append(float(row.decision_time))
+    ev_df = ev_df.assign(lick=out_lick, censored=out_cens, decision_time=out_dec)
+    ev_df["n_bins"] = (np.asarray(out_dec) / 0.05).round().astype(int)
+    # re-truncate each trial's evidence to its realised n_bins
+    ev_df["evidence"] = [
+        np.asarray(e, float)[:n] for e, n in zip(ev_df["evidence"], ev_df["n_bins"])
+    ]
+
+    # ── score the candidates by k-fold CV-LL via select_rectification ──
+    out = dlg.select_rectification(
+        dlg.build_design, ev_df, labels, mu, sigma,
+        candidates=("signed", "halfwave", "asym"), k=5, seed=0)
+
+    scores = out["scores"]
+    assert set(scores) == {"signed", "halfwave", "asym"}
+    assert all(np.isfinite(v) for v in scores.values())
+
+    margin = 1.0   # CV-LL units (summed held-out log-likelihood); a real gap
+    assert scores["signed"] > scores["halfwave"] + margin, (
+        f"signed CV-LL {scores['signed']:.3f} not > halfwave "
+        f"{scores['halfwave']:.3f} + {margin}")
+    # scores must differ meaningfully (a vacuous identical-score pass is invalid)
+    assert abs(scores["signed"] - scores["halfwave"]) > margin
+    # The load-bearing claim is HALFWAVE LOSES (down-deflections carry info). The
+    # winner is `signed` OR `asym` because with default unit gains
+    # rectify(e, "asym", 1.0, 1.0) == rectify(e, "symmetric") == signed: asym
+    # NESTS signed and builds an identical Design, so on signed-truth the two are
+    # statistically indistinguishable and either may win by CV noise (here, with
+    # the fairness-fixed shared fold split, they tie to optimizer tolerance).
+    # halfwave must NOT win.
+    assert out["winner"] in ("signed", "asym"), (
+        f"winner {out['winner']!r} not in ('signed', 'asym'); scores={scores}")
+
+
+def test_select_rectification_winner_is_argmax_of_scores():
+    """The reported winner is exactly the argmax over the candidate scores."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    sigma = 0.8
+    ev_df, labels, mu = _signed_information_evidence_frame(
+        n_trials=400, dt=0.05, seed=3)
+    truth_design = dlg.build_design(ev_df, labels, mu=mu, sigma=sigma, dt=0.05,
+                                    rectification="signed")
+    true_theta = np.array([1.8, 1.8, -3.6, -3.6, 0.5, 0.5])
+    eb, lk, cs = dlg.simulate_licks(truth_design, true_theta, ps, seed=7)
+    by_tidx = {int(t): (int(e), int(l), bool(c))
+               for t, e, l, c in zip(truth_design.trial_idx, eb, lk, cs)}
+    out_lick, out_cens, out_dec = [], [], []
+    for row in ev_df.itertuples(index=False):
+        e_bin, l, c = by_tidx[int(row.trial_idx)]
+        out_lick.append(l); out_cens.append(c); out_dec.append((e_bin + 1) * 0.05)
+    ev_df = ev_df.assign(lick=out_lick, censored=out_cens, decision_time=out_dec)
+    ev_df["n_bins"] = (np.asarray(out_dec) / 0.05).round().astype(int)
+    ev_df["evidence"] = [
+        np.asarray(e, float)[:n] for e, n in zip(ev_df["evidence"], ev_df["n_bins"])
+    ]
+
+    out = dlg.select_rectification(dlg.build_design, ev_df, labels, mu, sigma,
+                                   candidates=("signed", "halfwave"), k=4, seed=1)
+    winner = max(out["scores"], key=out["scores"].get)
+    assert out["winner"] == winner
+
+
+def test_select_rectification_is_seed_reproducible():
+    """Same seed -> identical scores; the fold split is RNG-seeded."""
+    ev_df, labels, mu = _signed_information_evidence_frame(
+        n_trials=300, dt=0.05, seed=5)
+    # minimal outcome bake-in (use the placeholder lick/censored as-is is fine for
+    # reproducibility — we only check determinism, not the science here).
+    out1 = dlg.select_rectification(dlg.build_design, ev_df, labels, mu, 0.8,
+                                    candidates=("signed", "halfwave"), k=3, seed=0)
+    out2 = dlg.select_rectification(dlg.build_design, ev_df, labels, mu, 0.8,
+                                    candidates=("signed", "halfwave"), k=3, seed=0)
+    assert out1["scores"] == out2["scores"]
+    assert out1["winner"] == out2["winner"]
