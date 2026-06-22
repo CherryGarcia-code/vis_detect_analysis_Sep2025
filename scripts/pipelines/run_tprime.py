@@ -208,8 +208,21 @@ def process_session(
         sec_fwd = str(spike_times_sec_path).replace("\\", "/")
         adj_fwd = str(adj_path).replace("\\", "/")
 
+        # TPrime invocation. The SpikeGLX *Linux* build can't be called directly:
+        # it ships a bundled loader + Qt libs under links/ (created by its
+        # install.sh) and must run as `ld-linux ... --library-path links TPrime`.
+        # The Windows .exe (no links/ dir) is called directly. Each path stays
+        # quoted so the space in "Processed data" survives.
+        _tp = Path(tprime_exe)
+        _libdir = _tp.parent / "links"
+        _loader = _libdir / "ld-linux-x86-64.so.2"
+        if _loader.exists():
+            prefix = f'"{_loader}" --library-path "{_libdir}" "{_tp}"'
+        else:
+            prefix = f'"{tprime_exe}"'
+
         cmd = (
-            f'"{tprime_exe}" -syncperiod={sync_period} '
+            f'{prefix} -syncperiod={sync_period} '
             f'-tostream="{ni_sync_fwd}" '
             f'-fromstream=0,"{edge_fwd}" '
             f'-events=0,"{sec_fwd},{adj_fwd}"'
