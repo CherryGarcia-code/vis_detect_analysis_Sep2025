@@ -671,3 +671,90 @@ def select_rectification(design_builder, expert_trial_evidence, state_labels,
 
     winner = max(scores, key=scores.get)
     return {"scores": scores, "winner": winner}
+
+
+# ── Engine-A anchor-design dict (Task 1.7) — the Phase-1->Phase-2 bridge ──────
+def build_anchor_designs(sessions, param_spec, mu_by_session, sigma, dt=0.05,
+                         leak_tau=0.27, rectification="signed"):
+    """Assemble the per-session ``Design`` dict that the Phase-2 sweep/ladders consume.
+
+    Plain English: for each anchor session this loads the session, rebuilds the
+    Phase-1 per-trial table (which mood each trial is in) and the corrected
+    per-trial log2-TF evidence, keeps ONLY the MAIN_MOOD cells the generative
+    model can actually identify its dials on (``compute_cell_qc(...)
+    ['usable_generative']``), builds a ragged :class:`Design` on just those cells'
+    trials, and stores it keyed by session name. A session with no usable cell is
+    OMITTED from the returned dict (the caller ships Phase-1 proxies for it).
+
+    This resolves the contract §A.10-3 interface gap: the anchor-design dict is
+    built here EXPLICITLY rather than hidden inside ``backward_sweep`` /
+    ``learning_ladder`` (which consume ``dict[str, Design]``).
+
+    Parameters
+    ----------
+    sessions : iterable[str]
+        Anchor session names to build Designs for (e.g. the
+        ``select_expert_anchors`` output's ``anchors``).
+    param_spec : ParamSpec
+        Parameter layout — accepted for interface symmetry with the downstream
+        sweep/ladders (the Design itself is layout-agnostic; ``mood_code`` indexes
+        ``MAIN_MOODS`` exactly as :func:`build_design` produces).
+    mu_by_session : Mapping[str, float]
+        Per-session temporal-expectation anchor μ (Task 0.4
+        ``change_time_anchor`` applied per session, on that session's *reached*
+        trials). Looked up by session name to seed each Design's urgency bump.
+    sigma : float
+        FIXED urgency-bump width (seconds; a ``ParamSpec`` field, not fitted).
+    dt, leak_tau, rectification :
+        Generative time-grid + leaky-accumulator settings, passed straight to
+        :func:`build_design` (contract §A.3).
+
+    Returns
+    -------
+    dict[str, Design]
+        ``{session_name: Design}`` for every session with at least one
+        ``usable_generative`` MAIN_MOOD cell and a non-empty Design. Sessions
+        failing the QC gate (or producing an empty Design) are omitted.
+
+    Notes
+    -----
+    * ``del sess; gc.collect()`` after each session (sessions are large).
+    * Loaders are referenced via their home modules (``visdetect.suite.loader``
+      and ``visdetect.analysis.decision_latents``) so they import lazily and stay
+      cleanly monkeypatchable in tests.
+    * Off the buggy ``ddm.build_trial_evidence`` evidence sampler: evidence comes
+      from ``decision_latents.build_trial_evidence_corrected`` (the 60 Hz /
+      runs-of-3 builder); the Phase-1 ``build_trial_table`` is used ONLY for the
+      per-mood QC counts.
+    """
+    import gc
+
+    from visdetect.suite import loader as _suite_loader
+    from visdetect.analysis import decision_latents as dl
+
+    out: dict[str, Design] = {}
+    for sname in sessions:
+        sess = _suite_loader.load_session(sname)
+        try:
+            labels = dl.load_state_labels(sname)
+            trial_table = dl.build_trial_table(sess, labels, sname)
+            ev_df = dl.build_trial_evidence_corrected(sess, dt=dt)
+
+            # Keep ONLY MAIN_MOOD cells whose per-mood QC clears usable_generative.
+            usable_moods = []
+            for m in dl.MAIN_MOODS:
+                cell = trial_table[trial_table["state_label"] == m]
+                if len(cell) > 0 and dl.compute_cell_qc(cell)["usable_generative"]:
+                    usable_moods.append(m)
+
+            if usable_moods:
+                labels_usable = labels[labels["state_label"].isin(usable_moods)]
+                design = build_design(
+                    ev_df, labels_usable, mu_by_session[sname], sigma, dt=dt,
+                    leak_tau=leak_tau, rectification=rectification)
+                if len(design) > 0:
+                    out[sname] = design
+        finally:
+            del sess
+            gc.collect()
+    return out

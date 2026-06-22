@@ -1276,3 +1276,220 @@ def test_select_rectification_is_seed_reproducible():
                                     candidates=("signed", "halfwave"), k=3, seed=0)
     assert out1["scores"] == out2["scores"]
     assert out1["winner"] == out2["winner"]
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 1.7: build_anchor_designs  (per-session Design dict, QC-gated)
+# (contract §A.5 build_design + §A.10 item 3 — the explicit anchor-design dict)
+# ════════════════════════════════════════════════════════════════════════════
+# Ground-truth, QC-OMISSION test (load-bearing, NOT structural).
+#
+# `build_anchor_designs` is the Phase-1→Phase-2 bridge: per session it loads the
+# session, builds the Phase-1 trial table + corrected per-trial evidence, filters
+# to the MAIN_MOOD cells that pass `usable_generative` QC, builds a `Design` on
+# only those cells, and keys it by session — OMITTING any session with no usable
+# cell. We fabricate three synthetic sessions via the real Trial/Session
+# dataclasses + synthetic state labels, monkeypatching `load_session` and
+# `load_state_labels` so no disk/pkl is touched. Two sessions carry enough
+# Impulsive+StimSens trials to clear every QC_GEN_* floor; the third is
+# deliberately degenerate (a handful of trials per mood) so EVERY cell fails
+# `usable_generative`. The test asserts: exactly the two usable sessions are
+# keyed (the degenerate one is omitted), each value is a non-empty Design whose
+# moods are MAIN_MOODS, and the per-session anchor mu was applied (phi peaks near
+# that session's change-time).
+
+from visdetect.core.session import Session, Trial  # noqa: E402
+from visdetect.analysis import decision_latents as _dl  # noqa: E402
+
+
+def _fab_trial(outcome, change_size, change_time, rt, seed):
+    """One Trial via the real dataclass. 60-frame baseline_values (60 Hz, runs-of-3).
+
+    outcome drives the Phase-1 decision-time helper:
+      * 'Hit'  -> lick, decision_time = change_time + rt
+      * 'Miss' -> censored, decision_time = change_time + RESPONSE_WINDOW_S
+    """
+    rng = np.random.default_rng(seed)
+    rts = {}
+    if outcome == "Hit":
+        rts["RT"] = float(rt)
+    elif outcome == "Miss":
+        rts["Miss"] = float(rt)
+    bv = (rng.random(60) * 4.0) + 1.0          # synthetic TF vector (60 frames)
+    return Trial(
+        trialoutcome=outcome,
+        reactiontimes=rts,
+        change_size=float(change_size),
+        orientation=None,
+        ITI=1.0,
+        change_time=float(change_time),
+        baseline_values=bv,
+    )
+
+
+def _fab_session_usable(seed=0):
+    """A session whose BOTH MAIN_MOODs clear every QC_GEN_* floor.
+
+    Per mood: 16 go-Hit (lick events + excursions) + 10 go-Miss (censored +
+    excursions; long decision_time spans the anchor) -> 16 licks, 10 censored,
+    26 excursions, all spanning the ~0.5 s change-anchor. Change sizes vary so
+    there is a real psychometric's worth of excursions.
+    """
+    rng = np.random.default_rng(seed)
+    trials = []
+    s = seed * 1000
+    cs_cycle = [1.25, 1.35, 1.5, 2.0]
+    for _mood_block in range(2):                 # both moods get the same recipe
+        for i in range(16):                      # Hits
+            ct = float(rng.uniform(0.4, 0.6))
+            trials.append(_fab_trial("Hit", cs_cycle[i % 4], ct,
+                                     rng.uniform(0.25, 0.5), s)); s += 1
+        for i in range(10):                      # Misses (censored)
+            ct = float(rng.uniform(0.4, 0.6))
+            trials.append(_fab_trial("Miss", cs_cycle[i % 4], ct,
+                                     rng.uniform(0.6, 1.0), s)); s += 1
+    return Session(trials=trials, clusters=[], subject="SYN",
+                   session_name="USABLE", good_cluster_ids=[],
+                   ni_events={"session_name": "USABLE"})
+
+
+def _fab_session_unusable(seed=99):
+    """A session whose EVERY cell FAILS usable_generative (too few trials).
+
+    3 Hit + 2 Miss per mood -> 3 licks (< 15), 2 censored (< 8), 5 excursions
+    (< 10): below every QC_GEN_* floor, so no mood is usable and the whole
+    session must be omitted from the dict.
+    """
+    rng = np.random.default_rng(seed)
+    trials = []
+    s = seed * 1000
+    for _mood_block in range(2):
+        for _ in range(3):
+            trials.append(_fab_trial("Hit", 2.0, float(rng.uniform(0.4, 0.6)),
+                                     rng.uniform(0.25, 0.5), s)); s += 1
+        for _ in range(2):
+            trials.append(_fab_trial("Miss", 2.0, float(rng.uniform(0.4, 0.6)),
+                                     rng.uniform(0.6, 1.0), s)); s += 1
+    return Session(trials=trials, clusters=[], subject="SYN",
+                   session_name="UNUSABLE", good_cluster_ids=[],
+                   ni_events={"session_name": "UNUSABLE"})
+
+
+def _alternating_labels(session, moods=("Impulsive", "StimSens")):
+    """State-label frame (load_state_labels form) alternating MAIN_MOODS by
+    trial_idx, so each mood gets an equal share of the fabricated trials."""
+    n = len(session.trials)
+    rows = [{"trial_idx": i, "state_label": moods[i % len(moods)],
+             "state_confidence": 0.9} for i in range(n)]
+    return pd.DataFrame(rows).set_index("trial_idx")[
+        ["state_label", "state_confidence"]]
+
+
+@pytest.fixture
+def _patch_anchor_io(monkeypatch):
+    """Monkeypatch load_session + load_state_labels to serve fabricated sessions.
+
+    Returns the session/label registry so a test can register sessions by name.
+    """
+    sessions, labels = {}, {}
+
+    def fake_load_session(name):
+        return sessions[str(name)]
+
+    def fake_load_state_labels(name, *a, **k):
+        return labels[str(name)]
+
+    # patch where build_anchor_designs looks them up
+    import visdetect.suite.loader as _suite_loader
+    monkeypatch.setattr(_suite_loader, "load_session", fake_load_session)
+    monkeypatch.setattr(_dl, "load_state_labels", fake_load_state_labels)
+    return sessions, labels
+
+
+def test_build_anchor_designs_keys_usable_omits_unusable(_patch_anchor_io):
+    """Two usable sessions -> a dict with both keyed; an all-unusable session is
+    OMITTED. The omission path is genuinely exercised (S3 fails every QC floor)."""
+    sessions, labels = _patch_anchor_io
+    s1 = _fab_session_usable(seed=1)
+    s2 = _fab_session_usable(seed=2)
+    s3 = _fab_session_unusable(seed=99)          # all cells unusable -> omitted
+    for name, sess in (("S1", s1), ("S2", s2), ("S3", s3)):
+        sessions[name] = sess
+        labels[name] = _alternating_labels(sess)
+
+    ps = dlg.ParamSpec()
+    # caller computes the per-session change-time anchor mu (Task 0.4) per session
+    mu_by_session = {}
+    for name, sess in (("S1", s1), ("S2", s2), ("S3", s3)):
+        tab = _dl.build_trial_table(sess, labels[name], name)
+        mu_by_session[name] = _dl.change_time_anchor(tab)
+
+    out = dlg.build_anchor_designs(
+        ["S1", "S2", "S3"], ps, mu_by_session, sigma=0.8, dt=0.05)
+
+    # exactly the two usable sessions are keyed; the unusable one is omitted
+    assert set(out.keys()) == {"S1", "S2"}, out.keys()
+    assert "S3" not in out
+
+    for name in ("S1", "S2"):
+        design = out[name]
+        assert isinstance(design, dlg.Design)
+        assert len(design) > 0
+        # only MAIN_MOODS enter the fit Design
+        for mc in design.mood_code:
+            assert MAIN_MOODS[mc] in ("Impulsive", "StimSens")
+        # per-session mu applied: phi peaks near that session's anchor bin
+        mu = mu_by_session[name]
+        assert np.isfinite(mu)
+        peak_bin = int(np.argmax(design.phi[0]))
+        assert abs(peak_bin * design.dt - mu) <= design.dt + 1e-9
+
+
+def test_build_anchor_designs_empty_when_all_sessions_unusable(_patch_anchor_io):
+    """If EVERY session is unusable, the returned dict is empty (not None)."""
+    sessions, labels = _patch_anchor_io
+    s3 = _fab_session_unusable(seed=99)
+    sessions["S3"] = s3
+    labels["S3"] = _alternating_labels(s3)
+
+    ps = dlg.ParamSpec()
+    tab = _dl.build_trial_table(s3, labels["S3"], "S3")
+    mu_by_session = {"S3": _dl.change_time_anchor(tab)}
+
+    out = dlg.build_anchor_designs(["S3"], ps, mu_by_session, sigma=0.8, dt=0.05)
+    assert out == {}
+
+
+def test_build_anchor_designs_filters_to_usable_moods_only(_patch_anchor_io):
+    """A session where ONE mood is usable and the other is not keeps only the
+    usable mood's trials in the Design (the unusable mood is dropped)."""
+    sessions, labels = _patch_anchor_io
+    sess = _fab_session_usable(seed=7)
+    n = len(sess.trials)
+    # Make StimSens degenerate: give it only the first 4 trials; label everything
+    # else Impulsive. StimSens then falls below every QC_GEN_* floor while
+    # Impulsive stays well-populated.
+    stim_idx = {0, 1, 2, 3}
+    rows = []
+    for i in range(n):
+        mood = "StimSens" if i in stim_idx else "Impulsive"
+        rows.append({"trial_idx": i, "state_label": mood, "state_confidence": 0.9})
+    lab = pd.DataFrame(rows).set_index("trial_idx")[
+        ["state_label", "state_confidence"]]
+    sessions["S1"] = sess
+    labels["S1"] = lab
+
+    ps = dlg.ParamSpec()
+    tab = _dl.build_trial_table(sess, lab, "S1")
+    qc_stim = _dl.compute_cell_qc(tab[tab["state_label"] == "StimSens"])
+    assert not qc_stim["usable_generative"]      # precondition: StimSens unusable
+    qc_impu = _dl.compute_cell_qc(tab[tab["state_label"] == "Impulsive"])
+    assert qc_impu["usable_generative"]          # precondition: Impulsive usable
+    mu_by_session = {"S1": _dl.change_time_anchor(tab)}
+
+    out = dlg.build_anchor_designs(["S1"], ps, mu_by_session, sigma=0.8, dt=0.05)
+    assert set(out.keys()) == {"S1"}
+    design = out["S1"]
+    # only the usable Impulsive cell's trials survive into the Design
+    assert len(design) > 0
+    assert all(MAIN_MOODS[mc] == "Impulsive" for mc in design.mood_code)
