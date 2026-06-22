@@ -62,9 +62,21 @@ UM_DIR="$CEPH/wEPhys/$SUBJECT/unit_match"
 UM_INPUT="$UM_DIR/input"
 MANIFEST="$UM_DIR/${SUBJECT}_um_extract_manifest.csv"
 
-source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate "$CONDA_ENV"
+# Use the env's python DIRECTLY via a PATH prepend -- do NOT rely on `conda activate`.
+# Under `module load miniconda`, `conda activate "$CONDA_ENV"` set CONDA_PREFIX + the
+# shell prompt but left the BASE miniconda python first on PATH, so the job ran on a
+# python WITHOUT the env's deps (ModuleNotFoundError: numpy) even though the env has
+# them all. Prepending $CONDA_ENV/bin is bulletproof and needs neither `module load`
+# nor activation. (Falls back to activation only if the env bin is somehow absent.)
+if [ -x "$CONDA_ENV/bin/python" ]; then
+  export PATH="$CONDA_ENV/bin:$PATH"
+  hash -r 2>/dev/null || true
+else
+  echo "WARN: $CONDA_ENV/bin/python not found; falling back to conda activate"
+  source "$(conda info --base)/etc/profile.d/conda.sh" && conda activate "$CONDA_ENV"
+fi
 export PYTHONPATH="$REPO/src:${PYTHONPATH:-}"
+echo "python -> $(command -v python)  ($(python --version 2>&1))"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}" OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}" MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-16}"
 cd "$REPO"
 mkdir -p "$PKL_DIR" "$UM_INPUT"
