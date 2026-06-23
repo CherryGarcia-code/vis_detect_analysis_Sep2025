@@ -750,3 +750,108 @@ def identify_tf_responsive(design, y, full_fit, reduced_fit, cfg: TFGLMConfig) -
             "r_full_mean": r_full_mean, "r_red_mean": r_red_mean,
             "n_folds_used": int(r_full.size),
             "kernel_peak_t": kpeak_t, "kernel_fwhm": kfwhm}
+
+
+def identify_tf_responsive_pulse(design, y, full_fit, reduced_fit,
+                                 cfg: TFGLMConfig) -> dict:
+    """TF-responsive by the AUTHORS' PUBLISHED pulse-response criterion
+    (Khilkevich & Lohse 2024, Methods; confirmed by the corresponding author).
+
+    Both criteria are evaluated on the fast-minus-slow TF *pulse response* -- the
+    denoised pulse-triggered PETH around +/-``sd_pulse``*SD baseline-TF pulses --
+    NOT the dense raw-bin series. The dense held-out corr is ~0.1 and can never
+    clear the >0.2 floor; that floor was always meant for the averaged pulse
+    response (corr there can reach 0.2-0.9). This is the metric fix that resolves
+    the spurious 0%.
+
+    C1: mean over folds of ``corr(actual fast-slow pulse PETH,
+        FULL-model-predicted fast-slow pulse PETH)`` must exceed
+        ``cfg.c1_r_thresh`` (0.2).
+    C2: the residual (actual - reduced-model prediction) must be significantly
+        predicted by the TF contribution (full - reduced) across the 10 folds:
+        a one-sided one-sample t-test that per-fold ``corr(actual_FmS - red_FmS,
+        full_FmS - red_FmS) > 0`` has ``p < cfg.c2_p_thresh`` (0.01).
+
+    ``is_responsive = C1 AND C2`` (the authors' literal conjunction). Returns the
+    same keys as ``identify_tf_responsive`` (so callers are interchangeable):
+    ``r_full_mean``/``c1_r`` = the C1 full-model pulse-response correlation;
+    ``r_red_mean`` = the reduced model's pulse-response correlation; ``c2_p`` =
+    the residual-prediction significance.
+    """
+    bs = cfg.bin_s
+    y = np.asarray(y, float)
+    fp = np.asarray(full_fit.pred, float)
+    rp = np.asarray(reduced_fit.pred, float)
+    fold_ids = np.asarray(full_fit.fold_ids)
+    be = np.asarray(design.bin_edges, float)
+    ti = design.trial_index
+    win = cfg.pulse_eval_win
+    fast, slow = pulse_times_from_tf(design, cfg)
+
+    def _pulse_fold(pulses):
+        if pulses.size == 0 or fold_ids.size == 0:
+            return np.zeros(0, dtype=int)
+        idx = np.clip(np.searchsorted(be, pulses, side="right") - 1,
+                      0, fold_ids.size - 1)
+        return fold_ids[idx]
+
+    fast_fold, slow_fold = _pulse_fold(fast), _pulse_fold(slow)
+
+    def _fms(v, fp_t, sp_t):
+        _, a = tf_pulse_peth(v, be, fp_t, win, bs, trial_index=ti)
+        _, b = tf_pulse_peth(v, be, sp_t, win, bs, trial_index=ti)
+        return a - b
+
+    def _corr(a, b):
+        ok = np.isfinite(a) & np.isfinite(b)
+        if ok.sum() < 3 or np.std(a[ok]) < 1e-12 or np.std(b[ok]) < 1e-12:
+            return np.nan
+        return float(np.corrcoef(a[ok], b[ok])[0, 1])
+
+    c1_folds, c2_folds, rred_folds = [], [], []
+    for f in np.unique(fold_ids):
+        ff = fast[fast_fold == f] if fast.size else fast
+        sf = slow[slow_fold == f] if slow.size else slow
+        if ff.size < cfg.min_pulses_per_label or sf.size < cfg.min_pulses_per_label:
+            continue
+        a = _fms(y, ff, sf)
+        full = _fms(fp, ff, sf)
+        red = _fms(rp, ff, sf)
+        c1_folds.append(_corr(a, full))              # C1: full predicts actual FmS
+        rred_folds.append(_corr(a, red))             # reduced predicts actual FmS
+        c2_folds.append(_corr(a - red, full - red))  # C2: residual prediction
+
+    c1_arr = np.array([c for c in c1_folds if np.isfinite(c)], float)
+    c2_arr = np.array([c for c in c2_folds if np.isfinite(c)], float)
+    rred_arr = np.array([c for c in rred_folds if np.isfinite(c)], float)
+
+    c1_r = float(np.mean(c1_arr)) if c1_arr.size else np.nan
+    r_red_mean = float(np.mean(rred_arr)) if rred_arr.size else np.nan
+    if c2_arr.size >= 2 and np.std(c2_arr) > 1e-12:
+        t, p_two = _stats.ttest_1samp(c2_arr, 0.0)
+        c2_p = p_two / 2.0 if t > 0 else 1.0 - p_two / 2.0
+    elif c2_arr.size >= 2 and np.all(c2_arr > 0):
+        c2_p = 0.0
+    else:
+        c2_p = np.nan
+    c1_pass = np.isfinite(c1_r) and (c1_r > cfg.c1_r_thresh)
+    c2_pass = np.isfinite(c2_p) and (c2_p < cfg.c2_p_thresh)
+    is_resp = bool(c1_pass and c2_pass)  # authors' literal conjunction
+
+    kpeak_t, kfwhm = np.nan, np.nan
+    K = _tf_kernel(full_fit, design, cfg)
+    if K is not None and K.size:
+        lags = _lag_offsets(cfg.kern["tf"], bs) * bs
+        ip = int(np.argmax(np.abs(K)))
+        kpeak_t = float(lags[ip]); half = abs(K[ip]) / 2.0
+        lo = ip
+        while lo > 0 and abs(K[lo - 1]) >= half:
+            lo -= 1
+        hi = ip
+        while hi < K.size - 1 and abs(K[hi + 1]) >= half:
+            hi += 1
+        kfwhm = float(lags[hi] - lags[lo])
+    return {"c1_r": c1_r, "c2_p": c2_p, "is_responsive": is_resp,
+            "r_full_mean": c1_r, "r_red_mean": r_red_mean,
+            "n_folds_used": int(c1_arr.size),
+            "kernel_peak_t": kpeak_t, "kernel_fwhm": kfwhm}

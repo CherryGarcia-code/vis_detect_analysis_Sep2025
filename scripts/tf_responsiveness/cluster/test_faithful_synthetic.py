@@ -8,7 +8,7 @@ sys.path.insert(0, "E:/python_analysis/git_repos/vd_tf_phase0/src")
 from visdetect.analysis.tf_glm import (
     TFGLMConfig, TrialRegressors, assemble_design, trial_bin_edges,
     count_vector, fit_poisson_cv, make_trial_folds, identify_tf_responsive,
-    _tiled_baseline_block, _tf_octaves,
+    identify_tf_responsive_pulse, _tiled_baseline_block, _tf_octaves,
 )
 from visdetect.analysis.tf_glm_data import _baseline_tf_and_phase
 
@@ -96,7 +96,20 @@ Xr = d.X.copy(); Xr[:, tfcols] = 0.0
 full = fit_poisson_cv(d.X, y, cfg, folds)
 red = fit_poisson_cv(Xr, y, cfg, folds)
 o = identify_tf_responsive(d, y, full, red, cfg)
-print(f"[5] end-to-end fit OK: TF-driven unit dR={o['r_full_mean']-o['r_red_mean']:+.4f} "
-      f"c2_p={o['c2_p']:.1e} resp={o['is_responsive']} (expect POSITIVE dR, responsive)")
-assert (o["r_full_mean"] - o["r_red_mean"]) > 0, "TF-driven unit not detected!"
+print(f"[5] end-to-end fit OK (dense metric): TF-driven unit "
+      f"dR={o['r_full_mean']-o['r_red_mean']:+.4f} c2_p={o['c2_p']:.1e} "
+      f"resp={o['is_responsive']}")
+assert (o["r_full_mean"] - o["r_red_mean"]) > 0, "TF-driven unit not detected (dense)!"
+
+# ── 6. AUTHORS' pulse-response criterion detects the TF-driven unit ──────────
+cfgp = TFGLMConfig(include_movement=True, include_phase=True,
+                   include_tiled_baseline=True, standardize_design=True,
+                   fast_fit=True, min_pulses_per_label=20)  # synthetic has few pulses
+op = identify_tf_responsive_pulse(d, y, full, red, cfgp)
+print(f"[6] pulse-response criterion OK: TF-driven unit "
+      f"C1(full pulse corr)={op['c1_r']:.3f} (>0.2 to pass) "
+      f"c2_p={op['c2_p']:.1e} resp={op['is_responsive']} "
+      f"folds={op['n_folds_used']}")
+assert op["n_folds_used"] >= 2, "pulse criterion got too few usable folds"
+assert np.isfinite(op["c1_r"]) and op["c1_r"] > 0, "pulse C1 not positive for TF-driven unit"
 print("\nALL SYNTHETIC CHECKS PASSED")

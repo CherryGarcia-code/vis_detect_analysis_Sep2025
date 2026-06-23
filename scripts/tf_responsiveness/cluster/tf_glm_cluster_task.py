@@ -49,7 +49,7 @@ for _up in _HERE.parents:
 
 from visdetect.analysis.tf_glm import (  # noqa: E402
     TFGLMConfig, assemble_design, count_vector, fit_poisson_cv,
-    make_trial_folds, identify_tf_responsive,
+    make_trial_folds, identify_tf_responsive_pulse,
 )
 from visdetect.analysis.tf_glm_data import (  # noqa: E402
     load_khilkevich_session, khilkevich_trial_regressors,
@@ -161,7 +161,7 @@ def run_task(targets_csv, task_id, data_root, out_dir,
             t0 = time.time()
             red = fit_poisson_cv(X_red, y, cfg_log, folds)
             full_log = fit_poisson_cv(d_log.X, y, cfg_log, folds)
-            o_log = identify_tf_responsive(d_log, y, full_log, red, cfg_log)
+            o_log = identify_tf_responsive_pulse(d_log, y, full_log, red, cfg_log)
             rec = dict(
                 task_id=task_id, session_rel=session_rel, region=region,
                 unit=uid, n_spikes=ns,
@@ -174,7 +174,7 @@ def run_task(targets_csv, task_id, data_root, out_dir,
             )
             if with_linear:
                 full_lin = fit_poisson_cv(d_lin.X, y, cfg_log, folds)
-                o_lin = identify_tf_responsive(d_lin, y, full_lin, red, cfg_log)
+                o_lin = identify_tf_responsive_pulse(d_lin, y, full_lin, red, cfg_log)
                 rec.update(
                     c2_p_lin=float(o_lin["c2_p"]), resp_lin=bool(o_lin["is_responsive"]),
                     r_full_lin=float(o_lin["r_full_mean"]),
