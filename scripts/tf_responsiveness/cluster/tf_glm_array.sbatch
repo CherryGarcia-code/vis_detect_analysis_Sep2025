@@ -23,7 +23,7 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16G
 #SBATCH -t 0-08:00
-#SBATCH --array=1-13%20
+#SBATCH --array=1-20%20
 
 set -uo pipefail
 
@@ -49,7 +49,7 @@ if ! python -c "import numpy" 2>/dev/null; then
     exit 1
 fi
 
-mkdir -p "$STAGE/logs" "$STAGE/results_pulse2"
+mkdir -p "$STAGE/logs" "$STAGE/results_pos"
 
 # Pin BLAS/OpenMP threads to the task's CPU allocation (the Poisson solver's
 # matrix ops would otherwise oversubscribe the node).
@@ -71,7 +71,7 @@ python "$STAGE/code/scripts/tf_responsiveness/cluster/tf_glm_cluster_task.py" \
     --targets "$STAGE/targets.csv" \
     --task-id "$SLURM_ARRAY_TASK_ID" \
     --data-root "$DATA_ROOT" \
-    --out-dir "$STAGE/results_pulse2"
+    --out-dir "$STAGE/results_pos"
 rc=$?
 echo "task ${SLURM_ARRAY_TASK_ID} finished rc=$rc | $(date)"
 exit $rc
