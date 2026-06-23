@@ -365,6 +365,172 @@ def design_with_outcomes(design, event_bin, lick, censored):
     return d
 
 
+# ── Engine-A recovery (Task 3.2) — per-dial point recovery (contract §A.9) ────
+# Maps the internal theta dial keys (v/z/u) to the public, FitResult-aligned dial
+# names (sharpness/itchiness/timing) used in every recovery report.
+_DIAL_PUBLIC_NAME = {"v": "sharpness", "z": "itchiness", "u": "timing"}
+
+# Default per-dial jitter SDs for perturbing the GROUND TRUTH across reps. The
+# spread must be large relative to the fit's recovery noise so the Pearson r is a
+# genuine across-rep signal (a constant true value would make r undefined). Tuned
+# so the expert regime stays in its identifiable band (v ~1.0-1.6, z very negative
+# so trials survive to the post-change excursion, u modest). NOT fitted; the
+# caller may override.
+_RECOVER_JITTER_SD = {"v": 0.30, "z": 0.45, "u": 0.20}
+
+
+def recover_point(design, true_theta, param_spec, n_rep=100, seed=0,
+                  jitter_sd=None, n_restarts=2):
+    """Per-dial point-recovery of the generative decision-latents (contract §A.9).
+
+    Plain English: the make-or-break question for the generative model is "if the
+    mouse REALLY had these three behavioural knobs (sharpness ``v``, itchiness
+    ``z``, timing ``u``), would our fitter get them back?" We answer it as a
+    GENUINE ground-truth measurement, NOT a tautology: over ``n_rep`` replicates we
+    JITTER the true dial values around ``true_theta`` (so the truth genuinely
+    *varies* across reps), simulate licks through that perturbed truth, refit with
+    :func:`fit_anchor`, and read the recovered dials. Per dial we then report how
+    well the recovered values TRACK the (varied) truth.
+
+    Why jitter the truth (not just resimulate one fixed truth): the Pearson ``r``
+    between recovered and true is only meaningful when the truth SPANS a range — a
+    fixed truth has zero variance and ``r`` is undefined. Sweeping the true value
+    across reps makes ``r`` a real identifiability signal (does the estimate move
+    WITH the truth?), exactly the §A.9 rigor requirement.
+
+    For each rep ``j`` and each dial ``d``, BOTH moods contribute one
+    ``(true, recovered)`` pair (the per-dial arrays POOL across moods), so with two
+    moods each dial accumulates ``2 * n_rep`` pairs. Per dial we report:
+
+    * ``r``           — Pearson correlation between recovered and true across all
+      pairs (NaN if the truth has ~zero spread, which should not happen with a
+      positive ``jitter_sd``);
+    * ``bias``        — ``mean(recovered - true)`` across all pairs;
+    * ``ci_coverage`` — fraction of pairs whose per-fit 95% CI
+      (``recovered ± 1.96 * sqrt(diag(cov))`` from :attr:`FitResult.cov`) contains
+      the true value. Reps whose ``cov`` is ``None`` (singular Hessian) are
+      EXCLUDED from coverage (and counted in ``n_cov_excluded``); if every rep is
+      excluded ``ci_coverage`` is ``NaN``.
+
+    Parameters
+    ----------
+    design : Design
+        The recovery ground-truth Design (A/phi/mood fixed; outcomes are RESIMULATED
+        each rep). Typically ``make_recovery_design(regime)[0]``.
+    true_theta : np.ndarray
+        The regime's ground-truth parameter vector (length ``param_spec.n_params()``)
+        — the CENTRE of the per-rep jitter.
+    param_spec : ParamSpec
+        Parameter layout (``theta`` <-> dial/mood mapping).
+    n_rep : int
+        Number of replicate simulate -> refit cycles (default 100; the test uses a
+        reduced but still-genuine count for tractability).
+    seed : int
+        Master RNG seed. Each rep gets a deterministic child seed for both the
+        truth jitter and the lick simulation, so the whole sweep is reproducible.
+    jitter_sd : Mapping[str, float] | None
+        Per-dial Gaussian jitter SD for perturbing the truth (defaults to
+        :data:`_RECOVER_JITTER_SD`). The SAME jitter is applied to BOTH moods'
+        slots of a dial each rep (so the dial moves coherently).
+    n_restarts : int
+        Random restarts for each per-rep :func:`fit_anchor` (default 2 — a
+        tractability lever; the default ``fit_anchor`` value is 4).
+
+    Returns
+    -------
+    dict
+        ``{"sharpness": {...}, "itchiness": {...}, "timing": {...}}`` where each
+        value is ``{"r": float, "bias": float, "sd_true": float,
+        "ci_coverage": float, "n_pairs": int, "n_cov_excluded": int}``. ``sd_true``
+        is the SD of the (jittered) true values across pairs — the natural scale
+        for the ``|bias| <= 0.1 * SD(true)`` recovery tolerance (contract §A.9).
+    """
+    true_theta = np.asarray(true_theta, float)
+    n_params = param_spec.n_params()
+    assert len(true_theta) == n_params, (
+        f"len(true_theta)={len(true_theta)} != n_params={n_params}")
+
+    jitter = dict(_RECOVER_JITTER_SD)
+    if jitter_sd is not None:
+        jitter.update(jitter_sd)
+
+    moods = list(param_spec.moods)
+    dials = ("v", "z", "u")
+
+    # Per (dial, mood) collectors of true / recovered / in-CI flags across reps.
+    true_vals = {d: {m: [] for m in moods} for d in dials}
+    rec_vals = {d: {m: [] for m in moods} for d in dials}
+    in_ci = {d: {m: [] for m in moods} for d in dials}  # only reps with a cov
+
+    master = np.random.default_rng(seed)
+    # one independent child seed per rep (for truth jitter AND simulation)
+    rep_seeds = master.integers(0, 2**31 - 1, size=int(n_rep))
+
+    for j in range(int(n_rep)):
+        rep_rng = np.random.default_rng(int(rep_seeds[j]))
+        # ── jitter the TRUTH for this rep (same perturbation to both moods of a
+        # dial, so the dial moves coherently across moods) ──
+        theta_j = true_theta.copy()
+        for d in dials:
+            off = param_spec._offset(d)
+            delta = float(rep_rng.normal(0.0, jitter[d]))
+            for mi in range(len(moods)):
+                theta_j[off + mi] = true_theta[off + mi] + delta
+
+        # ── simulate -> refit ──
+        sim_seed = int(rep_rng.integers(0, 2**31 - 1))
+        eb, lk, cs = simulate_licks(design, theta_j, param_spec, seed=sim_seed)
+        sim_design = design_with_outcomes(design, eb, lk, cs)
+        fit = fit_anchor(sim_design, param_spec, seed_theta=None, l2=0.0,
+                         n_restarts=int(n_restarts), seed=int(rep_seeds[j]))
+
+        cov = fit.cov
+        for d in dials:
+            off = param_spec._offset(d)
+            for mi, m in enumerate(moods):
+                idx = off + mi
+                t_val = float(theta_j[idx])
+                r_val = float(fit.theta[idx])
+                true_vals[d][m].append(t_val)
+                rec_vals[d][m].append(r_val)
+                if cov is not None:
+                    var = float(cov[idx, idx])
+                    if np.isfinite(var) and var >= 0.0:
+                        se = np.sqrt(var)
+                        lo, hi = r_val - 1.96 * se, r_val + 1.96 * se
+                        in_ci[d][m].append(bool(lo <= t_val <= hi))
+
+    # ── reduce to the per-dial summary (pooling across moods) ──
+    out = {}
+    for d in dials:
+        t_pool = np.concatenate([np.asarray(true_vals[d][m], float) for m in moods])
+        r_pool = np.concatenate([np.asarray(rec_vals[d][m], float) for m in moods])
+        ci_pool = []
+        for m in moods:
+            ci_pool.extend(in_ci[d][m])
+
+        # Pearson r (NaN-safe: undefined if the truth has ~zero spread)
+        if t_pool.size >= 2 and np.std(t_pool) > 1e-12 and np.std(r_pool) > 1e-12:
+            r = float(np.corrcoef(t_pool, r_pool)[0, 1])
+        else:
+            r = float("nan")
+        bias = float(np.mean(r_pool - t_pool)) if t_pool.size else float("nan")
+        sd_true = float(np.std(t_pool)) if t_pool.size else float("nan")
+        ci_coverage = (float(np.mean(ci_pool)) if len(ci_pool) > 0
+                       else float("nan"))
+        n_cov_excluded = int(t_pool.size - len(ci_pool))
+
+        out[_DIAL_PUBLIC_NAME[d]] = {
+            "r": r,
+            "bias": bias,
+            "sd_true": sd_true,
+            "ci_coverage": ci_coverage,
+            "n_pairs": int(t_pool.size),
+            "n_cov_excluded": n_cov_excluded,
+        }
+    return out
+
+
 # ── Engine-A fitter (Task 1.5) — penalized MLE + FitResult (contract §A.7) ────
 @dataclass
 class FitResult:
