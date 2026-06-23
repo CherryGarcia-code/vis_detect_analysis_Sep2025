@@ -51,11 +51,23 @@ those `.npy` files directly — no manual CSV/JSON authoring needed:
 py scripts/anatomy/import_brainglobe_tracks.py --subject <S> \
     --tracks-dir data/anatomy/<S>/segmentation/atlas_space/tracks \
     --hemisphere left \
-    --shank-order shank1_med shank2_fit shank3 shank4
+    --shank-order shank1_med shank2_fit shank3 shank4 \
+    --insertion-depth-um 4030
 ```
 
 - It applies the verified transform `(AP,DV,ML)->(AP,ML,DV)` and reorders each polyline
   **deepest-first**, then writes/validates `data/anatomy/<S>_shank_tracks.json`.
+- **Depth calibration — `--insertion-depth-um` (the tip's depth below the cortical
+  surface).** This sets per-shank `tip_y_um = depth - track_length`, anchoring the traced
+  surface to channel `y = depth` and the deepest channels to their true depth. Without it,
+  `tip_y_um=0` assumes the *deepest dye == the tip*, which is usually too shallow (it lets
+  the silent-WM/cortex zone leak into the bank). Calibrate against what you know: the
+  manipulator insertion depth and/or the recorded depth-signature (striatum → silent WM →
+  cortex). For **BG_046** the manipulator depth (4030 µm) + the all-striatum site selection
+  agree (cross-checks to a physiology-implied ~3.86 mm), and `--insertion-depth-um 4030`
+  puts the entire bank in CP. **Recalibration is cheap and non-destructive**: this is a
+  sidecar (no PKL re-ingest), so to revise later just re-run this command with a new depth,
+  then `build_channel_atlas` + `localize_units` again (~2 min).
 - `--shank-order` lists the `.npy` stems in **probe electrode-shank order** (index 0 =
   smallest-x column in the Kilosort channel map). Index 0 first. If omitted it auto-orders
   medial→lateral by tip ML (use `--lateral-first` to flip) — but **prefer an explicit

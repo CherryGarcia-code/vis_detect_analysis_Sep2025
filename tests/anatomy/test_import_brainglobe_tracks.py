@@ -52,6 +52,19 @@ def test_import_assigns_indices_by_explicit_order_and_validates(tmp_path):
     assert loaded.source_tool == "brainglobe-segmentation"
 
 
+def test_insertion_depth_sets_per_shank_tip_y(tmp_path):
+    # tracks of different lengths -> tip_y_um = insertion_depth - track_len, per shank
+    np.save(tmp_path / "a.npy", _bg_track(ml=7167.0, dv_deep=4500.0, dv_shallow=1500.0))  # len 3000
+    np.save(tmp_path / "b.npy", _bg_track(ml=7417.0, dv_deep=4500.0, dv_shallow=2000.0))  # len 2500
+    out = tmp_path / "art.json"
+    art = import_brainglobe_tracks(
+        tmp_path, subject="BG_046", hemisphere="left",
+        shank_order=["a", "b"], out_json=out, insertion_depth_um=4030.0,
+    )
+    assert abs(art.shanks[0].tip_y_um - (4030.0 - 3000.0)) < 1.0   # 1030
+    assert abs(art.shanks[1].tip_y_um - (4030.0 - 2500.0)) < 1.0   # 1530
+
+
 def test_import_reverse_order_list_flips_indices(tmp_path):
     # listing lateral-first must put the lateral track at index 0
     stems = ["s_med", "s2", "s3", "s_lat"]
