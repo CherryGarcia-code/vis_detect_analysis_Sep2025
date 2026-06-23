@@ -40,6 +40,37 @@ travels with the artifact.
    - No dye on a shank → plan it in Pinpoint; `method = "pinpoint_planned"` and supply
      `planned_entry` + `planned_vector`.
 
+### Recommended path: import the brainglobe-segmentation output directly
+
+brainglobe-segmentation writes, per shank, an `atlas_space/tracks/<name>.npy` spline
+(shape `(N,3)`, **microns**, axis order `(AP, DV, ML)`) plus a `<name>.csv` of the
+Allen region at each point. `scripts/anatomy/import_brainglobe_tracks.py` consumes
+those `.npy` files directly — no manual CSV/JSON authoring needed:
+
+```
+py scripts/anatomy/import_brainglobe_tracks.py --subject <S> \
+    --tracks-dir data/anatomy/<S>/segmentation/atlas_space/tracks \
+    --hemisphere left \
+    --shank-order shank1_med shank2_fit shank3 shank4
+```
+
+- It applies the verified transform `(AP,DV,ML)->(AP,ML,DV)` and reorders each polyline
+  **deepest-first**, then writes/validates `data/anatomy/<S>_shank_tracks.json`.
+- `--shank-order` lists the `.npy` stems in **probe electrode-shank order** (index 0 =
+  smallest-x column in the Kilosort channel map). Index 0 first. If omitted it auto-orders
+  medial→lateral by tip ML (use `--lateral-first` to flip) — but **prefer an explicit
+  order** and confirm which physical shank is electrode-0 from your implant geometry.
+- **Determine `--hemisphere` from the data, not the napari view.** napari's display can
+  flip L/R depending on viewing direction; the saved atlas-space coordinates are what
+  matter. Query brainglobe's hemisphere volume at a tip coordinate, e.g.
+  `BrainGlobeAtlas("allen_mouse_25um").hemispheres[ap//25, dv//25, ml//25]` (1=left,
+  2=right). In Allen `asr`, ML < 5700 µm = right, ML > 5700 µm = left.
+- Cross-check: our `AllenAtlas.region_at` on a transformed point must match the region in
+  the shank's `.csv` (this was verified at 100% for BG_046).
+
+Then skip to step 6. The manual two-file contract below (steps 4–5) remains available for
+non-brainglobe tracing (e.g. Pinpoint-only planning).
+
 4. **Export the tracing to our contract** (two files, both under our control):
    - `<subject>_track_points.csv` — columns
      `probe_shank_index,point_order,ap_um,ml_um,dv_um` (deepest point = smallest
