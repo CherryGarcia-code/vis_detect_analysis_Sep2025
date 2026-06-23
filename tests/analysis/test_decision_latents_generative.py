@@ -2275,3 +2275,75 @@ def test_l2_weight_sensitivity_default_weights_and_columns():
     assert df["l2"].tolist() == [0.0, 0.01, 0.1, 1.0, 10.0]
     for col in ("l2", "ladder_winner", "v_span"):
         assert col in df.columns
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 3.0: shared recovery fixtures (expert-like & naive-like ground truth)
+# (contract §A.9 — these fixtures feed every recovery test 3.2-3.5)
+# ════════════════════════════════════════════════════════════════════════════
+# Sanity test (per brief / plan Task 3.0 Step 2): BOTH regimes must produce a
+# Design with a NON-DEGENERATE lick/censor mix when simulated from their own
+# `true_theta` — neither ~all-lick nor ~all-censor — so downstream recovery has
+# real survival information to fit. We assert each regime's simulated lick rate
+# sits in a sane band [0.30, 0.75] (naive may sit higher than expert, both must
+# be non-degenerate), that the returned theta length matches the ParamSpec, and
+# that both moods are present in the Design.
+
+
+def _simulated_lick_rate(design, true_theta, param_spec, seed=123):
+    """Simulate outcomes from true_theta and return the empirical lick rate."""
+    _, lick, _ = dlg.simulate_licks(design, true_theta, param_spec, seed=seed)
+    return float(np.mean(lick))
+
+
+def test_make_recovery_design_both_regimes_non_degenerate(
+        recovery_design_expert, recovery_design_naive):
+    """Both expert-like and naive-like fixtures yield a Design whose SIMULATED
+    outcomes (from that regime's true_theta) have a non-degenerate lick/censor
+    mix (lick rate in [0.30, 0.75]); theta length == n_params; both moods present."""
+    for name, (design, true_theta, param_spec) in (
+            ("expert", recovery_design_expert),
+            ("naive", recovery_design_naive)):
+        # returned theta matches the ParamSpec layout
+        assert len(true_theta) == param_spec.n_params(), (
+            f"{name}: len(true_theta)={len(true_theta)} != "
+            f"n_params={param_spec.n_params()}")
+        # the Design carries BOTH moods
+        present = set(int(m) for m in design.mood_code)
+        assert present == set(range(len(param_spec.moods))), (
+            f"{name}: Design moods {present} != all of "
+            f"{set(range(len(param_spec.moods)))}")
+        # non-degenerate lick/censor mix under that regime's own ground truth
+        rate = _simulated_lick_rate(design, true_theta, param_spec)
+        assert 0.30 <= rate <= 0.75, (
+            f"{name}: degenerate simulated lick rate {rate:.3f} "
+            f"(want [0.30, 0.75])")
+
+
+def test_make_recovery_design_expert_vs_naive_dials():
+    """The two regimes encode the intended dial contrast: expert-like has HIGHER
+    sharpness `v` (in the identifiable ~1.2-1.4 band) and LOWER baseline itchiness
+    `z` than naive-like (low `v` ~0.3, high `z` hair-trigger)."""
+    from _recovery_fixtures import make_recovery_design
+
+    de, te, pse = make_recovery_design("expert", n_trials=400, seed=0)
+    dn, tn, psn = make_recovery_design("naive", n_trials=400, seed=0)
+
+    # sharpness v (per-mood) higher for expert; itchiness z higher (less negative)
+    # for naive (hair-trigger). Compare the Impulsive-mood slots.
+    v_expert = pse.value(te, "v", "Impulsive")
+    v_naive = psn.value(tn, "v", "Impulsive")
+    z_expert = pse.value(te, "z", "Impulsive")
+    z_naive = psn.value(tn, "z", "Impulsive")
+    assert v_expert > v_naive, f"expert v {v_expert} !> naive v {v_naive}"
+    assert z_naive > z_expert, f"naive z {z_naive} !> expert z {z_expert}"
+    # expert sharpness lands in the identifiable band
+    assert 1.1 <= v_expert <= 1.5, f"expert v {v_expert} outside identifiable band"
+
+
+def test_make_recovery_design_rejects_unknown_regime():
+    """An unknown regime is a hard error (only expert/naive are defined)."""
+    from _recovery_fixtures import make_recovery_design
+
+    with pytest.raises((ValueError, KeyError)):
+        make_recovery_design("genius", n_trials=100, seed=0)
