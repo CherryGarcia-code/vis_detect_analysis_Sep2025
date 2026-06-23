@@ -140,6 +140,19 @@ done
 # --processed-root is REQUIRED on the cluster: the extractor otherwise defaults to a
 # hardcoded Windows X:\ path that doesn't exist on Linux -> every session skipped
 # "No binary data found" (it now exits nonzero if zero sessions yield waveforms).
+#
+# Extraction is SLOW (~3.5 h/session, I/O-latency-bound) so doing all sessions
+# sequentially here blows the wall limit on multi-session subjects. Set
+# SKIP_EXTRACT=1 to stop after stages 1-2 and instead run extraction as a parallel
+# SLURM ARRAY (one session per task) via run_extract_array.sbatch -- far faster:
+#   SKIP_EXTRACT=1 sbatch run_prep_subject.sbatch <SUBJECT>
+#   sbatch --array=0-<N-1>%8 run_extract_array.sbatch <SUBJECT>
+if [ -n "${SKIP_EXTRACT:-}" ]; then
+  echo "==== STAGES 1-2 DONE @ $(date) (SKIP_EXTRACT set). ===="
+  echo "NEXT: sbatch --array=0-\$((N-1))%8 $REPO/scripts/pipelines/tracking/slurm/run_extract_array.sbatch $SUBJECT"
+  echo "      (N = sessions in $MANIFEST.sessions)"
+  exit 0
+fi
 python scripts/analysis/prep_unitmatch_full_trial_waveforms.py --subject "$SUBJECT" \
   --processed-root "$PROC" \
   --manifest "$MANIFEST" --output "$UM_INPUT" --n_workers "$NWORKERS" \
