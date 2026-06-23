@@ -2116,3 +2116,162 @@ def test_state_ladder_is_seed_reproducible():
     assert out1["aic"] == out2["aic"]
     assert out1["cvll"] == out2["cvll"]
     assert out1["winner"] == out2["winner"]
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 2.4: backward-seeding guardrails — Hessian conditioning + L2 sensitivity
+# (contract §A.7 FitResult.hessian/hessian_cond; §A.6 ridge; §A.10 item 3)
+# ════════════════════════════════════════════════════════════════════════════
+# Two guardrails against the regularization MANUFACTURING the learning trajectory:
+#
+#   (1) hessian_conditioning(fit) — reads fit.hessian / fit.hessian_cond and
+#       fit.n_params and flags a fit whose curvature is degenerate (cond_number
+#       > 1e8 OR matrix_rank < n_params -> deficient). A well-conditioned fit on
+#       identifiable synthetic data must NOT be flagged; a hand-crafted singular
+#       Hessian (a duplicated column -> a zero eigenvalue, rank < n_params) MUST.
+#
+#   (2) l2_weight_sensitivity(...) — re-runs backward_sweep + learning_ladder at a
+#       grid of L2 weights and reports, per weight, the ladder winner and the
+#       recovered v span (v_expert - v_old from the sweep). The CONCLUSION (which
+#       dial moves; the recovered span sign) must be STABLE across weights >= 0.01
+#       — if it is not, the trajectory is a regularization artifact (a real signal,
+#       reported, NOT loosened).
+
+
+# ── (1) hessian_conditioning ────────────────────────────────────────────────
+def test_hessian_conditioning_well_conditioned_fit_not_deficient():
+    """A clean fit_anchor on identifiable synthetic data has a finite, small
+    condition number and full rank -> deficient == False."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    design, true_theta = _ramp_anchor_design(1.0, n_trials=800, seed=11, step=1.5)
+    eb, lk, cs = dlg.simulate_licks(design, true_theta, ps, seed=111)
+    sim_design = dlg.design_with_outcomes(design, eb, lk, cs)
+    fit = dlg.fit_anchor(sim_design, ps, n_restarts=4, seed=0)
+
+    out = dlg.hessian_conditioning(fit)
+    assert set(out.keys()) == {"cond_number", "rank", "deficient"}
+    assert np.isfinite(out["cond_number"])
+    assert out["cond_number"] < 1e8
+    assert out["rank"] == fit.n_params
+    assert out["deficient"] is False
+
+
+def test_hessian_conditioning_flags_rank_deficient_fit():
+    """A FitResult whose Hessian has a DUPLICATE column (a zero eigenvalue ->
+    rank < n_params) is flagged deficient == True."""
+    # Build a hand-crafted singular Hessian directly (duplicate the last column).
+    base = np.diag([4.0, 9.0, 16.0, 25.0]).astype(float)
+    H = base.copy()
+    H[:, 3] = H[:, 2]          # duplicate column -> rank 3 < 4
+    H[3, :] = H[2, :]          # keep it symmetric (still rank-deficient)
+    n_params = 4
+    fit = dlg.FitResult(
+        theta=np.zeros(n_params),
+        dials={},
+        ll=-1.0,
+        n_params=n_params,
+        cov=None,
+        hessian=H,
+        hessian_cond=float(np.linalg.cond(H)),   # np.inf for a singular matrix
+    )
+    out = dlg.hessian_conditioning(fit)
+    assert out["rank"] < n_params                # rank deficiency detected
+    assert out["deficient"] is True
+
+
+def test_hessian_conditioning_flags_high_condition_number():
+    """A full-rank but ILL-conditioned Hessian (cond_number > 1e8) is flagged
+    deficient even though rank == n_params."""
+    # eigenvalues spanning 12 orders of magnitude -> cond ~ 1e12, still full rank
+    H = np.diag([1e6, 1e3, 1.0, 1e-6]).astype(float)
+    n_params = 4
+    fit = dlg.FitResult(
+        theta=np.zeros(n_params), dials={}, ll=-1.0, n_params=n_params,
+        cov=None, hessian=H, hessian_cond=float(np.linalg.cond(H)),
+    )
+    out = dlg.hessian_conditioning(fit)
+    assert out["rank"] == n_params               # full rank
+    assert out["cond_number"] > 1e8
+    assert out["deficient"] is True              # flagged on conditioning alone
+
+
+# ── (2) l2_weight_sensitivity ───────────────────────────────────────────────
+def _only_v_anchor_designs(v_low=0.4, v_high=1.4, n_trials=600, design_seed=7,
+                           step=1.5):
+    """Two-anchor (OLD, EXPERT) only-v-varies fixture for L2-sensitivity.
+
+    Mirrors the Task-2.2 only-v-varies ground truth: SHARED design seed across the
+    two anchors so ONLY true v differs (z, u IDENTICAL), v in the identifiable
+    range, a strong post-change step so v leaves a signature z cannot mimic, and a
+    very negative baseline z so trials survive to the excursion. Returns
+    ``(anchor_designs, anchors_chrono, ps)`` where ``anchors_chrono`` is oldest ->
+    expert (so v_old < v_expert).
+    """
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    z_shared, u_shared = -4.0, 0.3
+    specs = [("OLD", v_low, 201), ("EXPERT", v_high, 202)]
+    anchor_designs = {}
+    for name, v_level, sim_seed in specs:
+        design, _ = _ramp_anchor_design(v_level, n_trials=n_trials,
+                                        seed=design_seed, step=step)
+        true_theta = np.array([v_level, v_level, z_shared, z_shared,
+                               u_shared, u_shared])
+        eb, lk, cs = dlg.simulate_licks(design, true_theta, ps, seed=sim_seed)
+        assert 0.2 < lk.mean() < 0.95, f"{name}: degenerate lick {lk.mean():.3f}"
+        anchor_designs[name] = dlg.design_with_outcomes(design, eb, lk, cs)
+    anchors_chrono = ["OLD", "EXPERT"]
+    return anchor_designs, anchors_chrono, ps
+
+
+def test_l2_weight_sensitivity_winner_and_v_span_stable_across_weights():
+    """On a clean only-v-varies dataset, l2_weight_sensitivity returns one row per
+    weight; for every weight >= 0.01 the ladder winner is STABLE (== M_sharpness)
+    and the recovered v_span is positive — the conclusion is NOT a regularization
+    artifact. (Decisive guardrail test.)
+
+    n_trials=800 (-> 400 per mood) is the PROVEN-DECISIVE only-v-varies config from
+    Task 2.2 (lesson iv). It is load-bearing: at 600 trials (300/mood) the only-v
+    AIC signal is a knife-edge (M_sharpness/M_caution/M_timing within ~1.7 AIC) and
+    the v<->z<->u confound lets M_timing edge out by noise -- an UNDER-POWERED
+    fixture, not a real regularization artifact. At 800 trials M_sharpness wins by a
+    clean ~2+ AIC margin, matching the locked Task-2.2 ground truth.
+    """
+    anchor_designs, anchors_chrono, ps = _only_v_anchor_designs(
+        v_low=0.4, v_high=1.4, n_trials=800, design_seed=7, step=1.5)
+
+    # Reduced weights + k=3 keep the test tractable (sweep+ladder per weight); the
+    # default signature still ships the full (0, 0.01, 0.1, 1, 10) tuple.
+    weights = (0.0, 0.1, 1.0, 10.0)
+    df = dlg.l2_weight_sensitivity(anchor_designs, anchors_chrono, ps,
+                                   weights=weights, seed=0)
+
+    # ── one row per weight, expected columns present ──
+    assert len(df) == len(weights)
+    for col in ("l2", "ladder_winner", "v_span"):
+        assert col in df.columns, col
+    assert sorted(df["l2"].tolist()) == sorted(weights)
+
+    # ── STABLE winner across weights >= 0.01 (guards against L2 manufacturing it) ──
+    ge = df[df["l2"] >= 0.01]
+    winners = set(ge["ladder_winner"].tolist())
+    assert winners == {"M_sharpness"}, (
+        f"ladder winner not stable across l2>=0.01: {ge[['l2','ladder_winner']].to_dict('records')}")
+
+    # ── recovered v_span positive across those weights (trajectory not erased) ──
+    assert np.all(ge["v_span"].to_numpy(float) > 0.0), (
+        f"recovered v_span not positive across l2>=0.01: "
+        f"{ge[['l2','v_span']].to_dict('records')}")
+
+
+def test_l2_weight_sensitivity_default_weights_and_columns():
+    """The default weights tuple is (0, 0.01, 0.1, 1, 10) and the returned frame
+    has one row per default weight with the documented columns (tractable: tiny
+    designs so the per-weight sweep+ladder stays fast)."""
+    anchor_designs, anchors_chrono, ps = _only_v_anchor_designs(
+        v_low=0.5, v_high=1.3, n_trials=300, design_seed=3, step=1.5)
+    df = dlg.l2_weight_sensitivity(anchor_designs, anchors_chrono, ps, seed=0)
+    assert df["l2"].tolist() == [0.0, 0.01, 0.1, 1.0, 10.0]
+    for col in ("l2", "ladder_winner", "v_span"):
+        assert col in df.columns

@@ -1353,3 +1353,150 @@ def state_ladder(anchor_design, param_spec, k=5, seed=0, n_restarts=4,
     if return_ll:
         out["ll"] = ll_by_rung
     return out
+
+
+# ── Engine-A backward-seeding guardrails (Task 2.4) — conditioning + L2 sens ──
+# Two checks that the regularization is INFORMING, not MANUFACTURING, the learning
+# trajectory:
+#   1. hessian_conditioning — is the fitted optimum well-curved (identifiable), or
+#      is its curvature degenerate (a flat ridge / a duplicated direction)? A
+#      degenerate Hessian means the dials are not jointly identifiable there, so an
+#      L2 prior could move them freely without changing the fit quality.
+#   2. l2_weight_sensitivity — does the SCIENTIFIC CONCLUSION (which dial moves
+#      across anchors; the recovered v span) survive a sweep of ridge strengths? If
+#      the conclusion only holds at one L2 weight, it is a regularization artifact.
+def hessian_conditioning(fit):
+    """Conditioning diagnostic for a single :class:`FitResult` (contract §A.7).
+
+    Plain English: the finite-difference Hessian ``fit.hessian`` is the curvature of
+    the negative log-likelihood at the fitted optimum. If that curvature is sharp in
+    every parameter direction the dials are well-identified there; if it is (nearly)
+    flat along some direction the fit sits on a ridge and an L2 prior can slide the
+    parameters along it for free — so a "learning trajectory" recovered there could
+    be a regularization artifact. We flag two failure modes:
+
+    * **rank deficiency** — ``np.linalg.matrix_rank(fit.hessian) < fit.n_params``
+      (an exactly-flat direction: a zero eigenvalue / a duplicated parameter), and
+    * **ill conditioning** — ``cond_number > 1e8`` (a near-flat direction: the
+      ratio of the largest to smallest singular value is enormous).
+
+    ``cond_number`` is taken from ``fit.hessian_cond`` when finite, else recomputed
+    via ``np.linalg.cond(fit.hessian)`` (``np.inf`` if singular / it raises).
+
+    Parameters
+    ----------
+    fit : FitResult
+        A fitted anchor (uses ``fit.hessian``, ``fit.hessian_cond``, ``fit.n_params``).
+
+    Returns
+    -------
+    dict
+        ``{"cond_number": float, "rank": int, "deficient": bool}`` where
+        ``deficient == (cond_number > 1e8) or (rank < fit.n_params)``.
+    """
+    H = np.asarray(fit.hessian, float)
+    n_params = int(fit.n_params)
+
+    # cond_number: prefer the value stored on the fit; recompute if it is missing
+    # / non-finite (a singular Hessian -> np.inf, which IS the right flag value).
+    cond_number = getattr(fit, "hessian_cond", None)
+    if cond_number is None or not np.isfinite(cond_number):
+        try:
+            cond_number = float(np.linalg.cond(H))
+        except Exception:
+            cond_number = np.inf
+    cond_number = float(cond_number)
+    if not np.isfinite(cond_number):
+        cond_number = np.inf
+
+    try:
+        rank = int(np.linalg.matrix_rank(H))
+    except Exception:
+        rank = 0
+
+    deficient = bool((cond_number > 1e8) or (rank < n_params))
+    return {"cond_number": cond_number, "rank": rank, "deficient": deficient}
+
+
+def l2_weight_sensitivity(anchor_designs, anchors_chrono, param_spec,
+                          weights=(0.0, 0.01, 0.1, 1.0, 10.0), seed=0):
+    """Is the learning conclusion STABLE across ridge strengths? (Task 2.4 guardrail).
+
+    Plain English: the backward sweep L2-seeds each earlier (less-expert) anchor
+    toward its more-expert neighbour. A natural worry is that this prior — not the
+    data — is what produces the recovered learning trajectory. We stress-test that
+    by re-running the whole pipeline across a grid of L2 weights and reporting, per
+    weight, the SCIENTIFIC CONCLUSION:
+
+    * ``ladder_winner`` — which dial :func:`learning_ladder` says moves across
+      anchors. (The ladder fits each rung freely and is NOT seeded by the sweep's
+      L2, so its winner does not depend on the sweep ``l2``; it is recomputed once
+      and reported on every row as the stable reference conclusion.)
+    * ``v_span`` — the recovered sharpness span ``v_expert - v_old`` from
+      :func:`backward_sweep` **at that l2** (mean over moods; expert = last of
+      ``anchors_chrono``, old = first). This is the dial delta the L2 ridge could
+      plausibly shrink, so it is the load-bearing per-weight quantity.
+
+    The point of the table is the guardrail: if ``ladder_winner`` and the sign of
+    ``v_span`` are STABLE across weights >= 0.01, the recovered trajectory is a
+    property of the data, not of the regularization. If they are not, that is a real
+    signal (report it; do NOT loosen).
+
+    Parameters
+    ----------
+    anchor_designs : dict[str, Design]
+        Per-anchor ragged Designs (from :func:`build_anchor_designs`).
+    anchors_chrono : list[str]
+        Session ids in CHRONOLOGICAL order (oldest -> newest); the last is the
+        most-expert anchor. Used to identify the OLD and EXPERT anchors for
+        ``v_span`` and to drive the backward sweep.
+    param_spec : ParamSpec
+        Parameter layout, passed to :func:`backward_sweep` / :func:`learning_ladder`.
+    weights : tuple[float]
+        L2 ridge strengths to sweep (default ``(0, 0.01, 0.1, 1, 10)``).
+    seed : int
+        RNG seed for the per-weight sweep and the (single) ladder (reproducible).
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per weight with columns ``l2``, ``ladder_winner``, ``v_span``,
+        ``v_old``, ``v_expert`` (the last two are the per-anchor recovered v that
+        ``v_span`` is built from, kept for transparency).
+    """
+    # The ladder winner is independent of the sweep's l2 (the ladder refits each
+    # rung free), so compute it ONCE and report it on every row as the reference.
+    ladder = learning_ladder(anchor_designs, param_spec, seed=seed)
+    ladder_winner = ladder["winner"]
+
+    # Identify the OLD (oldest) and EXPERT (newest) anchors that PRESENT in the
+    # design dict (skip QC-omitted ids exactly as backward_sweep does).
+    present = [a for a in anchors_chrono if a in anchor_designs]
+    old_anchor = present[0] if present else None
+    expert_anchor = present[-1] if present else None
+
+    def _rec_v(fit):
+        """Recovered sharpness = mean of the two moods' v (None if no moods)."""
+        if fit is None:
+            return np.nan
+        vals = [d["sharpness"] for d in fit.dials.values()]
+        return float(np.mean(vals)) if vals else np.nan
+
+    rows = []
+    for l2 in weights:
+        results = backward_sweep(anchor_designs, anchors_chrono, param_spec,
+                                 l2=float(l2), seed=seed)
+        v_old = _rec_v(results.get(old_anchor)) if old_anchor is not None else np.nan
+        v_expert = (_rec_v(results.get(expert_anchor))
+                    if expert_anchor is not None else np.nan)
+        v_span = v_expert - v_old
+        rows.append({
+            "l2": float(l2),
+            "ladder_winner": ladder_winner,
+            "v_span": float(v_span),
+            "v_old": float(v_old),
+            "v_expert": float(v_expert),
+        })
+
+    return pd.DataFrame(rows, columns=["l2", "ladder_winner", "v_span",
+                                       "v_old", "v_expert"])
