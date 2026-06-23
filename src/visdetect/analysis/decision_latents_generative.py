@@ -1166,3 +1166,190 @@ def learning_ladder(anchor_designs, param_spec, dt=0.05, k=5, seed=0,
     if return_ll:
         out["ll"] = ll_by_rung
     return out
+
+
+# ── Engine-A state ladder (Task 2.3) — which dial loads on MOOD (within anchor) ─
+# The five rungs and the dials each lets vary by MOOD (Impulsive vs StimSens)
+# WITHIN one anchor. Unlike `learning_ladder` (which partitions ACROSS anchors),
+# this ladder partitions BY MOOD — exactly what `ParamSpec.state_terms` already
+# owns. So each rung IS a `ParamSpec` whose `state_terms` = the rung's varying
+# dials; a non-varying dial is shared (a single value across moods). It tests the
+# thesis "states load on caution/timing, not sharpness."
+_STATE_LADDER_TERMS = {
+    "M_none": (),                  # all dials shared across moods
+    "M_v": ("v",),                 # only sharpness v varies by mood
+    "M_z": ("z",),                 # only itchiness/caution z varies by mood
+    "M_u": ("u",),                 # only timing u varies by mood
+    "M_all": ("v", "z", "u"),      # all three vary by mood
+}
+_STATE_LADDER_RUNGS = tuple(_STATE_LADDER_TERMS)
+
+
+def _state_ladder_spec(rung, param_spec):
+    """The rung's :class:`ParamSpec`: same dials/moods/fixed settings as
+    ``param_spec`` but with ``state_terms`` set to this rung's per-mood dials.
+
+    The other (fixed, non-fitted) fields — moods, dials, rectification, leak_tau,
+    urgency_sigma — are carried over from ``param_spec`` unchanged, so the only
+    thing the rung changes is WHICH dials carry a per-mood term.
+    """
+    return ParamSpec(
+        moods=param_spec.moods,
+        dials=param_spec.dials,
+        state_terms=_STATE_LADDER_TERMS[rung],
+        rectification=param_spec.rectification,
+        leak_tau=param_spec.leak_tau,
+        urgency_sigma=param_spec.urgency_sigma,
+    )
+
+
+def _state_ladder_k_params(rung, param_spec):
+    """GLM degrees of freedom for a state-ladder rung == ``ParamSpec.n_params()``.
+
+    Plain English: count the free coefficients of this rung's GLM. A dial that is
+    SHARED across moods contributes ONE slot; a dial that VARIES by mood
+    contributes one slot PER mood. That is exactly what ``ParamSpec.n_params()``
+    computes for the rung's ``state_terms``, so there is no separate dof formula
+    here (and certainly NOT pyddm's ``4 + len(keys)*(n-1)``).
+
+    For the default 2 moods / 3 dials this gives M_none=3, M_v=M_z=M_u=4, M_all=6.
+    """
+    return _state_ladder_spec(rung, param_spec).n_params()
+
+
+def _state_ladder_rung_cvll(rung, design, param_spec, folds, k, seed):
+    """Held-out k-fold CV log-likelihood for a state-ladder rung on ONE anchor.
+
+    Plain English: the only honest way to ask "does letting THIS dial vary by mood
+    genuinely help?" is to score on data the model was NOT fit to. The ``folds``
+    (a list of k index arrays) are computed ONCE by the caller and reused for
+    every rung (fairness): all rungs see identical train/test partitions, so CV-LL
+    differences reflect the model, not fold noise. For each fold we ``fit_anchor``
+    on the train subset (``Design.subset(train_idx)``) with the rung's ParamSpec
+    and a SAME fixed fit seed for every rung, then evaluate the held-out data
+    log-likelihood ``-hazard_nll(fit.theta, Design.subset(test_idx), spec, l2=0)``
+    and sum across folds. A rung that spends a per-mood block on a dial that does
+    not truly differ buys no held-out LL (and AIC penalises it in-sample), so the
+    minimal correct rung wins.
+    """
+    spec = _state_ladder_spec(rung, param_spec)
+    cv_ll = 0.0
+    for f in range(k):
+        test_idx = folds[f]
+        if len(test_idx) == 0:
+            continue
+        train_idx = np.concatenate([folds[j] for j in range(k) if j != f])
+        if len(train_idx) == 0:
+            return -np.inf
+        train_design = design.subset(train_idx)
+        test_design = design.subset(test_idx)
+        # SAME fixed fit seed for every rung & fold (apples-to-apples fairness)
+        fit = fit_anchor(train_design, spec, seed_theta=None, l2=0.0,
+                         n_restarts=2, seed=seed)
+        cv_ll += -hazard_nll(fit.theta, test_design, spec, l2=0.0)
+    return float(cv_ll)
+
+
+def state_ladder(anchor_design, param_spec, k=5, seed=0, n_restarts=4,
+                 return_ll=False):
+    """Which dial loads on MOOD within one anchor? Model-comparison ladder (Task 2.3).
+
+    Plain English: within a single anchor, does the difference between the mouse's
+    behavioural moods (Impulsive vs StimSens) live in *sharpness* (``v``),
+    *itchiness/caution* (``z``), or *timing* (``u``)? This is the project thesis
+    test — "states load on caution/timing, NOT sharpness." We answer it by a nested
+    model comparison on ONE anchor's Design. Each rung lets a SUBSET of the three
+    dials carry a per-MOOD term while the rest are SHARED across moods — exactly
+    what :class:`ParamSpec`'s ``state_terms`` already owns:
+
+      * ``M_none`` — all dials shared across moods (``state_terms=()``);
+      * ``M_v``    — only ``v`` varies by mood (``state_terms=("v",)``);
+      * ``M_z``    — only ``z`` varies by mood;
+      * ``M_u``    — only ``u`` varies by mood;
+      * ``M_all``  — all three vary by mood (``state_terms=("v","z","u")``).
+
+    Each rung is a single :func:`fit_anchor` on the anchor with that rung's
+    ParamSpec; the data log-likelihood is the standard censored :func:`hazard_nll`
+    (so no new likelihood is needed — the per-mood machinery IS the ladder).
+
+    Scoring (GLM dof, NOT pyddm's ``4 + len(keys)*(n-1)``):
+
+      * ``AIC = 2*k_params - 2*LL`` with ``k_params = ParamSpec.n_params()`` for the
+        rung (:func:`_state_ladder_k_params`);
+      * held-out **CV-LL** is a ``k``-fold cross-validated data log-likelihood via
+        :meth:`Design.subset`, refit per fold (:func:`_state_ladder_rung_cvll`).
+
+    ``winner`` = ``argmin AIC``.
+
+    Fairness (mirrors :func:`learning_ladder`): the fold split is computed ONCE
+    from a single ``np.random.default_rng(seed)`` shuffle and reused for EVERY
+    rung, and every per-fold :func:`fit_anchor` is given the SAME fixed seed — so
+    CV-LL differences reflect the model, not fold/optimizer noise. This avoided a
+    fairness bug in the learning ladder.
+
+    dof accounting (default 2 moods / 3 dials)::
+
+        M_none : 3 dials shared                       = 3
+        M_v    : (z,u shared: 2) + (v per mood: 1*2)  = 4
+        M_z    : (v,u shared: 2) + (z per mood: 1*2)  = 4
+        M_u    : (v,z shared: 2) + (u per mood: 1*2)  = 4
+        M_all  : 3 dials per mood * 2 moods           = 6
+
+    Parameters
+    ----------
+    anchor_design : Design
+        ONE anchor's ragged Design (with the outcomes to fit). ``mood_code`` must
+        index ``param_spec.moods`` (as :func:`build_design` produces).
+    param_spec : ParamSpec
+        Reference layout — its ``moods``/``dials``/fixed settings are reused for
+        every rung; only ``state_terms`` is varied per rung. (Its own
+        ``state_terms`` is irrelevant; the ladder overrides it.)
+    k : int
+        Number of CV folds for the held-out CV-LL.
+    seed : int
+        RNG seed for the fold split AND the per-fold refits (reproducible; the same
+        split + fit seed are reused across rungs for a fair comparison).
+    n_restarts : int
+        Random restarts for each in-sample rung fit.
+    return_ll : bool
+        If True, also return the per-rung pooled data log-likelihood under an
+        ``"ll"`` key (lets callers/tests reconstruct AIC).
+
+    Returns
+    -------
+    dict
+        ``{"winner": str, "aic": {rung: float}, "cvll": {rung: float}}`` (plus
+        ``"ll"`` when ``return_ll``).
+    """
+    n = len(anchor_design)
+
+    # ── ONE shuffled fold split, reused for EVERY rung (fairness) ──
+    if n >= k and n > 0:
+        idx = np.arange(n)
+        np.random.default_rng(seed).shuffle(idx)
+        folds = np.array_split(idx, k)
+        can_cv = True
+    else:
+        folds = None
+        can_cv = False
+
+    aic, cvll, ll_by_rung = {}, {}, {}
+    for rung in _STATE_LADDER_RUNGS:
+        spec = _state_ladder_spec(rung, param_spec)
+        # in-sample fit on the whole anchor with this rung's ParamSpec
+        fit = fit_anchor(anchor_design, spec, seed_theta=None, l2=0.0,
+                         n_restarts=n_restarts, seed=seed)
+        k_params = _state_ladder_k_params(rung, param_spec)
+        aic[rung] = 2.0 * k_params - 2.0 * fit.ll
+        ll_by_rung[rung] = fit.ll
+        if can_cv:
+            cvll[rung] = _state_ladder_rung_cvll(
+                rung, anchor_design, param_spec, folds, k, seed)
+        else:
+            cvll[rung] = -np.inf
+
+    winner = min(aic, key=aic.get)
+    out = {"winner": winner, "aic": aic, "cvll": cvll}
+    if return_ll:
+        out["ll"] = ll_by_rung
+    return out

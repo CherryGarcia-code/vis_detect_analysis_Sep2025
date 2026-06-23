@@ -1969,3 +1969,150 @@ def test_learning_ladder_aic_bic_match_glm_formula():
         ll = out["ll"][rung]
         assert abs(out["aic"][rung] - (2 * k_params - 2 * ll)) < 1e-6, rung
         assert abs(out["bic"][rung] - (k_params * np.log(N) - 2 * ll)) < 1e-6, rung
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 2.3: state_ladder — which dial loads on MOOD (within one anchor)
+# (contract §A.4 ParamSpec.state_terms; §A.7 fit_anchor; GLM dof = n_params)
+# ════════════════════════════════════════════════════════════════════════════
+# Ground-truth, ONLY-z-BY-MOOD test (load-bearing, DECISIVE — NOT structural).
+#
+# This is the SECOND model-comparison ladder. Where `learning_ladder` asks which
+# dial moves ACROSS anchors, `state_ladder` operates on ONE anchor's Design and
+# asks which dial must carry a per-MOOD term (Impulsive vs StimSens). It tests the
+# project thesis "states load on caution/timing, NOT sharpness." Each rung is just
+# a `ParamSpec` whose `state_terms` picks the per-mood dials, so the per-mood
+# machinery ParamSpec already owns IS the ladder:
+#   M_none (state_terms=())           — all dials shared across moods,
+#   M_v    (state_terms=("v",))       — only sharpness varies by mood,
+#   M_z    (state_terms=("z",))       — only itchiness/caution varies by mood,
+#   M_u    (state_terms=("u",))       — only timing varies by mood,
+#   M_all  (state_terms=("v","z","u"))— all three vary by mood.
+# Scoring: GLM AIC = 2*k_params - 2*LL with k_params = ParamSpec.n_params() for
+# that rung, plus held-out k-fold CV-LL via Design.subset. winner = argmin AIC.
+# SAME fold split + SAME fit seed across rungs (fairness, like learning_ladder).
+#
+# The ONLY-z dial is the WELL-IDENTIFIED one (z is the cloglog intercept), so this
+# should be CLEANER than the v case. We build a Design where ONLY z genuinely
+# differs by mood — v and u are IDENTICAL across moods, Impulsive has a HIGHER
+# baseline z than StimSens (z_Imp=-2.5 vs z_Stim=-4.0 -> Impulsive licks earlier
+# / more), simulated via simulate_licks with a ParamSpec(state_terms=("z",)) ground
+# truth. M_z spends its per-mood degree of freedom exactly where the signal is;
+# M_v/M_u waste a per-mood slot on a dial that does NOT differ (no LL gain, AIC
+# penalty); M_all pays for two extra blocks that buy nothing; M_none cannot fit the
+# real per-mood z gap. So M_z must be the STRICT argmin AIC, beating M_v and M_u.
+# If M_z does NOT win on this clean only-z-by-mood design, that is a REAL signal —
+# the assertion is NOT loosened (report DONE_WITH_CONCERNS instead).
+#
+# TEST-DESIGN NOTES (heeded from Tasks 2.1/2.2):
+#   (i)   a real z gap between moods (z_Imp=-2.5, z_Stim=-4.0) so the per-mood
+#         intercept difference is unmistakable;
+#   (ii)  a SHARED design seed (the two moods live in ONE Design — they share the
+#         evidence realization by construction);
+#   (iii) v, u IDENTICAL across moods (only z varies in the ground truth);
+#   (iv)  >= 300 trials per mood (n_trials >= 600) for stable fits.
+
+
+def _only_z_by_mood_design(n_trials=900, dt=0.05, seed=0, step=1.5):
+    """Build a single-anchor two-mood Design and the only-z-by-mood ground truth.
+
+    Reuses ``_ramp_anchor_design`` to get an identifiable two-mood Design (moods
+    alternate by trial; a post-change positive excursion drives the accumulator so
+    every dial leaves a signature). The ground truth uses a
+    ``ParamSpec(state_terms=("z",))`` layout ``[v_shared, z_Imp, z_Stim, u_shared]``
+    where ONLY z differs by mood (Impulsive less negative -> licks earlier/more);
+    v and u are IDENTICAL across moods.
+
+    Returns ``(sim_design, ps_truth, true_theta)``.
+    """
+    design, _ = _ramp_anchor_design(0.0, n_trials=n_trials, seed=seed, step=step)
+    # only-z-by-mood ParamSpec ground truth: layout [v_shared, z_Imp, z_Stim, u_shared]
+    ps_truth = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                             dials=("v", "z", "u"), state_terms=("z",))
+    v_shared, u_shared = 1.0, 0.3            # IDENTICAL across moods
+    z_impu, z_stim = -2.5, -4.0              # Impulsive higher baseline -> licks more
+    true_theta = np.array([v_shared, z_impu, z_stim, u_shared])
+    assert len(true_theta) == ps_truth.n_params()
+    eb, lk, cs = dlg.simulate_licks(design, true_theta, ps_truth, seed=seed + 7)
+    sim_design = dlg.design_with_outcomes(design, eb, lk, cs)
+    return sim_design, ps_truth, true_theta, lk
+
+
+def test_state_ladder_only_z_by_mood_picks_m_z():
+    """One anchor where ONLY `z` truly differs by mood (v, u identical):
+    state_ladder must pick M_z as the STRICT argmin AIC, beating M_v and M_u.
+    (Decisive correctness test of the 'states load on caution/timing' thesis.)"""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+
+    sim_design, _ps_truth, _true_theta, lk = _only_z_by_mood_design(
+        n_trials=900, dt=0.05, seed=0, step=1.5)
+    # >= 300 trials per mood (lesson iv): 900 trials, alternating moods -> 450 each
+    imp_n = int(np.sum(sim_design.mood_code == 0))
+    stim_n = int(np.sum(sim_design.mood_code == 1))
+    assert imp_n >= 300 and stim_n >= 300, f"too few per mood: {imp_n}/{stim_n}"
+    # non-degenerate lick/censor mix carries the survival information
+    assert 0.2 < lk.mean() < 0.95, f"degenerate lick rate {lk.mean():.3f}"
+
+    out = dlg.state_ladder(sim_design, ps, k=3, seed=0)
+
+    # ── return-shape contract ──
+    assert set(out.keys()) == {"winner", "aic", "cvll"}
+    rungs = {"M_none", "M_v", "M_z", "M_u", "M_all"}
+    assert set(out["aic"]) == rungs
+    assert set(out["cvll"]) == rungs
+    assert all(np.isfinite(v) for v in out["aic"].values())
+    assert all(np.isfinite(v) for v in out["cvll"].values())
+
+    # ── DECISIVE: M_z is the STRICT argmin AIC ──
+    aic = out["aic"]
+    winner = min(aic, key=aic.get)
+    assert out["winner"] == winner                       # winner == argmin AIC
+    assert out["winner"] == "M_z", (
+        f"only-z-by-mood design did not select M_z as argmin AIC; "
+        f"winner={out['winner']!r}, aic={aic}")
+    # strict argmin: no other rung ties M_z; explicitly beats M_v and M_u
+    for rung, val in aic.items():
+        if rung != "M_z":
+            assert aic["M_z"] < val, (
+                f"M_z AIC {aic['M_z']:.3f} not strictly below {rung} {val:.3f}")
+    assert aic["M_z"] < aic["M_v"], "M_z must beat M_v (sharpness)"
+    assert aic["M_z"] < aic["M_u"], "M_z must beat M_u (timing)"
+
+
+def test_state_ladder_kparams_are_paramspec_n_params():
+    """k_params for AIC is exactly ParamSpec.n_params() for the rung's state_terms:
+    M_none=3 (all shared), M_v=M_z=M_u=4 (one dial per-mood), M_all=6 (all per-mood)."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    expected = {"M_none": 3, "M_v": 4, "M_z": 4, "M_u": 4, "M_all": 6}
+    for rung, want in expected.items():
+        got = dlg._state_ladder_k_params(rung, ps)
+        assert got == want, f"{rung}: k_params {got} != {want}"
+
+
+def test_state_ladder_aic_matches_glm_formula():
+    """For every rung, AIC == 2*k - 2*LL with k = ParamSpec.n_params() for that
+    rung (internal-consistency check)."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    sim_design, _ps_truth, _true_theta, _lk = _only_z_by_mood_design(
+        n_trials=400, dt=0.05, seed=1, step=1.5)
+    out = dlg.state_ladder(sim_design, ps, k=3, seed=0, return_ll=True)
+    for rung in ("M_none", "M_v", "M_z", "M_u", "M_all"):
+        k_params = dlg._state_ladder_k_params(rung, ps)
+        ll = out["ll"][rung]
+        assert abs(out["aic"][rung] - (2 * k_params - 2 * ll)) < 1e-6, rung
+
+
+def test_state_ladder_is_seed_reproducible():
+    """Same seed -> identical aic/cvll/winner (fold split + fit seeds RNG-seeded)."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    sim_design, _a, _b, _c = _only_z_by_mood_design(
+        n_trials=300, dt=0.05, seed=2, step=1.5)
+    out1 = dlg.state_ladder(sim_design, ps, k=3, seed=0)
+    out2 = dlg.state_ladder(sim_design, ps, k=3, seed=0)
+    assert out1["aic"] == out2["aic"]
+    assert out1["cvll"] == out2["cvll"]
+    assert out1["winner"] == out2["winner"]
