@@ -7,6 +7,7 @@ src/visdetect.egg-info/
 
 # Virtual env
 .venv/
+.venv_dant/
 
 # Data files
 *.pkl
