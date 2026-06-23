@@ -105,8 +105,11 @@ Converts our extracted data into DANT's input layout under `data/cache/dant/BG_0
 - `centering_waveforms = true` (trough-align per peak channel; removes alignment artifacts —
   see §8).
 - `spikeLocation`: `monopolar_triangulation`, `n_nearest_channels = 20`.
-- `waveformCorrection`: `n_nearest_channels = 38`, `linear_correction = false` (rigid; BG_046
-  whole-probe drift is modest), `n_templates = 2`.
+- `waveformCorrection`: `n_nearest_channels = 38`, `linear_correction = false` (**rigid — the
+  authors' default**; they enable non-rigid/depth-linear only for recordings spanning >1 mm with
+  depth-dependent drift, e.g. their mPFC case, and warn it overfits on low-quality data. BG_046's
+  active span is ~705 µm (1515–2220 µm) < 1 mm, so rigid is the correct default; revisit only if
+  diagnostics show clear differential drift), `n_templates = 2`.
 - `autoCorr`: 300 ms / 1 ms / σ5 ms. `ISI`: unused (ACG covers it).
 - `motionEstimation.features = [["AutoCorr"], ["Waveform","AutoCorr"]]`, `max_iter = 15`,
   `repeat_last_feature_set = true`, `stop_early = true`.
