@@ -49,7 +49,7 @@ for _up in _HERE.parents:
 
 from visdetect.analysis.tf_glm import (  # noqa: E402
     TFGLMConfig, assemble_design, count_vector, fit_poisson_cv,
-    make_trial_folds, identify_tf_responsive_pulse,
+    make_trial_folds, identify_tf_responsive_pulse, pulse_times_from_tf,
 )
 from visdetect.analysis.tf_glm_data import (  # noqa: E402
     load_khilkevich_session, khilkevich_trial_regressors,
@@ -80,12 +80,22 @@ def _cols(design, key):
 
 def _faithful_cfg(tf_encoding):
     """The authors' full model: movement controls + 80x200ms tiled baseline +
-    12-bin phase + whole-design standardization (glmnet standardize=true),
-    fast_fit, C2 criterion. tf_encoding 'log2' (faithful) or 'linear' (control)."""
+    whole-design standardization (glmnet standardize=true), fast_fit.
+
+    PHASE IS DROPPED: the authors include the MEASURED grating phase, but phase
+    is absent from this export so we had reconstructed it as the cumulative
+    integral of TF -- which is collinear with the TF pulses and lets the REDUCED
+    model predict the pulse response (r_red ~= r_full), defeating the TF-ablation
+    C2 test. Excluding the broken proxy is the correct choice for a valid TF
+    test; we cannot faithfully include phase without the measured signal.
+
+    min_pulses_per_label lowered to 20 so sessions with fewer trials still yield
+    usable per-fold pulse PETHs (the authors' 10-fold t-test needs folds).
+    tf_encoding 'log2' (faithful) or 'linear' (control)."""
     return TFGLMConfig(
-        include_movement=True, include_phase=True, include_tiled_baseline=True,
+        include_movement=True, include_phase=False, include_tiled_baseline=True,
         standardize_design=True, fast_fit=True, responsive_criterion="c2",
-        tf_encoding=tf_encoding)
+        tf_encoding=tf_encoding, min_pulses_per_label=20)
 
 
 def _done_units(out_csv):
@@ -141,10 +151,12 @@ def run_task(targets_csv, task_id, data_root, out_dir,
         return 2
     d_lin = assemble_design(trials, _faithful_cfg("linear")) if with_linear else None
     X_red = d_log.X.copy(); X_red[:, tf_cols] = 0.0   # TF ablated (encoding-free)
+    _fast, _slow = pulse_times_from_tf(d_log, cfg_log)
     print(f"[task {task_id}] design X={d_log.X.shape} "
           f"(tiled_baseline={_cols(d_log,'tiled_baseline').size}, "
           f"phase={_cols(d_log,'phase').size}, movement="
-          f"{_cols(d_log,'motion_energy').size+_cols(d_log,'pupil').size})", flush=True)
+          f"{_cols(d_log,'motion_energy').size+_cols(d_log,'pupil').size}) "
+          f"| fast/slow pulses={_fast.size}/{_slow.size}", flush=True)
 
     for k, uid in enumerate(todo):
         try:
