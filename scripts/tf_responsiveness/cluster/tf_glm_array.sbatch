@@ -36,6 +36,19 @@ module load miniconda/23.10.0
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$ENV"
 
+# The env lives on ceph; under storage degradation `conda activate` can silently
+# fail to load, leaving a python without numpy. Verify it took, retry once after
+# a short wait, then abort with a CLEAR message (not a cryptic numpy traceback).
+if ! python -c "import numpy" 2>/dev/null; then
+    echo "WARN task ${SLURM_ARRAY_TASK_ID}: env not ready after conda activate on $(hostname); retrying in 30s (likely transient ceph/env-load)"
+    sleep 30
+    conda activate "$ENV"
+fi
+if ! python -c "import numpy" 2>/dev/null; then
+    echo "FATAL task ${SLURM_ARRAY_TASK_ID}: conda env failed to activate (numpy missing) on $(hostname) -- this is a STORAGE/env-load failure (ceph), NOT the analysis code. Re-submit when storage is healthy."
+    exit 1
+fi
+
 mkdir -p "$STAGE/logs" "$STAGE/results_pulse2"
 
 # Pin BLAS/OpenMP threads to the task's CPU allocation (the Poisson solver's
