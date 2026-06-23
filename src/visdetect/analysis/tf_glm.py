@@ -44,7 +44,13 @@ class TFGLMConfig:
         "pupil":         (-0.75, 0.75),
         "airpuff":       (0.0, 0.25),
     })
-    sd_pulse: float = 0.5               # fast/slow = +/-0.5 SD of baseline TF
+    sd_pulse: float = 0.5               # (legacy/log2-fixture path) +/-SD pulse threshold
+    # Authors' fast/slow pulse definition (FindSessionDatav2.m): a baseline-TF
+    # bin is a FAST pulse if TF ratio (to the baseline geomean) > 1.25 (+25%),
+    # a SLOW pulse if < 0.75 (-25%). Strong, clean pulse events -> a sharp
+    # fast-minus-slow pulse PETH (our prior +/-0.5 SD ~ +/-9% diluted it).
+    pulse_fast_ratio: float = 1.25
+    pulse_slow_ratio: float = 0.75
     pulse_eval_win: Tuple[float, float] = (-0.15, 0.75)  # PETH window around pulses
     min_pulses_per_label: int = 50      # min fast/slow pulses to attempt C1/C2
     n_folds: int = 10
@@ -532,23 +538,29 @@ def pulse_times_from_tf(design: DesignMatrix, cfg: TFGLMConfig):
     tf = np.asarray(design.tf_bins, float)
     bs = design.bin_edges[1] - design.bin_edges[0] if design.bin_edges.size > 1 else cfg.bin_s
     centers = design.bin_edges + bs / 2.0
-    # Detect encoding: real linear TF is always > 0; log2 fixtures may be negative.
+    # Log2-encoded test fixtures may carry negative values -> keep the legacy
+    # +/-sd_pulse*SD threshold so existing unit tests are unaffected.
     if np.any(tf < 0):
-        # Already log2-encoded (test fixture or pre-converted input)
         log2tf = tf.copy()
         valid = tf != 0.0
-    else:
-        with np.errstate(divide="ignore"):
-            log2tf = np.where(tf > 0, np.log2(np.where(tf > 0, tf, 1.0)), np.nan)
-        valid = np.isfinite(log2tf) & (tf > 0)
+        if valid.sum() < 10:
+            return np.zeros(0), np.zeros(0)
+        sd = np.nanstd(log2tf[valid])
+        if sd < 1e-9:
+            return np.zeros(0), np.zeros(0)
+        thr = cfg.sd_pulse * sd
+        return centers[valid & (log2tf >= thr)], centers[valid & (log2tf <= -thr)]
+    # Real linear baseline TF (Hz, geomean ~1): fast/slow pulses by RATIO to the
+    # baseline geomean, matching the authors (FindSessionDatav2.m >1.25 / <0.75).
+    valid = np.isfinite(tf) & (tf > 0)
     if valid.sum() < 10:
         return np.zeros(0), np.zeros(0)
-    sd = np.nanstd(log2tf[valid])
-    if sd < 1e-9:
+    geomean = float(np.exp(np.mean(np.log(tf[valid]))))
+    if not np.isfinite(geomean) or geomean <= 0:
         return np.zeros(0), np.zeros(0)
-    thr = cfg.sd_pulse * sd
-    fast = centers[valid & (log2tf >= thr)]
-    slow = centers[valid & (log2tf <= -thr)]
+    ratio = tf / geomean
+    fast = centers[valid & (ratio >= cfg.pulse_fast_ratio)]
+    slow = centers[valid & (ratio <= cfg.pulse_slow_ratio)]
     return fast, slow
 
 

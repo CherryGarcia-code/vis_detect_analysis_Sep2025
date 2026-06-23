@@ -104,7 +104,7 @@ assert (o["r_full_mean"] - o["r_red_mean"]) > 0, "TF-driven unit not detected (d
 # ── 6. AUTHORS' pulse-response criterion detects the TF-driven unit ──────────
 cfgp = TFGLMConfig(include_movement=True, include_phase=True,
                    include_tiled_baseline=True, standardize_design=True,
-                   fast_fit=True, min_pulses_per_label=20)  # synthetic has few pulses
+                   fast_fit=True, min_pulses_per_label=8)  # synthetic has few pulses (strict ratio threshold)
 op = identify_tf_responsive_pulse(d, y, full, red, cfgp)
 print(f"[6] pulse-response criterion OK: TF-driven unit "
       f"C1(full pulse corr)={op['c1_r']:.3f} (>0.2 to pass) "
