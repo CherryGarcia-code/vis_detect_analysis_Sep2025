@@ -23,7 +23,7 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16G
 #SBATCH -t 0-08:00
-#SBATCH --array=1-10%20
+#SBATCH --array=1-13%20
 
 set -uo pipefail
 
@@ -36,7 +36,7 @@ module load miniconda/23.10.0
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$ENV"
 
-mkdir -p "$STAGE/logs" "$STAGE/results_faithful"
+mkdir -p "$STAGE/logs" "$STAGE/results_pulse"
 
 # Pin BLAS/OpenMP threads to the task's CPU allocation (the Poisson solver's
 # matrix ops would otherwise oversubscribe the node).
@@ -58,7 +58,7 @@ python "$STAGE/code/scripts/tf_responsiveness/cluster/tf_glm_cluster_task.py" \
     --targets "$STAGE/targets.csv" \
     --task-id "$SLURM_ARRAY_TASK_ID" \
     --data-root "$DATA_ROOT" \
-    --out-dir "$STAGE/results_faithful"
+    --out-dir "$STAGE/results_pulse"
 rc=$?
 echo "task ${SLURM_ARRAY_TASK_ID} finished rc=$rc | $(date)"
 exit $rc
