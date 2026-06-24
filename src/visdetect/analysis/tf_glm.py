@@ -550,17 +550,23 @@ def pulse_times_from_tf(design: DesignMatrix, cfg: TFGLMConfig):
             return np.zeros(0), np.zeros(0)
         thr = cfg.sd_pulse * sd
         return centers[valid & (log2tf >= thr)], centers[valid & (log2tf <= -thr)]
-    # Real linear baseline TF (Hz, geomean ~1): fast/slow pulses by RATIO to the
-    # baseline geomean, matching the authors (FindSessionDatav2.m >1.25 / <0.75).
+    # Real linear baseline TF (Hz, geomean ~1): fast/slow pulses are TF values
+    # +/- cfg.sd_pulse s.d. from the baseline mean, in log2 octaves. The paper's
+    # GLM TF-responsive criterion uses 0.5 s.d. (Methods p17: "fast and slow TF
+    # pulses (TF values 0.5 s.d. from the mean TF during baseline)"). NOTE this
+    # is distinct from the Fig-2 pulse-EVOKED analysis, which uses 1 s.d.
+    # (TF>1.19 / <0.84 Hz); do not confuse the two.
     valid = np.isfinite(tf) & (tf > 0)
     if valid.sum() < 10:
         return np.zeros(0), np.zeros(0)
-    geomean = float(np.exp(np.mean(np.log(tf[valid]))))
-    if not np.isfinite(geomean) or geomean <= 0:
+    log2tf = np.full(tf.shape, np.nan)
+    log2tf[valid] = np.log2(tf[valid])
+    sd = np.nanstd(log2tf[valid])
+    if not np.isfinite(sd) or sd < 1e-9:
         return np.zeros(0), np.zeros(0)
-    ratio = tf / geomean
-    fast = centers[valid & (ratio >= cfg.pulse_fast_ratio)]
-    slow = centers[valid & (ratio <= cfg.pulse_slow_ratio)]
+    thr = cfg.sd_pulse * sd
+    fast = centers[valid & (log2tf >= thr)]
+    slow = centers[valid & (log2tf <= -thr)]
     return fast, slow
 
 
