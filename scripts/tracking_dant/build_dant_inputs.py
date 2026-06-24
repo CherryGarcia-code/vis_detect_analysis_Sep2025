@@ -42,6 +42,7 @@ def main():
     ap.add_argument("--pkl-dir", default=DEFAULT_PKL_DIR)
     ap.add_argument("--out-dir", default=DEFAULT_OUT)
     ap.add_argument("--subject", default="BG_046")
+    ap.add_argument("--drop-sessions", default="", help="comma-separated session tokens to exclude")
     args = ap.parse_args()
 
     os.makedirs(os.path.join(args.out_dir, "spike_times"), exist_ok=True)
@@ -54,6 +55,11 @@ def main():
     sessions = [d for d in os.listdir(args.um_input)
                 if os.path.isdir(os.path.join(args.um_input, d, "RawWaveforms"))]
     sessions = sorted(sessions, key=parse_session_date)
+    drop = {s.strip() for s in args.drop_sessions.split(",") if s.strip()}
+    dropped = [s for s in sessions if s in drop]
+    sessions = [s for s in sessions if s not in drop]
+    if dropped:
+        log(f"Dropping {len(dropped)} session(s) by request: {dropped}")
     log(f"{len(sessions)} sessions found; chronological order established.")
 
     waveforms = []
@@ -70,8 +76,9 @@ def main():
         if ref_channel_pos is None:
             ref_channel_pos = chan_pos
         elif not np.array_equal(chan_pos, ref_channel_pos):
-            raise ValueError(f"channel_positions for session {sdir} differ from session 1 "
-                             f"({chan_pos.shape} vs {ref_channel_pos.shape}); pooled geometry ambiguous.")
+            kind = "shape" if chan_pos.shape != ref_channel_pos.shape else "values"
+            raise ValueError(f"channel_positions for session {sdir} differ ({kind} mismatch vs session 1: "
+                             f"{chan_pos.shape} vs {ref_channel_pos.shape}); pooled geometry ambiguous.")
 
         pkl_path = os.path.join(args.pkl_dir, f"{args.subject}_{sdir}.pkl")
         if not os.path.exists(pkl_path):
@@ -104,7 +111,7 @@ def main():
         del sess
         gc.collect()
 
-    waveform_all = np.stack(waveforms, axis=0)          # (n_unit, 383, 82)
+    waveform_all = np.stack(waveforms, axis=0).astype(np.float64)   # (n_unit, 383, 82)
     session_index = np.asarray(session_index, dtype=np.int64)
     channel_shanks = adapter.derive_channel_shanks(ref_channel_pos)
 
