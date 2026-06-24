@@ -123,6 +123,11 @@ def main():
     np.save(os.path.join(args.out_dir, "session_index.npy"), session_index)
     np.save(os.path.join(args.out_dir, "channel_locations.npy"), ref_channel_pos.astype(np.float64))
     np.save(os.path.join(args.out_dir, "channel_shanks.npy"), channel_shanks)
+    # pyDANT 1.1.2 unconditionally np.load()s peth.npy in computeAllSimilarityMatrix even when
+    # PETH is not a clustering/motion feature; saving None there yields an unloadable object array.
+    # Write an inert zeros placeholder (n_unit, 1): PETH is excluded from all feature sets, so this
+    # is loaded but never used. Do NOT add 'PETH' to any feature set.
+    np.save(os.path.join(args.out_dir, "peth.npy"), np.zeros((pooled, 1), dtype=np.float64))
     pd.DataFrame(lookup_rows).to_csv(os.path.join(args.out_dir, "unit_lookup.csv"), index=False)
 
     log(f"DONE: {pooled} pooled units, {len(uniq)} sessions, waveform_all {waveform_all.shape}, "
