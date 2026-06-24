@@ -230,8 +230,9 @@ def main():
     ap.add_argument("--session", required=True)
     ap.add_argument("--metric", required=True,
                     choices=list(METRIC_INFO), nargs="+")
-    ap.add_argument("--anatomy-dir", default="data/anatomy")
+    ap.add_argument("--anatomy-dir", default=None, help="defaults to data/anatomy/<subject>")
     args = ap.parse_args()
+    args.anatomy_dir = args.anatomy_dir or os.path.join("data", "anatomy", args.subject)
     session = tags = None
     for m in args.metric:
         out = os.path.join("FIGURES", "anatomy", args.subject,

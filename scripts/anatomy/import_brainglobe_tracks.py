@@ -132,11 +132,11 @@ def main():
                          "The recommended depth knob; re-run with a new value to recalibrate.")
     ap.add_argument("--sigma-um", type=float, default=50.0)
     ap.add_argument("--out", default=None,
-                    help="defaults to data/anatomy/<subject>_shank_tracks.json")
+                    help="defaults to data/anatomy/<subject>/<subject>_shank_tracks.json")
     args = ap.parse_args()
 
     order = args.shank_order or _auto_shank_order(args.tracks_dir, args.lateral_first)
-    out = args.out or os.path.join("data", "anatomy", f"{args.subject}_shank_tracks.json")
+    out = args.out or os.path.join("data", "anatomy", args.subject, f"{args.subject}_shank_tracks.json")
     art = import_brainglobe_tracks(
         args.tracks_dir, args.subject, args.hemisphere, order, out,
         tip_y_um=args.tip_y_um, insertion_depth_um=args.insertion_depth_um, sigma_um=args.sigma_um,

@@ -144,9 +144,10 @@ def plot_sites_on_atlas(subject: str, atlas_csv, tracks_json, out_png,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--subject", required=True)
-    ap.add_argument("--anatomy-dir", default="data/anatomy")
+    ap.add_argument("--anatomy-dir", default=None, help="defaults to data/anatomy/<subject>")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
+    args.anatomy_dir = args.anatomy_dir or os.path.join("data", "anatomy", args.subject)
     atlas_csv = os.path.join(args.anatomy_dir, f"{args.subject}_channel_atlas.csv")
     tracks = os.path.join(args.anatomy_dir, f"{args.subject}_shank_tracks.json")
     out = args.out or os.path.join("FIGURES", "anatomy", args.subject, f"{args.subject}_sites_on_atlas.png")
