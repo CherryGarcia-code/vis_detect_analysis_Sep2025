@@ -4,7 +4,6 @@ and a held-out ISI-fingerprint AUC. Saves presentation-ready figures + a summary
 Run with ANALYSIS_PY from the worktree root.
 """
 import argparse
-import glob
 import json
 import os
 import sys
@@ -72,14 +71,44 @@ def main():
         summary["um_n_tracked_units"] = int((um_long["um_uid"] > 0).sum())
         agree = registry.comembership_agreement(dant, um_long, "dant_uid", "um_uid")
         summary["comembership_vs_unitmatch"] = agree
+
+        # --- MATCHED tracked-length on the shared (session, ks_unit_id) unit set ---
+        # The own-pool means above are unfair: DANT's pool excludes ~1226 positive-going
+        # units and session 13082025, while UM's registry includes them. Restrict BOTH
+        # trackers to the units present in BOTH registries (dedup um_long on the key first),
+        # then count distinct sessions among only those shared members -- symmetric & fair.
+        dant_keys = dant.drop_duplicates(["session", "ks_unit_id"])
+        um_keys = um_long.drop_duplicates(["session", "ks_unit_id"])
+        a_idx = dant_keys.set_index(["session", "ks_unit_id"]).index
+        b_idx = um_keys.set_index(["session", "ks_unit_id"]).index
+        shared = a_idx.intersection(b_idx)
+        dant_shared = dant_keys.set_index(["session", "ks_unit_id"]).loc[shared].reset_index()
+        um_shared = um_keys.set_index(["session", "ks_unit_id"]).loc[shared].reset_index()
+        dant_len_matched = registry.tracked_lengths(dant_shared, "dant_uid")
+        um_len_matched = registry.tracked_lengths(um_shared, "um_uid")
+        summary["n_shared_units"] = int(len(shared))
+        summary["dant_mean_tracked_len_matched"] = (
+            float(dant_len_matched.mean()) if len(dant_len_matched) else 0.0)
+        summary["um_mean_tracked_len_matched"] = (
+            float(um_len_matched.mean()) if len(um_len_matched) else 0.0)
+        summary["matched_note"] = (
+            "tracked length counted over the shared (session,ks_unit_id) unit set only")
     else:
         summary["um_note"] = f"UnitMatch registry not found at {args.um_registry}; comparison skipped."
 
     # --- Survival comparison figure ---
     fig, ax = plt.subplots(figsize=(6, 4.5))
-    ax.plot(ks, dant_surv, "-o", ms=3, label=f"DANT (mean {summary['dant_mean_tracked_len']:.1f})")
+    ax.plot(ks, dant_surv, "-o", ms=3,
+            label=f"DANT (own pool, mean {summary['dant_mean_tracked_len']:.1f})")
     if um_surv is not None:
-        ax.plot(ks, um_surv, "-s", ms=3, label=f"UnitMatch (mean {summary.get('um_mean_tracked_len', float('nan')):.1f})")
+        ax.plot(ks, um_surv, "-s", ms=3,
+                label=f"UnitMatch (own pool, mean {summary.get('um_mean_tracked_len', float('nan')):.1f})")
+        # Matched comparison on the shared unit set (fair, symmetric)
+        txt = (f"Matched (shared {summary['n_shared_units']} units):\n"
+               f"DANT {summary['dant_mean_tracked_len_matched']:.2f}  vs  "
+               f"UM {summary['um_mean_tracked_len_matched']:.2f}")
+        ax.text(0.97, 0.97, txt, transform=ax.transAxes, ha="right", va="top",
+                fontsize=8, bbox=dict(boxstyle="round", fc="white", ec="0.6", alpha=0.9))
     ax.set_xlabel("Tracked length (# sessions)")
     ax.set_ylabel("Fraction of tracked neurons ≥ k sessions")
     ax.set_title("BG_046 cross-session tracking: survival")
@@ -126,6 +155,10 @@ def main():
         r = np.corrcoef(isi_for(key_to_pooled[ka]), isi_for(key_to_pooled[kb]))[0, 1]
         if np.isfinite(r):
             nonmatched_sims.append(r)
+
+    if len(nonmatched_sims) < target:
+        print(f"[warn] non-matched ISI sampling under-filled: {len(nonmatched_sims)} "
+              f"of target {target} pairs (sparse subject / few within-session unit pairs).")
 
     if matched_sims and nonmatched_sims:
         y = np.r_[np.ones(len(matched_sims)), np.zeros(len(nonmatched_sims))]
