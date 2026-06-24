@@ -1,0 +1,31 @@
+{
+    "path_to_data": "data/cache/dant/BG_046/input",
+    "output_folder": "FIGURES/tracking_dant/BG_046/dant_output",
+    "save_intermediate_results": false,
+    "n_jobs": -1,
+    "centering_waveforms": true,
+    "spikeLocation": {
+        "location_algorithm": "monopolar_triangulation",
+        "n_nearest_channels": 20
+    },
+    "waveformCorrection": {
+        "n_nearest_channels": 38,
+        "linear_correction": false,
+        "n_templates": 2
+    },
+    "autoCorr": { "window": 300, "binwidth": 1, "gaussian_sigma": 5 },
+    "ISI": { "window": 100, "binwidth": 1, "gaussian_sigma": 1 },
+    "motionEstimation": {
+        "features": [ ["AutoCorr"], ["Waveform", "AutoCorr"] ],
+        "max_iter": 15,
+        "repeat_last_feature_set": true,
+        "stop_early": true
+    },
+    "clustering": {
+        "max_distance": 100,
+        "features": ["Waveform", "AutoCorr"],
+        "n_iter": 10,
+        "weight_tol": 1e-8
+    },
+    "autoCuration": { "auto_split": true }
+}
