@@ -1241,7 +1241,7 @@ def _ladder_rung_cvll(rung, designs, param_spec, k=5, seed=0, n_restarts=2):
 
 
 def learning_ladder(anchor_designs, param_spec, dt=0.05, k=5, seed=0,
-                    n_restarts=4, return_ll=False):
+                    n_restarts=4, return_ll=False, compute_cvll=True):
     """Which dial moves across anchors? Model-comparison ladder (Task 2.2).
 
     Plain English: the science question is *which* behavioural knob learning turns
@@ -1304,12 +1304,19 @@ def learning_ladder(anchor_designs, param_spec, dt=0.05, k=5, seed=0,
     return_ll : bool
         If True, also return the per-rung pooled data log-likelihood under an
         ``"ll"`` key (lets callers/tests reconstruct AIC/BIC).
+    compute_cvll : bool
+        If True (default) compute the held-out k-fold CV-LL per rung. This is the
+        EXPENSIVE part (k refits per rung). The ``winner`` is ``argmin AIC`` and
+        does NOT depend on CV-LL, so callers that only need the winner (e.g.
+        :func:`recover_confusion`) pass ``compute_cvll=False`` for a large speedup;
+        in that case ``out["cvll"]`` maps every rung to ``np.nan``.
 
     Returns
     -------
     dict
         ``{"winner": str, "aic": {rung: float}, "bic": {rung: float},
-        "cvll": {rung: float}}`` (plus ``"ll"`` when ``return_ll``).
+        "cvll": {rung: float}}`` (plus ``"ll"`` when ``return_ll``). When
+        ``compute_cvll=False`` the ``cvll`` values are ``np.nan`` placeholders.
     """
     designs = list(anchor_designs.values())
     n_anchors = len(designs)
@@ -1323,8 +1330,10 @@ def learning_ladder(anchor_designs, param_spec, dt=0.05, k=5, seed=0,
         k_params = _ladder_k_params(rung, param_spec, n_anchors)
         aic[rung] = 2.0 * k_params - 2.0 * ll
         bic[rung] = k_params * log_N - 2.0 * ll
-        cvll[rung] = _ladder_rung_cvll(
-            rung, designs, param_spec, k=k, seed=seed)
+        # CV-LL is the costly bit (k refits/rung) and is NOT used by argmin-AIC;
+        # skip it when the caller only needs the winner (the confusion measurement).
+        cvll[rung] = (_ladder_rung_cvll(rung, designs, param_spec, k=k, seed=seed)
+                      if compute_cvll else float("nan"))
         ll_by_rung[rung] = ll
 
     winner = min(aic, key=aic.get)
@@ -1666,3 +1675,188 @@ def l2_weight_sensitivity(anchor_designs, anchors_chrono, param_spec,
 
     return pd.DataFrame(rows, columns=["l2", "ladder_winner", "v_span",
                                        "v_old", "v_expert"])
+
+
+# ── Engine-A recovery (Task 3.3) — which-dial-varies confusion matrix (§A.9) ──
+# The DECISIVE recovery test. Maps each ladder rung that names a SINGLE varying
+# dial to a confusion-matrix column. M_shared (no dial varies) and M_full (all
+# three vary) name NO single dial, so they cannot be charged to any specific
+# column: they are "no single dial identified" misses that LOWER the true dial's
+# diagonal without inflating a particular off-diagonal (a confusion is a wrong
+# *specific* dial, not an under/over-fit). They are still recorded per scenario in
+# the returned ``no_single`` diagnostic so the honest failure mode is visible.
+_LADDER_WINNER_TO_DIAL = {
+    "M_sharpness": "sharpness",   # only v varies  -> column 0
+    "M_caution": "caution",       # only z varies  -> column 1
+    "M_timing": "timing",         # only u varies  -> column 2
+    # "M_shared" / "M_full" -> no single dial (handled explicitly below)
+}
+
+# The three confusion scenarios: which dial TRULY varies across the two anchors,
+# the dial's internal ParamSpec key, and the matrix-row label.
+_CONFUSION_SCENARIOS = (
+    ("v", "sharpness"),
+    ("z", "caution"),
+    ("u", "timing"),
+)
+_CONFUSION_LABELS = ("sharpness", "caution", "timing")
+_CONFUSION_COL = {"sharpness": 0, "caution": 1, "timing": 2}
+
+# Per-dial ACROSS-ANCHOR delta applied to BOTH moods of the varying dial in the
+# second anchor (the first anchor uses ``base_theta`` unchanged). These are the
+# ground-truth gaps that make each scenario a FAIR, adequately-powered
+# discriminability test (contract §A.9): large enough that the varying dial's
+# signal is decisive against the v<->z and u<->z confounds, while keeping every
+# dial in its identifiable range. ``v`` multiplies the post-change accumulator,
+# ``z`` is the cloglog intercept, ``u`` scales the timing bump; their natural
+# scales differ, so the deltas differ. NOT fitted; the caller may override.
+_CONFUSION_DELTA = {"v": 1.0, "z": 1.5, "u": 2.5}
+
+
+def recover_confusion(design_template, base_theta, param_spec, n_rep=50, seed=0,
+                      deltas=None, k=3, n_restarts=2):
+    """Which-dial-varies confusion matrix — the DECISIVE recovery test (contract §A.9).
+
+    Plain English: the make-or-break question for the learning ladder is "when the
+    mouse REALLY changed ONE behavioural knob across two anchors, does the ladder
+    name the RIGHT knob — or do the sharpness<->caution / timing<->caution
+    trade-offs fool it?" We answer it as a genuine discriminability measurement.
+    For each of the three dials in turn we build a two-anchor dataset in which ONLY
+    that dial truly differs across anchors (the other two are byte-identical, and
+    BOTH anchors share the SAME evidence realisation — ``design_template`` — so the
+    only thing that can drive the ladder is the one dial we moved), simulate licks,
+    run :func:`learning_ladder`, and record which dial its winner names. Over
+    ``n_rep`` reps this builds a 3x3 confusion matrix whose ``matrix[i, j]`` is the
+    fraction of reps in which true-varying dial ``i`` was identified as dial ``j``.
+    The diagonal is correct identification.
+
+    The mapping from the ladder winner to a matrix column (contract §A.9):
+
+    * ``M_sharpness`` -> ``sharpness`` (the ladder says ``v`` varies),
+    * ``M_caution``   -> ``caution``   (``z`` varies),
+    * ``M_timing``    -> ``timing``    (``u`` varies),
+    * ``M_shared`` / ``M_full`` -> **no single dial** — the ladder named either no
+      varying dial or all three, so it cannot be charged to a specific WRONG dial.
+      These reps LOWER the true dial's diagonal (a miss) but DO NOT inflate any
+      off-diagonal (a confusion means a wrong *specific* dial). They are counted in
+      the per-scenario ``no_single`` diagnostic so the honest failure mode is
+      visible, and they make a row sum to < 1.0 when present.
+
+    Each rep uses the SAME ``design_template`` (shared evidence/A/phi across both
+    anchors and across reps) and varies only the lick-simulation seeds per anchor,
+    so the matrix reflects the ladder's discriminability, not evidence-realisation
+    noise. ``base_theta`` provides the SHARED dial values; the varying dial's
+    second-anchor value is ``base_theta[dial] + deltas[dial]`` (applied to both
+    moods so the dial moves coherently).
+
+    Parameters
+    ----------
+    design_template : Design
+        The shared two-mood Design (A/phi/mood fixed; outcomes RESIMULATED per
+        anchor per rep). Both anchors in every scenario reuse this exact Design, so
+        ONLY the moved dial differs across the two anchors (contract §A.9 "shared
+        design seed"). Must carry both moods and enough trials per anchor (>= ~800
+        recommended) for adequate power.
+    base_theta : np.ndarray
+        The SHARED ground-truth parameter vector (length ``param_spec.n_params()``)
+        — anchor A's theta, and the base anchor B perturbs in exactly one dial.
+    param_spec : ParamSpec
+        Parameter layout (``theta`` <-> dial/mood mapping).
+    n_rep : int
+        Reps per scenario (default 50; the test uses a reduced count for
+        tractability — the whole matrix is 3 scenarios x n_rep full ladders).
+    seed : int
+        Master RNG seed. Each (scenario, rep) gets a deterministic pair of child
+        seeds for the two anchors' lick simulations, and each ladder is run at a
+        fixed seed, so the whole matrix is reproducible.
+    deltas : Mapping[str, float] | None
+        Per-dial across-anchor delta for the varying dial (defaults to
+        :data:`_CONFUSION_DELTA`). Applied to BOTH moods of the dial in anchor B.
+    k : int
+        Accepted for interface symmetry only. ``recover_confusion`` runs each
+        ladder with ``compute_cvll=False`` (the winner is ``argmin AIC``, which
+        never touches CV-LL), so NO cross-validation is performed and ``k`` is
+        forwarded but unused — this AIC-only fast path is the main tractability
+        lever (no k-fold refits).
+    n_restarts : int
+        Random restarts for each ladder rung's single in-sample combined fit
+        (default 2 — kept low for tractability; the AIC margins here are large).
+
+    Returns
+    -------
+    dict
+        ``{"matrix": np.ndarray (3, 3), "labels": ("sharpness", "caution",
+        "timing"), "no_single": {label: int}, "winners": {label: list[str]},
+        "n_rep": int}``. ``matrix[i, j]`` = fraction of reps where true dial ``i``
+        was identified as dial ``j``; the diagonal is correct identification.
+        ``no_single`` counts the M_shared/M_full ("no single dial") reps per true
+        dial; ``winners`` records the raw ladder winner string per rep per scenario
+        for full transparency.
+    """
+    base_theta = np.asarray(base_theta, float)
+    n_params = param_spec.n_params()
+    assert len(base_theta) == n_params, (
+        f"len(base_theta)={len(base_theta)} != n_params={n_params}")
+
+    delta = dict(_CONFUSION_DELTA)
+    if deltas is not None:
+        delta.update(deltas)
+
+    n_mood = len(param_spec.moods)
+    matrix = np.zeros((3, 3), float)
+    no_single = {lab: 0 for lab in _CONFUSION_LABELS}
+    winners = {lab: [] for lab in _CONFUSION_LABELS}
+
+    master = np.random.default_rng(seed)
+    # one independent child-seed pair (anchor A, anchor B) per (scenario, rep)
+    n_sc = len(_CONFUSION_SCENARIOS)
+    sim_seeds = master.integers(0, 2**31 - 1, size=(n_sc, int(n_rep), 2))
+    ladder_seeds = master.integers(0, 2**31 - 1, size=(n_sc, int(n_rep)))
+
+    for si, (dial, row_label) in enumerate(_CONFUSION_SCENARIOS):
+        row_i = _CONFUSION_COL[row_label]
+        off = param_spec._offset(dial)
+
+        # ── anchor thetas: A == base; B perturbs ONLY this dial (both moods) ──
+        theta_a = base_theta.copy()
+        theta_b = base_theta.copy()
+        for mi in range(n_mood):
+            theta_b[off + mi] = base_theta[off + mi] + float(delta[dial])
+
+        for rep in range(int(n_rep)):
+            sa = int(sim_seeds[si, rep, 0])
+            sb = int(sim_seeds[si, rep, 1])
+
+            eb_a, lk_a, cs_a = simulate_licks(design_template, theta_a,
+                                              param_spec, seed=sa)
+            eb_b, lk_b, cs_b = simulate_licks(design_template, theta_b,
+                                              param_spec, seed=sb)
+            design_a = design_with_outcomes(design_template, eb_a, lk_a, cs_a)
+            design_b = design_with_outcomes(design_template, eb_b, lk_b, cs_b)
+
+            # AIC-only fast path: winner = argmin AIC, which never uses CV-LL, so
+            # we skip the k-fold refits entirely (compute_cvll=False) — the single
+            # biggest speedup that makes the whole 3x3 matrix tractable (contract
+            # §A.9). The ``k`` argument is forwarded only for interface symmetry;
+            # no CV is run.
+            out = learning_ladder({"A": design_a, "B": design_b}, param_spec,
+                                  dt=design_template.dt, k=k,
+                                  seed=int(ladder_seeds[si, rep]),
+                                  n_restarts=n_restarts, compute_cvll=False)
+            winner = out["winner"]
+            winners[row_label].append(winner)
+
+            named = _LADDER_WINNER_TO_DIAL.get(winner)
+            if named is None:                       # M_shared / M_full: no single dial
+                no_single[row_label] += 1
+            else:
+                matrix[row_i, _CONFUSION_COL[named]] += 1.0
+
+    matrix /= float(n_rep)
+    return {
+        "matrix": matrix,
+        "labels": _CONFUSION_LABELS,
+        "no_single": no_single,
+        "winners": winners,
+        "n_rep": int(n_rep),
+    }
