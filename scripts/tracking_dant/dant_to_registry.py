@@ -21,6 +21,7 @@ def main():
     lookup = pd.read_csv(os.path.join(args.input_dir, "unit_lookup.csv"), dtype={"session": str})
     lookup["session"] = lookup["session"].str.zfill(8)
     reg = registry.idxcluster_to_registry(idx, lookup)
+    os.makedirs(os.path.dirname(args.out), exist_ok=True)
     reg.to_csv(args.out, index=False)
     n_tracked = (reg["dant_uid"] > 0).sum()
     n_clusters = int(reg.loc[reg["dant_uid"] > 0, "dant_uid"].nunique())

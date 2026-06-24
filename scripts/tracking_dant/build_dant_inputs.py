@@ -9,6 +9,7 @@ Run with ANALYSIS_PY from the worktree root.
 import argparse
 import gc
 import os
+import shutil
 import sys
 
 import numpy as np
@@ -45,7 +46,10 @@ def main():
     ap.add_argument("--drop-sessions", default="", help="comma-separated session tokens to exclude")
     args = ap.parse_args()
 
-    os.makedirs(os.path.join(args.out_dir, "spike_times"), exist_ok=True)
+    # Clear stale spike_times/ so a smaller rebuild leaves no orphan Unit*.npy files.
+    spike_times_dir = os.path.join(args.out_dir, "spike_times")
+    shutil.rmtree(spike_times_dir, ignore_errors=True)
+    os.makedirs(spike_times_dir, exist_ok=True)
     log_lines = []
 
     def log(msg):

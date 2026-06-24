@@ -1,6 +1,14 @@
 """Run DANT (multi-shank) on the BG_046 input folder. Use DANT_PY from the worktree root."""
 import argparse
 import os
+import sys
+
+# Self-harden stdout for Windows: pyDANT prints a 'μm' glyph that crashes the default
+# console encoding. Reconfiguring here removes the need for an external PYTHONIOENCODING.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
 
 import numpy as np
 import hjson
