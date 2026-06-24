@@ -62,3 +62,14 @@ def test_melt_cellregistry():
     row = long[(long.um_uid == 7) & (long.session == "02072025")]
     assert row.ks_unit_id.item() == 11
     assert ((long.um_uid == 8) & (long.session == "01072025")).sum() == 0  # 0 dropped
+
+
+def test_melt_cellregistry_splits_merged_cell():
+    # A ';'-joined merged cell (two ks ids in one session) becomes TWO long rows.
+    wide = pd.DataFrame({"UID": [5], "01072025": ["10;12"], "02072025": [0]})
+    long = registry.melt_cellregistry(wide)
+    sess_rows = long[(long.um_uid == 5) & (long.session == "01072025")]
+    assert len(sess_rows) == 2
+    assert sorted(sess_rows.ks_unit_id.tolist()) == [10, 12]
+    # the absent (0) session yields no rows
+    assert ((long.um_uid == 5) & (long.session == "02072025")).sum() == 0

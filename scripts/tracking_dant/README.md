@@ -44,9 +44,10 @@ influences any similarity. **Do not add `"PETH"` to any feature set.**
 
 ## Windows notes
 
-- The run needs **UTF-8 stdout**. pyDANT prints a `μm` glyph; on Windows the default console
-  encoding raises `UnicodeEncodeError`. Set `PYTHONIOENCODING=utf-8` before step 2 (e.g.
-  `set PYTHONIOENCODING=utf-8` in cmd, or `$env:PYTHONIOENCODING="utf-8"` in PowerShell).
+- The run needs **UTF-8 stdout** (pyDANT prints a `μm` glyph; the default Windows console
+  encoding raises `UnicodeEncodeError`). `run_dant_bg046.py` now **self-hardens** this by
+  calling `sys.stdout.reconfigure(encoding="utf-8")` at the top, so no external
+  `PYTHONIOENCODING=utf-8` is required. (Setting it still works as a belt-and-braces fallback.)
 - Multi-shank diagnostic figures land under `dant_output/Shank<ID>/Figures/` (per-shank
   similarity distributions, feature scatter, motion, matched probability), with the pooled
   `unitLocations.png` under `dant_output/Figures/`.
@@ -63,10 +64,9 @@ influences any similarity. **Do not add `"PETH"` to any feature set.**
    ```bash
    <ANALYSIS_PY> scripts/tracking_dant/build_dant_inputs.py --drop-sessions 13082025
    ```
-2. **Run DANT** (DANT venv; needs UTF-8 stdout) ->
+2. **Run DANT** (DANT venv; stdout self-hardened to UTF-8 inside the script) ->
    `FIGURES/tracking_dant/BG_046/dant_output/`
    ```bash
-   set PYTHONIOENCODING=utf-8
    <DANT_PY> scripts/tracking_dant/run_dant_bg046.py
    ```
 3. **Convert to registry** (analysis venv) ->
@@ -86,6 +86,15 @@ influences any similarity. **Do not add `"PETH"` to any feature set.**
 | Tracked clusters | **1022** | — |
 | Tracked units (members of a ≥2-session cluster) | **3575** | 6667 |
 | Mean tracked length (sessions) | **3.50** | 1.65 (~2.1x longer) |
+
+> **Caveat:** the headline "DANT 3.50 vs UM 1.65 (~2.1x)" survival/mean is each tracker on
+> its **OWN unit pool** — DANT's pool is the curated subset (positive-going units and session
+> 13082025 excluded), while UM's registry includes them, so the pools differ. The defensible,
+> apples-to-apples numbers are the **MATCHED metrics** computed only on the shared
+> `(session, ks_unit_id)` units present in both registries: matched mean tracked length
+> **DANT 3.49 vs UM 1.68** (n_shared 5194 units), co-membership **ARI 0.152**, and held-out
+> **ISI AUC 0.764**. Read the matched numbers as the fair comparison; the own-pool curve in
+> `survival_comparison.png` is labelled "(own pool)" with the matched means in a text box.
 
 - **Held-out ISI-fingerprint AUC: 0.764** (8148 matched vs 8148 non-matched pairs) — DANT's
   cross-session co-memberships have ISI fingerprints far more similar than chance, i.e. the
