@@ -2767,3 +2767,203 @@ def test_recover_confusion_is_seed_reproducible():
                                n_restarts=0)
     assert np.array_equal(r1["matrix"], r2["matrix"])
     assert r1["no_single"] == r2["no_single"]
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 3.4: recover_true_difference — seeding INFORMS, does NOT erase (contract §A.9)
+# ════════════════════════════════════════════════════════════════════════════
+# THE QUESTION: the backward sweep L2-seeds the earlier (naive) anchor toward the
+# more-expert anchor's fit. The worry is symmetric to Task 2.4's: does that prior
+# CRUSH a difference that is genuinely there? This guardrail proves the opposite —
+# when naive and expert really differ by a KNOWN delta on an IDENTIFIABLE dial,
+# the L2-seeded backward fit must RECOVER that difference (right sign, within
+# tolerance) and NOT shrink it away at the operating l2=1.0.
+#
+# GROUND-TRUTH RIGOR (NOT a tautology) — WHY THE `z` DIAL, NOT `v`:
+#   * We build two anchors that differ ONLY in itchiness/caution `z` by a real,
+#     KNOWN delta on the WELL-IDENTIFIED dial — z_naive=-3.8 (itchier, higher
+#     baseline hazard), z_expert=-5.3 (more cautious), true_delta_z = expert-naive
+#     = -1.5. `z` is the cloglog INTERCEPT and is the most cleanly identified dial
+#     (the recover_point findings: itchiness passes r>=0.8 in BOTH regimes; v does
+#     not in the naive regime). The brief explicitly permits demonstrating on the
+#     well-identified `z` dial INSTEAD of in-range v.
+#   * WHY NOT v here: the spec's literal v=1.0->2.5 is saturated (v>~1.5 sits on the
+#     flat v<->z ridge), and even the in-range v=0.4->1.4 is NOT recoverable on the
+#     short-trial ramp Design used here — a FREE (unseeded) naive fit recovers
+#     v_naive=0.4 as ~1.2 (the accumulator excursion dominates short trials), so a
+#     v-based test would fail for the V-SATURATION/identifiability confound, NOT for
+#     "the L2 prior erased a recoverable difference". Using `z` ISOLATES the actual
+#     question (does seeding crush a genuinely RECOVERABLE difference?), exactly per
+#     the brief's caveat about the v<->z ridge.
+#   * The anchors share the SAME evidence realisation (design seed fixed) so the
+#     ONLY thing that differs is the `z` dial we moved.
+#   * recover_true_difference fits the EXPERT free (the identifiable reference),
+#     then the NAIVE anchor L2-seeded toward it at l2=1.0 — the exact backward
+#     sweep the science pipeline uses — reads recovered z per anchor, and reports
+#     recovered_delta = z_expert - z_naive and whether it was crushed.
+#   * We assert recovered_delta["z"] has the RIGHT SIGN, lands within 0.3*|true| of
+#     the true -1.5, and shrunk == False (the prior informed but did NOT erase the
+#     difference). If at l2=1.0 the difference IS crushed even for this identifiable
+#     dial, that is a real finding — report DONE_WITH_CONCERNS, do NOT loosen.
+#
+# TRACTABILITY: this is just TWO anchor fits (expert free + naive seeded), far
+# lighter than the recovery ladders. n_trials=600 with a shared design seed keeps
+# it well under the ~3-min budget while leaving z firmly identifiable.
+
+
+def _ramp_anchor_design_z(z_level, v_level=1.0, n_trials=600, dt=0.05, seed=0,
+                          step=0.8, noise=0.2, go_p=0.75):
+    """Identifiable two-mood Design whose true itchiness `z` is ``z_level``.
+
+    Same evidence synthesis as :func:`_ramp_anchor_design` (fluctuating baseline
+    log2-TF + a gentle post-change excursion so the accumulator A rises), but the
+    ground-truth ``theta`` varies the cloglog INTERCEPT ``z`` (in both moods'
+    itchiness slot) instead of the sharpness ``v`` — ``v`` is held at a fixed,
+    modest level. ``z`` is the well-identified dial used by this Task-3.4 test.
+    Returns ``(design, true_theta)``.
+    """
+    rng = np.random.default_rng(seed)
+    rows, change_times = [], []
+    for tidx in range(n_trials):
+        n_bins = int(rng.integers(30, 61))
+        ct = float(rng.uniform(0.5, 1.2))
+        change_times.append(ct)
+        go = bool(rng.random() < go_p)
+        ev = rng.normal(0.0, noise, size=n_bins)
+        if go:
+            t_grid = np.arange(n_bins) * dt
+            ev = ev + np.where(t_grid >= ct, step, 0.0)
+        rows.append({
+            "trial_idx": tidx, "outcome": "hit" if go else "miss",
+            "change_size": 2.0 if go else 1.0, "change_time": ct,
+            "decision_time": n_bins * dt, "lick": 1, "censored": False,
+            "evidence": ev, "n_bins": n_bins,
+        })
+    ev_df = pd.DataFrame(rows)
+    labels = pd.DataFrame({
+        "trial_idx": np.arange(n_trials),
+        "state_label": [MAIN_MOODS[i % len(MAIN_MOODS)] for i in range(n_trials)],
+    }).set_index("trial_idx")
+    mu = float(np.median(change_times))
+    design = dlg.build_design(ev_df, labels, mu=mu, sigma=0.8, dt=dt)
+    # true_theta = [v_Imp, v_Stim, z_Imp, z_Stim, u_Imp, u_Stim]; z varies via z_level.
+    true_theta = np.array([v_level, v_level, z_level, z_level, 0.4, 0.3])
+    return design, true_theta
+
+
+def test_recover_true_difference_recovers_identifiable_z_delta(capsys):
+    """Naive vs expert differ by a TRUE z delta (-3.8 -> -5.3, true_delta=-1.5) on
+    the WELL-IDENTIFIED dial. The L2-seeded backward fit (expert free, naive seeded
+    at l2=1.0) must recover that difference: recovered_delta["z"] right sign, within
+    0.3*|true|, and shrunk == False (the prior informed, did not erase)."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+
+    # naive itchier (less negative z -> higher baseline hazard), expert more
+    # cautious (more negative z). true_delta = expert - naive = -1.5.
+    z_naive, z_expert = -3.8, -5.3
+    true_delta = {"z": z_expert - z_naive}      # == -1.5, the KNOWN across-stage gap
+
+    # SHARED design realisation across the two anchors (only true z differs ->
+    # isolates the dial signal from per-realisation noise; mirrors the Task 2.1
+    # ramp test). simulate_licks still gets a DISTINCT seed per anchor.
+    DESIGN_SEED = 10
+    design_n, theta_n = _ramp_anchor_design_z(z_naive, n_trials=600, seed=DESIGN_SEED)
+    design_e, theta_e = _ramp_anchor_design_z(z_expert, n_trials=600, seed=DESIGN_SEED)
+
+    eb_n, lk_n, cs_n = dlg.simulate_licks(design_n, theta_n, ps, seed=201)
+    eb_e, lk_e, cs_e = dlg.simulate_licks(design_e, theta_e, ps, seed=202)
+    # non-degenerate lick/censor mix in BOTH anchors (z is the hazard intercept)
+    assert 0.2 < lk_n.mean() < 0.97, f"naive degenerate lick rate {lk_n.mean():.3f}"
+    assert 0.05 < lk_e.mean() < 0.95, f"expert degenerate lick rate {lk_e.mean():.3f}"
+    design_naive = dlg.design_with_outcomes(design_n, eb_n, lk_n, cs_n)
+    design_expert = dlg.design_with_outcomes(design_e, eb_e, lk_e, cs_e)
+
+    out = dlg.recover_true_difference(
+        design_naive, design_expert, ps, true_delta, l2=1.0, seed=0)
+
+    rec = out["recovered_delta"]
+    with capsys.disabled():
+        print(f"\n[recover_true_difference] true_delta={true_delta} "
+              f"recovered_delta={{'z': {rec['z']:+.4f}}} shrunk={out['shrunk']} "
+              f"(lick naive={lk_n.mean():.2f} expert={lk_e.mean():.2f})")
+
+    # structure
+    assert set(rec.keys()) == set(true_delta.keys())
+    assert isinstance(out["shrunk"], bool)
+
+    td = true_delta["z"]
+    rd = rec["z"]
+
+    # ── (1) RIGHT SIGN: the recovered difference points the way the truth does ──
+    assert np.sign(rd) == np.sign(td), (
+        f"recovered_delta z={rd:+.4f} has wrong sign vs true {td:+.4f}")
+
+    # ── (2) MAGNITUDE within 0.3*|true| of the true delta ──
+    tol = 0.3 * abs(td)
+    assert abs(rd - td) <= tol, (
+        f"|recovered {rd:+.4f} - true {td:+.4f}| = {abs(rd - td):.4f} > "
+        f"0.3*|true| = {tol:.4f}: the seeded fit did not recover the difference")
+
+    # ── (3) NOT crushed: the prior informed but did NOT erase the difference ──
+    assert out["shrunk"] is False, (
+        f"shrunk==True: the L2 prior crushed an identifiable, recoverable "
+        f"difference at l2=1.0 (recovered {rd:+.4f} < 0.5*|true {td:+.4f}|) — "
+        f"a real finding if it persists; do NOT loosen the tolerance")
+
+
+def test_recover_true_difference_shrunk_flag_logic():
+    """`shrunk` is purely a function of recovered vs true delta:
+    shrunk == any(|recovered_delta[d]| < 0.5*|true_delta[d]|). A small recovered
+    delta against a large true delta -> shrunk True; a faithful one -> False.
+
+    Asserted WITHOUT a fit by monkeypatching the per-anchor fit to return fixed
+    dials, so the flag logic itself is pinned independently of recovery noise."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    # tiny dummy designs (content irrelevant — the fit is monkeypatched)
+    d_n, theta_n = _ramp_anchor_design(0.4, n_trials=20, seed=1)
+    d_e, theta_e = _ramp_anchor_design(1.4, n_trials=20, seed=1)
+    eb_n, lk_n, cs_n = dlg.simulate_licks(d_n, theta_n, ps, seed=1)
+    eb_e, lk_e, cs_e = dlg.simulate_licks(d_e, theta_e, ps, seed=2)
+    design_naive = dlg.design_with_outcomes(d_n, eb_n, lk_n, cs_n)
+    design_expert = dlg.design_with_outcomes(d_e, eb_e, lk_e, cs_e)
+
+    import unittest.mock as _mock
+
+    def _fake_fit(design, param_spec, seed_theta=None, l2=0.0, **kw):
+        # naive (seeded) returns v=1.0; expert (free) returns v=1.1 -> recovered
+        # delta = 0.1, which against a true delta of 1.0 is < 0.5*1.0 -> shrunk.
+        is_expert = seed_theta is None
+        v = 1.1 if is_expert else 1.0
+        dials = {m: {"sharpness": v, "itchiness": -4.0, "timing": 0.3}
+                 for m in param_spec.moods}
+        theta = np.array([v, v, -4.0, -4.0, 0.3, 0.3], float)
+        return dlg.FitResult(theta=theta, dials=dials, ll=0.0,
+                             n_params=param_spec.n_params(), cov=None,
+                             hessian=np.eye(param_spec.n_params()),
+                             hessian_cond=1.0)
+
+    with _mock.patch.object(dlg, "fit_anchor", _fake_fit):
+        out = dlg.recover_true_difference(
+            design_naive, design_expert, ps, {"v": 1.0}, l2=1.0, seed=0)
+    assert abs(out["recovered_delta"]["v"] - 0.1) < 1e-9
+    assert out["shrunk"] is True, "small recovered delta vs large true -> shrunk"
+
+    # a faithful recovery (delta 1.0 recovered as 0.9) -> NOT shrunk
+    def _fake_fit_faithful(design, param_spec, seed_theta=None, l2=0.0, **kw):
+        is_expert = seed_theta is None
+        v = 1.4 if is_expert else 0.5            # recovered delta = 0.9 ~ true 1.0
+        dials = {m: {"sharpness": v, "itchiness": -4.0, "timing": 0.3}
+                 for m in param_spec.moods}
+        theta = np.array([v, v, -4.0, -4.0, 0.3, 0.3], float)
+        return dlg.FitResult(theta=theta, dials=dials, ll=0.0,
+                             n_params=param_spec.n_params(), cov=None,
+                             hessian=np.eye(param_spec.n_params()),
+                             hessian_cond=1.0)
+
+    with _mock.patch.object(dlg, "fit_anchor", _fake_fit_faithful):
+        out2 = dlg.recover_true_difference(
+            design_naive, design_expert, ps, {"v": 1.0}, l2=1.0, seed=0)
+    assert abs(out2["recovered_delta"]["v"] - 0.9) < 1e-9
+    assert out2["shrunk"] is False

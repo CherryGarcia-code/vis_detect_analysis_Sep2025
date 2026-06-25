@@ -1860,3 +1860,102 @@ def recover_confusion(design_template, base_theta, param_spec, n_rep=50, seed=0,
         "winners": winners,
         "n_rep": int(n_rep),
     }
+
+
+# ── Engine-A recovery (Task 3.4) — seeding INFORMS, does not ERASE (§A.9) ──────
+def recover_true_difference(design_naive, design_expert, param_spec, true_delta,
+                            l2=1.0, seed=0):
+    """Does the L2-seeded backward fit RECOVER a genuine across-stage difference?
+
+    Plain English: the backward sweep fits the expert anchor FREE and then seeds
+    the earlier (naive) anchor toward that expert fit with an L2 ridge. The worry
+    (the mirror of Task 2.4's guardrail) is that this prior could CRUSH a
+    difference that is genuinely there — making naive look like expert by fiat. This
+    function proves the opposite on ground truth: given two anchors that differ by a
+    KNOWN ``true_delta`` on an IDENTIFIABLE dial, it runs that exact expert-first
+    L2-seeded fit and reads back the recovered dial difference. If the seeding
+    *informed* without *erasing*, the recovered difference matches the true one and
+    is NOT shrunk toward zero.
+
+    The fit is the same :func:`backward_sweep` the science pipeline uses, with the
+    two anchors arranged chronologically as ``[naive, expert]`` (expert last == most
+    expert): the EXPERT is fit FREE (``seed_theta=None, l2=0``) as the identifiable
+    reference, then the NAIVE anchor is fit L2-seeded toward the expert's fitted
+    theta at the passed ``l2``. Per dial the recovered difference is
+
+        ``recovered_delta[d] = recovered_expert[d] - recovered_naive[d]``
+
+    where each anchor's recovered dial value is the MEAN over moods of that anchor's
+    fitted dial (so the comparison is at the dial level, matching ``true_delta``
+    which is keyed by dial). A dial is judged **crushed** when its recovered
+    magnitude falls below HALF the true magnitude::
+
+        shrunk = any(|recovered_delta[d]| < 0.5 * |true_delta[d]|  for d in true_delta)
+
+    so ``shrunk == True`` means the prior erased (at least one) genuine difference —
+    the failure mode this guardrail exists to catch.
+
+    Parameters
+    ----------
+    design_naive : Design
+        The naive (earlier / less-expert) anchor's ragged Design with the outcomes
+        to fit. Fit L2-seeded toward the expert fit.
+    design_expert : Design
+        The expert (later / most-expert) anchor's ragged Design. Fit FREE first as
+        the identifiable reference template.
+    param_spec : ParamSpec
+        Parameter layout (``theta`` <-> dial/mood mapping), passed to the fits.
+    true_delta : Mapping[str, float]
+        The KNOWN ground-truth difference per dial key (``"v"``/``"z"``/``"u"``),
+        defined as ``expert - naive``. Only the listed dials are reported in
+        ``recovered_delta`` and judged for ``shrunk``.
+    l2 : float
+        Ridge strength seeding the naive fit toward the expert theta (the operating
+        point is ``1.0``). The expert anchor is always fit with ``l2=0``.
+    seed : int
+        RNG seed for the per-anchor :func:`fit_anchor` random restarts (reproducible).
+
+    Returns
+    -------
+    dict
+        ``{"recovered_delta": {dial: float}, "shrunk": bool}`` where
+        ``recovered_delta[dial] == recovered_expert - recovered_naive`` (mean over
+        moods) for each dial in ``true_delta``, and ``shrunk`` is the crushed-flag
+        above.
+
+    Notes
+    -----
+    * Calls :func:`backward_sweep` so the seeding is IDENTICAL to the rest of the
+      module (expert-first, free expert, naive L2-seeded toward it). The two anchors
+      are keyed ``"naive"``/``"expert"`` internally; chronological order is
+      ``["naive", "expert"]``.
+    * The public dial names on a :class:`FitResult` are ``sharpness``/``itchiness``/
+      ``timing``; this maps the ``true_delta`` keys (``v``/``z``/``u``) to them via
+      :data:`_DIAL_PUBLIC_NAME`.
+    """
+    anchor_designs = {"naive": design_naive, "expert": design_expert}
+    anchors_chrono = ["naive", "expert"]        # expert last == most expert
+
+    # Expert fit FREE (l2=0), naive L2-seeded toward the expert theta — the exact
+    # backward sweep the pipeline uses (Task 2.1 / contract §A.6 ridge-toward-seed).
+    results = backward_sweep(anchor_designs, anchors_chrono, param_spec,
+                             l2=float(l2), seed=seed)
+    fit_naive = results["naive"]
+    fit_expert = results["expert"]
+
+    def _rec_dial(fit, dial):
+        """Recovered dial value = mean of the per-mood fitted values (dial level)."""
+        pub = _DIAL_PUBLIC_NAME[dial]
+        vals = [md[pub] for md in fit.dials.values()]
+        return float(np.mean(vals)) if vals else float("nan")
+
+    recovered_delta = {}
+    shrunk = False
+    for dial, td in true_delta.items():
+        rd = _rec_dial(fit_expert, dial) - _rec_dial(fit_naive, dial)
+        recovered_delta[dial] = rd
+        # crushed: recovered magnitude is below HALF the true magnitude
+        if abs(rd) < 0.5 * abs(float(td)):
+            shrunk = True
+
+    return {"recovered_delta": recovered_delta, "shrunk": bool(shrunk)}
