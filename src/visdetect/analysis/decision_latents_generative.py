@@ -144,12 +144,26 @@ def select_expert_anchors(inventory_df: pd.DataFrame, min_d: float = 0.7,
 
 
 # ── Engine-A math (Task 1.1) — leaky accumulator (contract §A.3) ─────────────
+def _rectify(e, kind, g_up=1.0, g_down=1.0):
+    """Local copy of ddm.rectify (pure numpy), so this synthetic module stays
+    ddm-free: importing ddm pulls `pyddm` at module load, but the cluster
+    recovery harness runs on a numpy/scipy-only env. Behaviour-identical to
+    ddm.rectify (verified by the Task-1.1 rectification tests)."""
+    e = np.asarray(e, dtype=float)
+    if kind == "symmetric":
+        return e
+    if kind == "halfwave":
+        return np.clip(e, 0.0, None)
+    if kind == "asym":
+        return np.where(e >= 0, g_up * e, g_down * e)
+    raise ValueError(kind)
+
+
 def leaky_accumulate(evidence, dt=0.05, leak_tau=0.27, rectification="signed",
                      g_up=1.0, g_down=1.0):
     """A[k] = decay*A[k-1] + R(e[k])*dt, decay = exp(-dt/leak_tau)."""
-    from visdetect.analysis.ddm import rectify
-    kind = {"signed": "symmetric"}.get(rectification, rectification)   # ddm uses 'symmetric'
-    r = rectify(np.asarray(evidence, float), kind, g_up=g_up, g_down=g_down)
+    kind = {"signed": "symmetric"}.get(rectification, rectification)   # 'signed' -> 'symmetric'
+    r = _rectify(np.asarray(evidence, float), kind, g_up=g_up, g_down=g_down)
     decay = np.exp(-dt / float(leak_tau))
     A = np.empty(len(r), float)
     acc = 0.0

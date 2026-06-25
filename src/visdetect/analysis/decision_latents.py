@@ -15,9 +15,13 @@ import pandas as pd
 from scipy.optimize import curve_fit
 from scipy.stats import norm
 
-from visdetect.analysis import ddm
 from visdetect.analysis.behavior import compute_session_performance, calculate_dprime
 from visdetect.analysis.config import parse_session_date  # DDMMYYYY parser
+# NOTE: `ddm` is imported LAZILY inside build_trial_table. ddm.py does `import pyddm`
+# at module load, so a top-level `import ddm` here would force pyddm onto every
+# importer of this module -- including the pure-synthetic recovery path
+# (_recovery_fixtures -> decision_latents.MAIN_MOODS). Keeping it lazy lets the
+# cluster recovery harness import this module on a numpy/scipy-only env (no pyddm).
 # CHANGE_SIZES is the canonical ordered go-trial list (sorted ALL_GO_CHANGE_SIZES);
 # it lives in config, NOT constants (the task brief's import path is a typo).
 from visdetect.analysis.config import CHANGE_SIZES
@@ -192,6 +196,7 @@ def build_trial_table(session, state_labels, session_name, dt=0.05):
     here (its TF indexing is a Phase-2 concern); only ``n_bins = len(evidence)``
     is kept. ``trial_in_session`` is assigned after sorting so it is monotonic.
     """
+    from visdetect.analysis import ddm  # lazy: pulls pyddm at module load (see top-of-file note)
     ev = ddm.build_trial_evidence(session, dt=dt)   # trial_uid, outcome, change_size,
                                                     # change_time, decision_time, lick, censored, evidence
     rows = []
