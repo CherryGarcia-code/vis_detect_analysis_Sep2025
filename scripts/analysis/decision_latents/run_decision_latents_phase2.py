@@ -134,14 +134,17 @@ def save_fig(fig, name):
 
 
 def _csv_key(sname) -> str:
-    """The session-name form the deliverable CSV stores (int64 -> leading zeros
-    dropped: '01072025' -> '1072025'). `append_generative_latents` looks trials up
-    via ``df['session_name'].astype(str)``, so EVERY per-session dict the appender
-    consumes MUST be keyed this way or the lookup silently misses."""
-    try:
-        return str(int(sname))
-    except (TypeError, ValueError):
-        return str(sname)
+    """Canonical zfill8 session-id key (project DDMMYYYY convention).
+
+    A session id like ``01072025`` (1 Jul 2025) is stored int64 in the deliverable,
+    which drops the leading-zero DAY -> ``1072025`` (there is no ``1072025``
+    session; it is just the int form of ``01072025``). This keys every per-session
+    dict by the canonical zfill8 form. `append_generative_latents` canonicalizes
+    BOTH its CSV ``session_name`` column and the dicts the same way, so the keys
+    match regardless of representation (and sort chronologically). Delegates to the
+    single source of truth in :func:`decision_latents_generative.canonical_session_id`.
+    """
+    return dlg.canonical_session_id(sname)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -344,13 +347,25 @@ def main(argv=None):
     print(f"  l2={args.l2}  sigma={SIGMA}  out_csv={out_csv}")
     print("=" * 72, flush=True)
 
+    # ── cache skip (honour --force): a prior FULL run is reused unless --force.
+    # Re-run with --force after the cluster recovery_results.json lands to flip the
+    # per-dial trust columns. --quick always recomputes (writes throwaway _smoke).
+    if not args.quick and not args.force \
+            and os.path.exists(results_json) and os.path.exists(out_csv):
+        print(f"[cache] results already exist:\n    {results_json}\n    {out_csv}\n"
+              "  Use --force to recompute (e.g. after the cluster JSON lands). Skipping.")
+        return 0
+
     # ── 1. inventory -> the contingency GATE ─────────────────────────────────
     if not os.path.exists(INVENTORY_CSV):
         raise SystemExit(f"FATAL: inventory not found: {INVENTORY_CSV} "
                          "(run _expert_anchor_inventory.py first).")
     inv = pd.read_csv(INVENTORY_CSV)
     sel = dlg.select_expert_anchors(inv)
-    anchors = [str(a) for a in sel["anchors"]]
+    # canonical zfill8 form at the SOURCE so every downstream key (anchors_chrono,
+    # anchor_designs, anchor_fits, mu_by_session_canon) is the leading-zero form,
+    # never the int-form '1072025' (which is just int('01072025')).
+    anchors = [dlg.canonical_session_id(a) for a in sel["anchors"]]
     mode = sel["mode"]
     print(f"[gate] mode={mode!r}  n_anchors={len(anchors)}")
 
@@ -465,10 +480,26 @@ def main(argv=None):
     print(f"[append] appending generative latents -> {out_csv} "
           f"({'SMOKE — not the real deliverable' if args.quick else 'REAL deliverable'})",
           flush=True)
+    # anchor_fits is keyed by the canonical session form (anchors_chrono / zfill8);
+    # the appender canonicalizes BOTH its CSV session_name column (int64-stored) and
+    # the dicts to zfill8, so the keys match regardless of representation.
     appended = dlg.append_generative_latents(
         DELIVERABLE_CSV, anchor_fits, recovery_by_regime, param_spec,
         mu_by_session, evidence_by_session, regime_by_session, SIGMA,
         rectification=rectification)
+    # regression guard (would have caught the leading-zero-day key bug): every fitted
+    # anchor that actually appears in the deliverable MUST have non-omitted rows.
+    # Both sides canonicalized so int64 / int-form / zfill8 all compare equal. Fails
+    # loudly rather than silently shipping a corrupt latent table.
+    csv_sess = appended["session_name"].map(dlg.canonical_session_id)
+    fitted_canon = {dlg.canonical_session_id(k) for k in anchor_fits}
+    omitted_fits = sorted(
+        s for s in (fitted_canon & set(csv_sess))
+        if bool(appended.loc[csv_sess == s, "generative_omitted"].all()))
+    if omitted_fits:
+        raise SystemExit(
+            "FATAL: fitted anchors written as generative_omitted (session-key "
+            f"mismatch between anchor_fits and the deliverable): {omitted_fits}")
     appended.to_csv(out_csv, index=False)
     n_gen = int((~appended["generative_omitted"]).sum())
     print(f"[append] wrote {len(appended)} rows ({n_gen} with a fitted anchor); "

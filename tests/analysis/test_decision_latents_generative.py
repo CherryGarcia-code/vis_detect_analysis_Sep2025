@@ -3410,3 +3410,55 @@ def test_append_generative_latents_qc_omitted_session_nan_not_dropped(tmp_path):
     assert pd.isna(r["anchor_id"]) or r["anchor_id"] == ""
     # the fitted sessions are NOT flagged omitted
     assert bool(out[out["session_name"] == "S_expert"].iloc[0]["generative_omitted"]) is False
+
+
+def test_append_generative_latents_session_id_canonicalized(tmp_path):
+    """REGRESSION (Task 4.2 review, C1): a numeric DDMMYYYY session is stored int64
+    in the deliverable, so a leading-zero DAY drops -- the session 01 Jul 2025
+    ('01072025') is written 1072025. There is NO '1072025' session; it is just the
+    int representation of '01072025'. `append_generative_latents` canonicalizes
+    session ids to the project's zfill8 form on BOTH the CSV session_name column and
+    the per-session dicts, so a fitted anchor matches its trials whether the dicts
+    are keyed '01072025' (canonical) OR '1072025' (int form) and whether the CSV
+    stores int64 or a zero-padded string. Without this, every leading-zero-day
+    anchor (1-9 of a month) would be silently written generative_omitted with NaN
+    latents despite being fitted (and int-keys also misorder chronologically)."""
+    dt, sigma, leak_tau, rect = 0.05, 0.8, 0.27, "signed"
+    rng = np.random.default_rng(0)
+    ev = pd.DataFrame([{"trial_idx": 0,
+                        "evidence": np.round(rng.normal(0.0, 1.0, 6), 4)}])
+
+    # numeric leading-zero-DAY session (01 Jul 2025): pandas reads it back as int64,
+    # exactly like the real decision_latents_by_state.csv deliverable.
+    rows = [dict(session_name=1072025, trial_idx=0, state_label="Impulsive",
+                 decision_time=0.30, outcome="hit", change_size=2.0,
+                 change_time_planned=0.15, lick=1, censored=False, n_bins=6)]
+    csv_path = _write_phase1_csv(tmp_path, rows)
+    reread = pd.read_csv(csv_path)["session_name"]
+    assert reread.dtype == np.int64                       # matches the real deliverable
+    assert reread.astype(str).iloc[0] == "1072025"        # int form, leading zero dropped
+
+    # the canonicalizer collapses every representation to the SAME zfill8 key.
+    assert dlg.canonical_session_id(1072025) == "01072025"
+    assert dlg.canonical_session_id("1072025") == "01072025"
+    assert dlg.canonical_session_id("01072025") == "01072025"
+
+    fit = _mk_fitresult(
+        {"Impulsive": {"sharpness": 1.3, "itchiness": -3.5, "timing": 0.45}})
+    rec = {"expert": {"per_dial_trust": {"sharpness": "generative",
+                                         "caution": "generative",
+                                         "timing": "generative"}}}
+    common = dict(per_trial_csv=csv_path, recovery_by_regime=rec,
+                  param_spec=dlg.ParamSpec(), sigma=sigma, dt=dt,
+                  leak_tau=leak_tau, rectification=rect)
+
+    # BOTH the canonical zfill8 key AND the int-form key must HIT (canonicalized on
+    # entry) against the int64-stored deliverable -> the fitted anchor is appended.
+    for key in ("01072025", "1072025"):
+        out = dlg.append_generative_latents(
+            anchor_fits={key: fit}, mu_by_session={key: 0.15},
+            trial_evidence_by_session={key: ev},
+            regime_by_session={key: "expert"}, **common)
+        assert bool(out.iloc[0]["generative_omitted"]) is False, f"key {key!r} missed"
+        assert out.iloc[0]["sharpness_drift"] == pytest.approx(1.3)
+        assert out.iloc[0]["trust_sharpness"] == "generative"

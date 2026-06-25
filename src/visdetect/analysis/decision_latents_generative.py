@@ -27,6 +27,10 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+# Single source of truth for the zfill8 session-id key (config is import-light:
+# constants + pandas only, no ddm/pyddm) -- keeps this module pyddm-free.
+from visdetect.analysis.config import canonical_session_id  # noqa: F401  (re-exported)
+
 # ── Engine-A constants (used by later tasks; declared here per contract §A) ──
 DT_GEN = 0.05                       # generative time grid (s); one TF update
 LEAK_TAU_S = 0.27                   # default leak time-constant (s)
@@ -2308,6 +2312,21 @@ def append_generative_latents(per_trial_csv, anchor_fits, recovery_by_regime,
     df = pd.read_csv(per_trial_csv)
     n = len(df)
 
+    # Canonicalize session ids to zfill8 on BOTH sides (the CSV session_name column,
+    # below, and the per-session dicts here), so a fitted anchor matches its trials
+    # regardless of representation: the deliverable stores session_name as int64
+    # (a leading-zero DAY dropped, '01072025' -> 1072025) while the fit / geometry
+    # dicts are keyed by the canonical zfill8 form. Without this, every
+    # leading-zero-day anchor (1-9 of a month) would silently miss -> NaN latents +
+    # generative_omitted despite being fitted. recovery_by_regime is keyed by REGIME
+    # (not session), so it is left untouched.
+    anchor_fits = {canonical_session_id(k): v for k, v in dict(anchor_fits).items()}
+    mu_by_session = {canonical_session_id(k): v for k, v in dict(mu_by_session).items()}
+    regime_by_session = {canonical_session_id(k): v
+                         for k, v in dict(regime_by_session).items()}
+    trial_evidence_by_session = {canonical_session_id(k): v
+                                 for k, v in dict(trial_evidence_by_session).items()}
+
     # Pre-resolve the per-dial trust row for each regime (gate keys ->
     # trust_* columns). QC-omitted trials override these to 'descriptive'.
     def _trust_row(regime):
@@ -2339,7 +2358,8 @@ def append_generative_latents(per_trial_csv, anchor_fits, recovery_by_regime,
     trust_timing = np.empty(n, dtype=object)
     generative_omitted = np.zeros(n, dtype=bool)
 
-    sess_arr = df["session_name"].astype(str).to_numpy()
+    sess_arr = np.array([canonical_session_id(s)
+                         for s in df["session_name"].to_numpy()], dtype=object)
     tidx_arr = df["trial_idx"].to_numpy()
     mood_arr = df["state_label"].astype(object).to_numpy()
     dtime_arr = pd.to_numeric(df["decision_time"], errors="coerce").to_numpy(float)
