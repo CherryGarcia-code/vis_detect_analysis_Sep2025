@@ -96,7 +96,8 @@ echo "════════════════════════�
 mkdir -p "${OUTDIR}"
 
 python --version
-python -c "import numpy, scipy, matplotlib; print('imports OK; numpy', numpy.__version__, 'scipy', scipy.__version__)"
+python -c "import numpy, scipy; print('core imports OK; numpy', numpy.__version__, 'scipy', scipy.__version__)"
+python -c "import matplotlib" 2>/dev/null && echo "matplotlib OK (F6 figure will be drawn)" || echo "WARNING: matplotlib missing -- JSON will still be written; F6 skipped (render locally from recovery_results.json)"
 python -c "from visdetect.analysis import decision_latents_generative as d; print('visdetect OK:', d.__file__)"
 echo "════════════════════════════════════════════════════════════"
 
