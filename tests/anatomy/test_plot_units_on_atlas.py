@@ -69,3 +69,13 @@ def test_units_categorical_png(tmp_path):
 def test_lick_metrics_registered():
     for m in ("lick_hit", "lick_fa", "lick_contrast"):
         assert METRIC_INFO[m]["diverging"] is True
+
+
+def test_fdr_significant_masks_and_handles_nan():
+    from plot_units_on_atlas import fdr_significant
+    # clear signal + clear nulls + a NaN (too-few-trials) -> NaN never significant
+    pvals = [1e-6, 1e-5, 0.9, 0.8, float("nan")]
+    sig = fdr_significant(pvals, alpha=0.05)
+    assert sig[0] and sig[1] and not sig[2] and not sig[3] and not sig[4]
+    # all-NaN -> nothing significant, no crash
+    assert not fdr_significant([float("nan"), float("nan")]).any()

@@ -11,6 +11,12 @@ Allen slice (context + striatum zoom). Metrics:
 Alignment uses visdetect.analysis.align.get_event_times_by_trial (valid-outcome safe:
 Change_ON only on hit/miss; Baseline_ON valid for all). State per trial comes from the
 state-labeler tags. Reuses the coronal slice renderer from plot_sites_on_atlas.
+
+Effect size: --effect auroc (default) colours evoked/state maps by signed auROC-0.5
+(bounded, comparable across SPNs/FSIs — avoids high-FR units dominating the scale);
+--effect raw uses Δ Hz. Non-significant units are hidden by default (per-unit Wilcoxon/
+Mann-Whitney + Benjamini-Hochberg FDR; --show-nonsig to keep them). `fr` uses a log
+colour scale (--fr-scale) and is never masked (it has no response test).
 """
 from __future__ import annotations
 
@@ -27,9 +33,12 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 
+from scipy.stats import mannwhitneyu, wilcoxon
+
 from visdetect.anatomy.atlas import AllenAtlas
 from visdetect.anatomy.tracks import load_track_artifact
 from visdetect.analysis.config import STATE_LABEL_COLORS
+from visdetect.analysis.utils import compute_auroc, fdr_correct
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plot_sites_on_atlas import coronal_coarse_image
@@ -69,10 +78,59 @@ def _counts(spikes, events, w0, w1):
     return out
 
 
-def compute_unit_metric(session, tags, metric, *, baseline_win=(0.0, 1.0),
+def _rate(sp, ev, w):
+    return _counts(sp, ev, w[0], w[1]) / (w[1] - w[0])
+
+
+def _evoked(sp, ev, post_w, pre_w, effect, min_trials):
+    """(value, pval) for an evoked response (post vs pre around ev).
+
+    effect 'auroc' -> signed auROC-0.5 (>0 = excited); 'raw' -> mean Δ Hz.
+    pval = paired Wilcoxon signed-rank on per-trial (post-pre)."""
+    post, pre = _rate(sp, ev, post_w), _rate(sp, ev, pre_w)
+    m = np.isfinite(post) & np.isfinite(pre)
+    post, pre = post[m], pre[m]
+    if len(post) < min_trials:
+        return np.nan, np.nan
+    d = post - pre
+    if np.allclose(d, 0):
+        p = 1.0
+    else:
+        try:
+            _, p = wilcoxon(post, pre)
+        except Exception:
+            p = np.nan
+    val = (compute_auroc(post, pre) - 0.5) if effect == "auroc" else float(np.mean(d))
+    return val, p
+
+
+def _two_state(sp, base, base_w, state, A, B, effect, min_trials):
+    """(value, pval) for baseline FR in state A vs B.
+
+    effect 'auroc' -> auROC(A,B)-0.5 (>0 = higher in A); 'raw' -> mean(A)-mean(B) Hz.
+    pval = Mann-Whitney U (unpaired)."""
+    fr = _rate(sp, base, base_w)
+    a = fr[(state == A) & np.isfinite(fr)]
+    b = fr[(state == B) & np.isfinite(fr)]
+    if len(a) < min_trials or len(b) < min_trials:
+        return np.nan, np.nan
+    try:
+        _, p = mannwhitneyu(a, b, alternative="two-sided")
+    except Exception:
+        p = np.nan
+    val = (compute_auroc(a, b) - 0.5) if effect == "auroc" else float(np.mean(a) - np.mean(b))
+    return val, p
+
+
+def compute_unit_metric(session, tags, metric, *, effect="auroc", baseline_win=(0.0, 1.0),
                         change_post=(0.0, 0.3), change_pre=(-0.3, 0.0),
                         min_trials=5) -> pd.DataFrame:
-    """Per-unit scalar (or state label) for `metric`. Returns df[cluster_id, value]."""
+    """Per-unit (value, pval) for `metric`. Returns df[cluster_id, value, pval].
+
+    effect: "auroc" (signed auROC-0.5, comparable across the SPN/FSI population) or
+    "raw" (Δ Hz / Hz difference). pval = per-unit significance (paired Wilcoxon for
+    evoked, Mann-Whitney for state); NaN for `fr` and for units with too few trials.
+    """
     from visdetect.analysis.align import get_event_times_by_trial
     n = len(session.trials)
     base = np.array(get_event_times_by_trial(session, "Baseline_ON"), float)
@@ -85,46 +143,49 @@ def compute_unit_metric(session, tags, metric, *, baseline_win=(0.0, 1.0),
     units = session.good_and_stable_ids or [c.cluster_id for c in session.clusters]
     spk = {c.cluster_id: np.asarray(c.spike_times, float) for c in session.clusters}
 
-    def _dlick(sp, ev):
-        post = _counts(sp, ev, *LICK_POST) / (LICK_POST[1] - LICK_POST[0])
-        pre = _counts(sp, ev, *LICK_PRE) / (LICK_PRE[1] - LICK_PRE[0])
-        d = post - pre
-        return float(np.nanmean(d)) if np.isfinite(d).any() else np.nan
-
     rows = []
     for cid in units:
         sp = spk.get(cid, np.array([]))
-        val = np.nan
+        val, pval = np.nan, np.nan
         if metric == "fr":
             t0 = np.nanmin(base)
             t1 = np.nanmax(np.where(np.isfinite(chg), chg, base)) + 2.0
             val = float(((sp >= t0) & (sp < t1)).sum() / max(t1 - t0, 1e-9))
         elif metric == "change_response":
-            post = _counts(sp, chg, *change_post) / (change_post[1] - change_post[0])
-            pre = _counts(sp, chg, *change_pre) / (change_pre[1] - change_pre[0])
-            d = post - pre
-            val = float(np.nanmean(d)) if np.isfinite(d).any() else np.nan
-        elif metric in ("state_contrast", "preferred_state"):
-            dur = baseline_win[1] - baseline_win[0]
-            fr = _counts(sp, base, *baseline_win) / dur
+            val, pval = _evoked(sp, chg, change_post, change_pre, effect, min_trials)
+        elif metric == "lick_hit":
+            val, pval = _evoked(sp, hit_t, LICK_POST, LICK_PRE, effect, min_trials)
+        elif metric == "lick_fa":
+            val, pval = _evoked(sp, fa_t, LICK_POST, LICK_PRE, effect, min_trials)
+        elif metric == "lick_contrast":
+            vh, ph = _evoked(sp, hit_t, LICK_POST, LICK_PRE, effect, min_trials)
+            vf, pf = _evoked(sp, fa_t, LICK_POST, LICK_PRE, effect, min_trials)
+            val = (vh - vf) if (np.isfinite(vh) and np.isfinite(vf)) else np.nan
+            ps = [x for x in (ph, pf) if np.isfinite(x)]
+            pval = min(ps) if ps else np.nan
+        elif metric == "state_contrast":
+            val, pval = _two_state(sp, base, baseline_win, state, "StimSens", "Impulsive", effect, min_trials)
+        elif metric == "preferred_state":
+            fr = _rate(sp, base, baseline_win)
             per = {}
             for stt in MOOD_STATES:
                 m = (state == stt) & np.isfinite(fr)
                 per[stt] = float(np.nanmean(fr[m])) if m.sum() >= min_trials else np.nan
-            if metric == "state_contrast":
-                val = per.get("StimSens", np.nan) - per.get("Impulsive", np.nan)
-            else:
-                avail = {k: v for k, v in per.items() if np.isfinite(v)}
-                val = max(avail, key=avail.get) if avail else None
-        elif metric == "lick_hit":
-            val = _dlick(sp, hit_t)
-        elif metric == "lick_fa":
-            val = _dlick(sp, fa_t)
-        elif metric == "lick_contrast":
-            h, f = _dlick(sp, hit_t), _dlick(sp, fa_t)
-            val = (h - f) if (np.isfinite(h) and np.isfinite(f)) else np.nan
-        rows.append({"cluster_id": int(cid), "value": val})
+            avail = {k: v for k, v in per.items() if np.isfinite(v)}
+            val = max(avail, key=avail.get) if avail else None
+            _, pval = _two_state(sp, base, baseline_win, state, "StimSens", "Impulsive", "raw", min_trials)
+        rows.append({"cluster_id": int(cid), "value": val, "pval": pval})
     return pd.DataFrame(rows)
+
+
+def fdr_significant(pvals, alpha=0.05):
+    """Boolean significance after Benjamini-Hochberg FDR; NaN p-values -> False."""
+    pv = np.asarray(pvals, float)
+    sig = np.zeros(len(pv), bool)
+    valid = np.isfinite(pv)
+    if valid.any():
+        sig[np.where(valid)[0]] = fdr_correct(pv[valid], alpha=alpha)
+    return sig
 
 
 def _draw(ax, atlas, ap_um, art, df, metric, *, zoom, sc, win, cmap, norm):
@@ -150,9 +211,20 @@ def _draw(ax, atlas, ap_um, art, df, metric, *, zoom, sc, win, cmap, norm):
         ax.set_xlim(win[0], win[1]); ax.set_ylim(win[3], win[2])
 
 
+def _cbar_label(metric, effect, fr_scale, info):
+    if metric == "fr":
+        return info["label"] + (" — log scale" if fr_scale == "log" else "")
+    if effect == "auroc":
+        if metric == "state_contrast":
+            return "auROC − 0.5   Impulsive ←→ StimSens"
+        return "auROC − 0.5 (response vs baseline)"
+    return info["label"]
+
+
 def plot_units_on_atlas(subject, session_name, metric, df, art, out_png,
-                        atlas=None) -> str:
-    """Render the 2-panel (whole section + zoom) map. `df` has ccf_ml/ccf_dv/ccf_ap/value."""
+                        atlas=None, *, effect="auroc", fr_scale="log", n_total=None) -> str:
+    """Render the 2-panel (whole section + zoom) map. `df` has ccf_ml/ccf_dv/ccf_ap/value
+    (already significance-filtered upstream). n_total = pre-mask unit count for the label."""
     atlas = atlas or AllenAtlas()
     info = METRIC_INFO[metric]
     ap_um = float(df["ccf_ap"].median())
@@ -163,7 +235,14 @@ def plot_units_on_atlas(subject, session_name, metric, df, art, out_png,
     cmap = norm = None
     if metric != "preferred_state":
         vals = pd.to_numeric(df["value"], errors="coerce").to_numpy()
-        if info["diverging"]:
+        if metric == "fr":
+            cmap = plt.get_cmap("viridis")
+            pos = vals[np.isfinite(vals) & (vals > 0)]
+            if fr_scale == "log" and pos.size:
+                norm = mcolors.LogNorm(vmin=max(float(pos.min()), 0.1), vmax=float(np.nanmax(vals)))
+            else:
+                norm = mcolors.Normalize(np.nanmin(vals), np.nanmax(vals))
+        elif info["diverging"]:
             vmax = np.nanmax(np.abs(vals)) or 1.0
             norm = mcolors.TwoSlopeNorm(vcenter=0.0, vmin=-vmax, vmax=vmax)
             cmap = _state_contrast_cmap() if metric == "state_contrast" else plt.get_cmap(info["cmap"])
@@ -179,11 +258,11 @@ def plot_units_on_atlas(subject, session_name, metric, df, art, out_png,
               sc=13 if zoom else 5, win=win, cmap=cmap, norm=norm)
     axA.add_patch(Rectangle((ml0, dv0), ml1 - ml0, dv1 - dv0, fill=False, ec="k",
                             lw=1.0, ls="--", zorder=6))
-    n_plot = int(np.isfinite(pd.to_numeric(df["value"], errors="coerce")).sum()) \
-        if metric != "preferred_state" else int((df["value"].isin(MOOD_STATES)).sum())
+    n_plot = len(df)
+    n_lab = (f"n = {n_plot}/{n_total} units (FDR<0.05)"
+             if (n_total is not None and metric != "fr") else f"n = {n_plot} units")
     axA.set_title(f"A. Coronal section (AP ≈ {ap_um:.0f} µm)", fontweight="bold", fontsize=12)
-    axA.text(0.02, 0.02, f"n = {n_plot} units", transform=axA.transAxes, fontsize=8,
-             color="0.3", va="bottom")
+    axA.text(0.02, 0.02, n_lab, transform=axA.transAxes, fontsize=8, color="0.3", va="bottom")
     axB.set_title("B. Striatum zoom", fontweight="bold", fontsize=12)
     # scale bar
     x0 = ml0 + 0.08 * (ml1 - ml0); y0 = dv1 - 0.08 * (dv1 - dv0)
@@ -199,7 +278,7 @@ def plot_units_on_atlas(subject, session_name, metric, df, art, out_png,
     else:
         sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
         cb = fig.colorbar(sm, ax=axB, fraction=0.046, pad=0.04)
-        cb.set_label(info["label"], fontsize=9)
+        cb.set_label(_cbar_label(metric, effect, fr_scale, info), fontsize=9)
 
     fig.suptitle(f"{subject} {session_name} (Expert) — {info['label'].split('(')[0].strip()}"
                  f"  ·  {art.hemisphere} CPu", fontsize=13, fontweight="bold")
@@ -209,19 +288,33 @@ def plot_units_on_atlas(subject, session_name, metric, df, art, out_png,
     return str(out_png)
 
 
-def _build(subject, session_name, metric, anatomy_dir, out_png, session=None, tags=None):
+def _build(subject, session_name, metric, anatomy_dir, out_png, session=None, tags=None,
+           *, effect="auroc", mask_nonsig=True, fr_scale="log"):
     from visdetect.core.session import load_session
     tok = str(int(session_name))
     if session is None:
         session = load_session(os.path.join("data", "pkls", subject, f"{subject}_{tok}.pkl"))
     if tags is None:
         tags = pd.read_csv(os.path.join("data", "cache", "state_tags", subject, f"{tok.zfill(8)}.csv"))
-    met = compute_unit_metric(session, tags, metric)
+    met = compute_unit_metric(session, tags, metric, effect=effect)
     ua = pd.read_csv(os.path.join(anatomy_dir, "unit_anatomy.csv"))
     ua = ua[ua.session_name == int(tok)]
     df = ua.merge(met, on="cluster_id")
+    # keep only units with a computable value
+    if metric == "preferred_state":
+        df = df[df["value"].isin(MOOD_STATES)]
+    else:
+        df = df[np.isfinite(pd.to_numeric(df["value"], errors="coerce"))]
+    n_total = len(df)
+    # hide non-responsive units (FDR-significant only); fr has no significance test
+    if mask_nonsig and metric != "fr":
+        df = df[fdr_significant(df["pval"].to_numpy())]
     art = load_track_artifact(os.path.join(anatomy_dir, f"{subject}_shank_tracks.json"))
-    return plot_units_on_atlas(subject, tok, metric, df, art, out_png), session, tags
+    if len(df) == 0:
+        return None, session, tags
+    out = plot_units_on_atlas(subject, tok, metric, df, art, out_png,
+                              effect=effect, fr_scale=fr_scale, n_total=n_total)
+    return out, session, tags
 
 
 def main():
@@ -231,15 +324,22 @@ def main():
     ap.add_argument("--metric", required=True,
                     choices=list(METRIC_INFO), nargs="+")
     ap.add_argument("--anatomy-dir", default=None, help="defaults to data/anatomy/<subject>")
+    ap.add_argument("--effect", choices=["auroc", "raw"], default="auroc",
+                    help="auroc (signed auROC-0.5, cross-unit comparable; default) or raw (Δ Hz)")
+    ap.add_argument("--show-nonsig", action="store_true",
+                    help="also show units that are NOT FDR-significant (default: hide them)")
+    ap.add_argument("--fr-scale", choices=["log", "linear"], default="log")
     args = ap.parse_args()
     args.anatomy_dir = args.anatomy_dir or os.path.join("data", "anatomy", args.subject)
     session = tags = None
     for m in args.metric:
+        suffix = "" if m == "fr" else f"_{args.effect}"
         out = os.path.join("FIGURES", "anatomy", args.subject,
-                           f"{args.subject}_{args.session}_{m}.png")
+                           f"{args.subject}_{args.session}_{m}{suffix}.png")
         out, session, tags = _build(args.subject, args.session, m, args.anatomy_dir, out,
-                                    session=session, tags=tags)
-        print(f"wrote {out}")
+                                    session=session, tags=tags, effect=args.effect,
+                                    mask_nonsig=not args.show_nonsig, fr_scale=args.fr_scale)
+        print(f"wrote {out}" if out else f"{m}: no units to plot (none significant?)")
 
 
 if __name__ == "__main__":
