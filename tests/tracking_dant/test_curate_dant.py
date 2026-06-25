@@ -116,3 +116,23 @@ def test_write_validation_json_writes_to_given_dir(tmp_path):
     assert json.loads(p.read_text())["trusted"]["auc"] == 0.9
     # clobber-safety: nothing written outside the given dir
     assert "tracking_qc" not in str(p).replace("\\", "/")
+
+
+def test_build_summary_table_rows_and_yardstick():
+    tier_counts = {"trusted": 40, "review": 300, "suspect": 80}
+    auc_by_tier = {
+        "trusted": {"auc": 0.81, "n_matched": 120, "n_nonmatched": 200},
+        "review": {"auc": 0.70, "n_matched": 90, "n_nonmatched": 150},
+    }
+    df = curate_dant.build_summary_table(tier_counts, auc_by_tier)
+
+    assert list(df["tier"]) == ["trusted", "review", "suspect"]
+    trusted = df[df.tier == "trusted"].iloc[0]
+    assert trusted["dant_n_tracks"] == 40
+    assert trusted["dant_auc"] == 0.81
+    assert trusted["um_n_tracks"] == 22           # yardstick wired in
+    assert trusted["um_auc"] == 0.96
+    # a tier with no AUC entry still produces a row (suspect)
+    suspect = df[df.tier == "suspect"].iloc[0]
+    assert suspect["dant_n_tracks"] == 80
+    assert suspect["dant_n_matched"] == 0

@@ -203,3 +203,71 @@ def step_validate(paths: DantCurationPaths, subj: str = "BG_046") -> dict:
     write_validation_json(result, paths.out_dir)
     print(f"[validate] held-out ISI AUC by tier: {result}", flush=True)
     return result
+
+
+def build_summary_table(tier_counts: Dict[str, int], auc_by_tier: Dict[str, dict],
+                        yardstick: Dict[str, dict] = UM_YARDSTICK) -> pd.DataFrame:
+    """One row per tier: DANT track count + held-out ISI AUC, with the UM yardstick."""
+    rows = []
+    for tier in ["trusted", "review", "suspect"]:
+        a = auc_by_tier.get(tier, {})
+        y = yardstick.get(tier, {})
+        rows.append({
+            "tier": tier,
+            "dant_n_tracks": int(tier_counts.get(tier, 0)),
+            "dant_auc": a.get("auc", float("nan")),
+            "dant_n_matched": int(a.get("n_matched", 0)),
+            "dant_n_nonmatched": int(a.get("n_nonmatched", 0)),
+            "um_n_tracks": y.get("n", float("nan")),
+            "um_auc": y.get("auc", float("nan")),
+        })
+    return pd.DataFrame(rows)
+
+
+def plot_summary(table: pd.DataFrame, out_png) -> None:
+    """2-panel summary: tier counts (DANT vs UM) + held-out ISI AUC vs UM yardstick."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    tiers = list(table["tier"])
+    x = np.arange(len(tiers))
+    fig, (axc, axa) = plt.subplots(1, 2, figsize=(11, 4.2))
+
+    axc.bar(x - 0.2, table["dant_n_tracks"], width=0.4, label="DANT", color="#3474ae")
+    axc.bar(x + 0.2, table["um_n_tracks"], width=0.4, label="UnitMatch", color="#9e9e9e")
+    axc.set_xticks(x); axc.set_xticklabels(tiers)
+    axc.set_ylabel("tracks (span>=2)"); axc.set_title("Tier counts")
+    axc.legend(frameon=False)
+
+    axa.bar(x, table["dant_auc"], width=0.5, color="#6baed6", label="DANT")
+    for xi, v in zip(x, table["um_auc"]):
+        if np.isfinite(v):
+            axa.hlines(v, xi - 0.25, xi + 0.25, color="#ef6548", lw=2,
+                       label="UM yardstick" if xi == 0 else None)
+    axa.axhline(0.5, color="k", lw=0.8, ls=":", label="chance")
+    axa.set_xticks(x); axa.set_xticklabels(tiers)
+    axa.set_ylim(0.4, 1.0); axa.set_ylabel("held-out ISI AUC")
+    axa.set_title("Independent quality (held-out ISI)")
+    axa.legend(frameon=False, fontsize=8)
+
+    fig.suptitle("DANT BG_046 track curation vs UnitMatch yardstick")
+    fig.tight_layout()
+    out_png = Path(out_png)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+
+
+def step_summary(paths: DantCurationPaths) -> pd.DataFrame:
+    tracks = pd.read_csv(paths.out_dir / "curated_tracks.csv")
+    tier_counts = tracks["confidence_tier"].value_counts().to_dict()
+    val_path = paths.out_dir / "curation_validation.json"
+    auc_by_tier = json.loads(val_path.read_text()) if val_path.exists() else {}
+    table = build_summary_table(tier_counts, auc_by_tier)
+    table.to_csv(paths.out_dir / "dant_curation_summary.csv", index=False)
+    plot_summary(table, paths.out_dir / "dant_curation_summary.png")
+    print(f"[summary] tiers={tier_counts}", flush=True)
+    print(table.to_string(index=False), flush=True)
+    return table
