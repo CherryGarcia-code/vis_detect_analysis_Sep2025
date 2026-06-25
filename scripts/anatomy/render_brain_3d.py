@@ -33,10 +33,11 @@ def _to_br(ap, ml, dv):
     return np.column_stack([np.asarray(ap, float), np.asarray(dv, float), np.asarray(ml, float)])
 
 
-def render(tracks_json, sites_csv, out_png, *, color_col="shank", cmap="viridis",
-           region="CP", hemisphere="left", radius=28, title=None,
-           azimuth=150.0, elevation=12.0, zoom=2.0,
-           shader="plastic", wireframe=False, root_alpha=0.06):
+def _build_scene(tracks_json, sites_csv, *, color_col="shank", cmap="viridis",
+                 region="CP", hemisphere="left", radius=28, title=None,
+                 shader="plastic", wireframe=False, root_alpha=0.06):
+    """Build a brainrender Scene with the brain, CP region, per-shank tracks and sites.
+    Everything is a brainrender Points actor so tracks and sites share one coord frame."""
     settings.OFFSCREEN = True
     settings.SHOW_AXES = False
     # SHADER_STYLE: 'plastic'/'glossy'/'metallic'/'shiny' = smooth surface; 'cartoon' =
@@ -92,19 +93,63 @@ def render(tracks_json, sites_csv, out_png, *, color_col="shank", cmap="viridis"
         sc.add(Points(coords, radius=radius, colors=cols))   # brainrender Points (same frame as tracks)
     else:
         sc.add(Points(coords, radius=radius, colors="red"))
+    return sc
 
+
+def render(tracks_json, sites_csv, out_png, *, azimuth=150.0, elevation=12.0, zoom=1.15,
+           scale=2, **scene_kw):
+    sc = _build_scene(tracks_json, sites_csv, **scene_kw)
     os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
     # Avoid brainrender's named cameras ("frontal"/"three_quarters" hang offscreen):
-    # render with the default camera, then rotate directly. azimuth=90 -> coronal-facing
-    # (shows the 4 shanks spread in ML); elevation adds a three-quarter tilt.
-    sc.render(interactive=False, zoom=zoom)
+    # render with default camera, rotate directly, then reset_camera() to FIT the whole
+    # brain at that angle (prevents edge clipping); zoom is an optional post-fit factor
+    # (>1 closer, <1 more margin).
+    sc.render(interactive=False)
     cam = sc.plotter.camera
-    cam.Azimuth(azimuth)
-    cam.Elevation(elevation)
+    cam.Azimuth(azimuth); cam.Elevation(elevation)
+    sc.plotter.reset_camera()
+    if zoom and zoom != 1.0:
+        cam.Zoom(zoom)
     sc.plotter.render()
-    sc.screenshot(name=out_png, scale=2)
+    sc.screenshot(name=out_png, scale=scale)
     sc.close()
     return out_png
+
+
+def render_spin(tracks_json, sites_csv, out_gif, *, frames=48, fps=10, width=640,
+                start_azimuth=150.0, elevation=12.0, zoom=1.0, **scene_kw):
+    """Render a slow 360° azimuth rotation as an animated GIF. Speed = frames/fps seconds."""
+    import tempfile
+    import imageio.v2 as imageio
+    from PIL import Image
+    sc = _build_scene(tracks_json, sites_csv, **scene_kw)
+    sc.render(interactive=False)
+    cam = sc.plotter.camera
+    # Fit to the WIDEST projection (sagittal) once, so no frame clips during the spin;
+    # then keep the camera distance fixed and only rotate azimuth (consistent size).
+    cam.Elevation(elevation); cam.Azimuth(0.0)
+    sc.plotter.reset_camera()
+    if zoom and zoom != 1.0:
+        cam.Zoom(zoom)
+    cam.Azimuth(start_azimuth)
+    tmp = tempfile.mkdtemp()
+    step = 360.0 / frames
+    imgs = []
+    for i in range(frames):
+        sc.plotter.render()
+        p = os.path.join(tmp, f"f{i:03d}.png")
+        sc.screenshot(name=p, scale=1)
+        im = Image.open(p).convert("RGB")
+        if width and im.width > width:
+            im = im.resize((width, round(im.height * width / im.width)), Image.LANCZOS)
+        imgs.append(np.asarray(im))
+        os.remove(p)
+        cam.Azimuth(step)            # advance the rotation
+    sc.close()
+    os.rmdir(tmp)
+    os.makedirs(os.path.dirname(out_gif) or ".", exist_ok=True)
+    imageio.mimsave(out_gif, imgs, fps=fps, loop=0)
+    return out_gif
 
 
 def main():
@@ -121,16 +166,26 @@ def main():
     ap.add_argument("--azimuth", type=float, default=150.0,
                     help="camera azimuth after render; ~150 = 3/4 view showing the 4-shank ML spread")
     ap.add_argument("--elevation", type=float, default=12.0, help="camera tilt for a 3/4 view")
-    ap.add_argument("--zoom", type=float, default=2.0)
+    ap.add_argument("--zoom", type=float, default=1.15,
+                    help="post-fit zoom factor (1.0 = whole brain fits/no clip; >1 closer)")
     ap.add_argument("--shader", default="plastic",
                     choices=["plastic", "glossy", "metallic", "shiny", "cartoon", "default"],
                     help="brain-surface style; 'cartoon' = silhouette outlines")
     ap.add_argument("--wireframe", action="store_true", help="render the whole-brain outline as a mesh/wireframe")
+    ap.add_argument("--spin", action="store_true",
+                    help="render a slow 360° rotation as an animated GIF (use a .gif --out)")
+    ap.add_argument("--frames", type=int, default=60, help="number of frames for --spin (more = smoother)")
+    ap.add_argument("--fps", type=int, default=10, help="frames/sec for --spin GIF (lower = slower; duration = frames/fps s)")
     a = ap.parse_args()
-    out = render(a.tracks, a.sites, a.out, color_col=a.color_col, cmap=a.cmap,
-                 region=a.region, hemisphere=a.hemisphere, radius=a.radius,
-                 azimuth=a.azimuth, elevation=a.elevation, zoom=a.zoom,
-                 shader=a.shader, wireframe=a.wireframe)
+    scene_kw = dict(color_col=a.color_col, cmap=a.cmap, region=a.region,
+                    hemisphere=a.hemisphere, radius=a.radius, shader=a.shader,
+                    wireframe=a.wireframe)
+    if a.spin:
+        out = render_spin(a.tracks, a.sites, a.out, frames=a.frames, fps=a.fps,
+                          start_azimuth=a.azimuth, elevation=a.elevation, zoom=a.zoom, **scene_kw)
+    else:
+        out = render(a.tracks, a.sites, a.out, azimuth=a.azimuth, elevation=a.elevation,
+                     zoom=a.zoom, **scene_kw)
     print("wrote", out)
 
 
