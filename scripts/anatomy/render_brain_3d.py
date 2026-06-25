@@ -35,7 +35,7 @@ def _to_br(ap, ml, dv):
 
 def _build_scene(tracks_json, sites_csv, *, color_col="shank", cmap="viridis",
                  region="CP", hemisphere="left", radius=28, title=None,
-                 shader="plastic", wireframe=False, root_alpha=0.06):
+                 shader="cartoon", wireframe=False, root_alpha=0.06):
     """Build a brainrender Scene with the brain, CP region, per-shank tracks and sites.
     Everything is a brainrender Points actor so tracks and sites share one coord frame."""
     settings.OFFSCREEN = True
@@ -96,7 +96,7 @@ def _build_scene(tracks_json, sites_csv, *, color_col="shank", cmap="viridis",
     return sc
 
 
-def render(tracks_json, sites_csv, out_png, *, azimuth=150.0, elevation=12.0, zoom=1.15,
+def render(tracks_json, sites_csv, out_png, *, azimuth=150.0, elevation=12.0, zoom=1.3,
            scale=2, **scene_kw):
     sc = _build_scene(tracks_json, sites_csv, **scene_kw)
     os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
@@ -116,8 +116,8 @@ def render(tracks_json, sites_csv, out_png, *, azimuth=150.0, elevation=12.0, zo
     return out_png
 
 
-def render_spin(tracks_json, sites_csv, out_gif, *, frames=48, fps=10, width=640,
-                start_azimuth=150.0, elevation=12.0, zoom=1.0, **scene_kw):
+def render_spin(tracks_json, sites_csv, out_gif, *, frames=160, fps=8, width=640,
+                start_azimuth=150.0, elevation=12.0, zoom=1.3, **scene_kw):
     """Render a slow 360° azimuth rotation as an animated GIF. Speed = frames/fps seconds."""
     import tempfile
     import imageio.v2 as imageio
@@ -166,16 +166,16 @@ def main():
     ap.add_argument("--azimuth", type=float, default=150.0,
                     help="camera azimuth after render; ~150 = 3/4 view showing the 4-shank ML spread")
     ap.add_argument("--elevation", type=float, default=12.0, help="camera tilt for a 3/4 view")
-    ap.add_argument("--zoom", type=float, default=1.15,
+    ap.add_argument("--zoom", type=float, default=1.3,
                     help="post-fit zoom factor (1.0 = whole brain fits/no clip; >1 closer)")
-    ap.add_argument("--shader", default="plastic",
+    ap.add_argument("--shader", default="cartoon",
                     choices=["plastic", "glossy", "metallic", "shiny", "cartoon", "default"],
-                    help="brain-surface style; 'cartoon' = silhouette outlines")
+                    help="brain-surface style; 'cartoon' (default) = silhouette outlines")
     ap.add_argument("--wireframe", action="store_true", help="render the whole-brain outline as a mesh/wireframe")
     ap.add_argument("--spin", action="store_true",
                     help="render a slow 360° rotation as an animated GIF (use a .gif --out)")
-    ap.add_argument("--frames", type=int, default=60, help="number of frames for --spin (more = smoother)")
-    ap.add_argument("--fps", type=int, default=10, help="frames/sec for --spin GIF (lower = slower; duration = frames/fps s)")
+    ap.add_argument("--frames", type=int, default=160, help="number of frames for --spin (more = smoother)")
+    ap.add_argument("--fps", type=int, default=8, help="frames/sec for --spin GIF (lower = slower; duration = frames/fps s)")
     a = ap.parse_args()
     scene_kw = dict(color_col=a.color_col, cmap=a.cmap, region=a.region,
                     hemisphere=a.hemisphere, radius=a.radius, shader=a.shader,
