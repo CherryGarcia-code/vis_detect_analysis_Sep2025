@@ -35,10 +35,13 @@ def _to_br(ap, ml, dv):
 
 def render(tracks_json, sites_csv, out_png, *, color_col="shank", cmap="viridis",
            region="CP", hemisphere="left", radius=28, title=None,
-           azimuth=150.0, elevation=12.0, zoom=2.0):
+           azimuth=150.0, elevation=12.0, zoom=2.0,
+           shader="plastic", wireframe=False, root_alpha=0.06):
     settings.OFFSCREEN = True
     settings.SHOW_AXES = False
-    settings.SHADER_STYLE = "plastic"   # no cartoon silhouette -> cleaner brain
+    # SHADER_STYLE: 'plastic'/'glossy'/'metallic'/'shiny' = smooth surface; 'cartoon' =
+    # silhouette outlines; 'default' = vedo default. Set before Scene creation.
+    settings.SHADER_STYLE = shader
     try:
         sc = Scene(atlas_name="allen_mouse_25um", title=title)
     except Exception as e:  # noqa
@@ -47,7 +50,9 @@ def render(tracks_json, sites_csv, out_png, *, color_col="shank", cmap="viridis"
             "machine with a real GL display (a remote-desktop/SSH/headless session "
             "usually has none). Run this on the LOCAL machine.") from e
     try:
-        sc.root.alpha(0.06)             # faint whole-brain so the striatum/shanks stand out
+        sc.root.alpha(root_alpha)       # faint whole-brain so the striatum/shanks stand out
+        if wireframe:
+            sc.root.mesh.wireframe(True); sc.root.mesh.lw(1); sc.root.alpha(0.25)
     except Exception:
         pass
     sc.add_brain_region(region, alpha=0.22, color="lightblue", hemisphere=hemisphere)
@@ -117,10 +122,15 @@ def main():
                     help="camera azimuth after render; ~150 = 3/4 view showing the 4-shank ML spread")
     ap.add_argument("--elevation", type=float, default=12.0, help="camera tilt for a 3/4 view")
     ap.add_argument("--zoom", type=float, default=2.0)
+    ap.add_argument("--shader", default="plastic",
+                    choices=["plastic", "glossy", "metallic", "shiny", "cartoon", "default"],
+                    help="brain-surface style; 'cartoon' = silhouette outlines")
+    ap.add_argument("--wireframe", action="store_true", help="render the whole-brain outline as a mesh/wireframe")
     a = ap.parse_args()
     out = render(a.tracks, a.sites, a.out, color_col=a.color_col, cmap=a.cmap,
                  region=a.region, hemisphere=a.hemisphere, radius=a.radius,
-                 azimuth=a.azimuth, elevation=a.elevation, zoom=a.zoom)
+                 azimuth=a.azimuth, elevation=a.elevation, zoom=a.zoom,
+                 shader=a.shader, wireframe=a.wireframe)
     print("wrote", out)
 
 
