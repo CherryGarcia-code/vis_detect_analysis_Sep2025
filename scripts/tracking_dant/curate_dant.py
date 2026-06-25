@@ -271,3 +271,73 @@ def step_summary(paths: DantCurationPaths) -> pd.DataFrame:
     print(f"[summary] tiers={tier_counts}", flush=True)
     print(table.to_string(index=False), flush=True)
     return table
+
+
+STEPS = ["registry", "curate", "validate", "render", "summary"]
+
+
+def parse_steps(s: str) -> List[str]:
+    """Comma list -> validated steps in canonical order."""
+    want = {tok.strip() for tok in s.split(",") if tok.strip()}
+    bad = want - set(STEPS)
+    if bad:
+        raise ValueError(f"unknown step(s): {sorted(bad)}; valid: {STEPS}")
+    return [s for s in STEPS if s in want]
+
+
+def step_registry(paths: DantCurationPaths) -> Tuple[int, int]:
+    paths.states_empty.mkdir(parents=True, exist_ok=True)
+    n_rows, n_uids = write_curation_registry(paths.registry_in, paths.registry_curation)
+    print(f"[registry] kept {n_rows} rows / {n_uids} dant_uids (dant_uid>0) "
+          f"-> {paths.registry_curation}", flush=True)
+    return n_rows, n_uids
+
+
+def step_curate(paths: DantCurationPaths, rebuild_cache: bool = True) -> None:
+    paths.states_empty.mkdir(parents=True, exist_ok=True)
+    cmd = build_curate_cmd(sys.executable, paths, rebuild_cache)
+    print("[curate]", " ".join(cmd), flush=True)
+    subprocess.run(cmd, check=True)
+
+
+def step_render(paths: DantCurationPaths, tier: str,
+                max_uids: Optional[int] = None,
+                uids: Optional[List[int]] = None) -> None:
+    cmd = build_render_cmd(sys.executable, paths, tier, max_uids=max_uids, uids=uids)
+    print(f"[render:{tier}]", " ".join(cmd), flush=True)
+    subprocess.run(cmd, check=True)
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--steps", default=",".join(STEPS),
+                    help="comma list of steps to run; default all")
+    ap.add_argument("--primary", type=Path, default=PRIMARY_DEFAULT,
+                    help="PRIMARY repo root (raw waveforms + pkls live there)")
+    ap.add_argument("--review-max-uids", type=int, default=25,
+                    help="cap on review-tier sheets (spot-check sample)")
+    ap.add_argument("--trusted-max-uids", type=int, default=None,
+                    help="cap on trusted-tier sheets (None = render all)")
+    ap.add_argument("--no-rebuild-cache", action="store_true",
+                    help="reuse an existing feature cache instead of rebuilding")
+    args = ap.parse_args(argv)
+    steps = parse_steps(args.steps)
+    paths = DantCurationPaths.default(WORKTREE_ROOT, args.primary)
+    print(f"DANT curation runner — steps={steps}\n  out_dir={paths.out_dir}", flush=True)
+
+    if "registry" in steps:
+        step_registry(paths)
+    if "curate" in steps:
+        step_curate(paths, rebuild_cache=not args.no_rebuild_cache)
+    if "validate" in steps:
+        step_validate(paths)
+    if "render" in steps:
+        step_render(paths, "trusted", max_uids=args.trusted_max_uids)
+        step_render(paths, "review", max_uids=args.review_max_uids)
+    if "summary" in steps:
+        step_summary(paths)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

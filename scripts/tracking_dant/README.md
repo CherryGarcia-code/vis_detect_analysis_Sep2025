@@ -124,3 +124,31 @@ Figures live in `FIGURES/tracking_dant/BG_046/`:
 - PETH as a real motion/identity feature (would require a movement-control design).
 - Multi-subject (BG_031/038/039/049) DANT runs.
 - Mapping DANT clusters onto the existing curation tiers (trusted/review/suspect).
+
+## Curation + QC-sheet rendering (`curate_dant.py`)
+
+Runs DANT's tracks through the project's existing curation + QC-sheet pipeline,
+biophysical-only, into a DANT-specific output dir (the UnitMatch curation outputs
+are never touched). Run from the worktree root with the analysis interpreter:
+
+    <PRIMARY>/.venv/Scripts/python.exe scripts/tracking_dant/curate_dant.py
+
+Steps (default: all, in order): `registry,curate,validate,render,summary`.
+- `registry`  filter `dant_registry.csv` to `dant_uid > 0` -> `dant_registry_curation.csv`
+- `curate`    drive `curate_tracks.py` (`--liberal-col dant_uid`, empty states dir
+              -> corroborator off, `--drift-source none`) -> `curated_tracks.csv`
+- `validate`  held-out ISI AUC by tier, computed IN-PROCESS (the `validate_curation.py`
+              CLI hardcodes the UM dir) -> `curation_validation.json`
+- `render`    `render_curation_sheets.py --no-pair-scores`: all trusted sheets +
+              a capped review sample (`--review-max-uids`, default 25)
+- `summary`   tier counts + AUC vs the UM yardstick -> `dant_curation_summary.{csv,png}`
+
+Outputs land under `FIGURES/tracking_dant/BG_046/curation/` (+ `/sheets`).
+
+Pilot a few sheets before the full render:
+
+    ... curate_dant.py --steps render --trusted-max-uids 5
+
+Re-render only (reuse the curate cache):
+
+    ... curate_dant.py --steps render,summary

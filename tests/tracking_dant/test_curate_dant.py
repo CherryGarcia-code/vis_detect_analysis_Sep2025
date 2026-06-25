@@ -136,3 +136,21 @@ def test_build_summary_table_rows_and_yardstick():
     suspect = df[df.tier == "suspect"].iloc[0]
     assert suspect["dant_n_tracks"] == 80
     assert suspect["dant_n_matched"] == 0
+
+
+import pytest
+
+
+def test_parse_steps_default_order():
+    assert curate_dant.parse_steps("registry,curate,validate,render,summary") == [
+        "registry", "curate", "validate", "render", "summary"]
+
+
+def test_parse_steps_subset_canonical_order():
+    # given out of order, returns canonical order; whitespace tolerated
+    assert curate_dant.parse_steps("summary, registry") == ["registry", "summary"]
+
+
+def test_parse_steps_rejects_unknown():
+    with pytest.raises(ValueError):
+        curate_dant.parse_steps("registry,bogus")
