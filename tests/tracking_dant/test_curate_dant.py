@@ -3,6 +3,11 @@ import pandas as pd
 import curate_dant
 
 
+def _pair(cmd, flag):
+    """Return the single value following `flag` in an argv list."""
+    return cmd[cmd.index(flag) + 1]
+
+
 def test_write_curation_registry_keeps_positive_uids(tmp_path):
     src = tmp_path / "dant_registry.csv"
     pd.DataFrame({
@@ -32,3 +37,66 @@ def test_write_curation_registry_preserves_session_leading_zero(tmp_path):
 
     got = pd.read_csv(out, dtype={"session": str})
     assert got["session"].iloc[0] == "01072025"   # not 1072025
+
+
+def _paths(tmp_path):
+    return curate_dant.DantCurationPaths.default(
+        worktree_root=tmp_path / "wt", primary_root=tmp_path / "primary")
+
+
+def test_default_paths_target_dant_dir_not_um(tmp_path):
+    p = _paths(tmp_path)
+    # out-dir under tracking_dant (NOT tracking_qc), so UM curation is untouched
+    assert "tracking_dant" in str(p.out_dir).replace("\\", "/")
+    assert "tracking_qc" not in str(p.out_dir).replace("\\", "/")
+    assert p.out_dir.name == "curation"
+    assert p.sheets_dir == p.out_dir / "sheets"
+    # raw waveforms + pkls live under PRIMARY
+    assert str(p.raw_wf_root).replace("\\", "/").endswith(
+        "primary/data/unit_match/input/BG_046")
+    assert str(p.pkl_dir).replace("\\", "/").endswith("primary/data/pkls/BG_046")
+    # the existing CLIs we drive
+    assert p.curate_script.name == "curate_tracks.py"
+    assert p.render_script.name == "render_curation_sheets.py"
+
+
+def test_build_curate_cmd_has_critical_flags(tmp_path):
+    p = _paths(tmp_path)
+    cmd = curate_dant.build_curate_cmd("py.exe", p, rebuild_cache=True)
+    assert cmd[:2] == ["py.exe", str(p.curate_script)]
+    # flag/value pairs must be present and correct
+    assert _pair(cmd, "--liberal-col") == "dant_uid"
+    assert _pair(cmd, "--drift-source") == "none"
+    assert _pair(cmd, "--min-span") == "2"
+    assert _pair(cmd, "--registry") == str(p.registry_curation)
+    assert _pair(cmd, "--states-dir") == str(p.states_empty)
+    assert _pair(cmd, "--out-dir") == str(p.out_dir)
+    assert _pair(cmd, "--cache-path") == str(p.cache_path)
+    assert _pair(cmd, "--raw-wf-root") == str(p.raw_wf_root)
+    assert _pair(cmd, "--pkl-dir") == str(p.pkl_dir)
+    assert "--rebuild-cache" in cmd
+
+
+def test_build_curate_cmd_omits_rebuild_when_false(tmp_path):
+    cmd = curate_dant.build_curate_cmd("py.exe", _paths(tmp_path), rebuild_cache=False)
+    assert "--rebuild-cache" not in cmd
+
+
+def test_build_render_cmd_has_critical_flags(tmp_path):
+    p = _paths(tmp_path)
+    cmd = curate_dant.build_render_cmd("py.exe", p, tier="trusted", max_uids=25)
+    assert _pair(cmd, "--liberal-col") == "dant_uid"
+    assert _pair(cmd, "--tier") == "trusted"
+    assert _pair(cmd, "--registry") == str(p.registry_curation)
+    assert _pair(cmd, "--tracks") == str(p.out_dir / "curated_tracks.csv")
+    assert _pair(cmd, "--out-dir") == str(p.sheets_dir)
+    assert _pair(cmd, "--max-uids") == "25"
+    assert "--no-pair-scores" in cmd
+
+
+def test_build_render_cmd_uids_and_no_max(tmp_path):
+    cmd = curate_dant.build_render_cmd(
+        "py.exe", _paths(tmp_path), tier="review", uids=[1, 2, 3])
+    assert "--max-uids" not in cmd
+    i = cmd.index("--uids")
+    assert cmd[i + 1:i + 4] == ["1", "2", "3"]
