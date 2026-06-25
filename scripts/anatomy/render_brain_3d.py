@@ -59,7 +59,10 @@ def render(tracks_json, sites_csv, out_png, *, color_col="shank", cmap="viridis"
             idx = int(sh.get("probe_shank_index", 0))
             poly = np.asarray(sh["ccf_polyline"], float)  # (AP, ML, DV)
             br = _to_br(poly[:, 0], poly[:, 1], poly[:, 2])
-            sc.add(vedo.Tube(br, r=18, c=VIRIDIS4[idx % len(VIRIDIS4)], alpha=0.5))
+            # track coloured per-shank (matches its sites) so the recording bank reads as
+            # markers sitting ON its own shank line; thicker + higher alpha so the deep
+            # (in-CP) stretch stays visible through the striatum mesh.
+            sc.add(vedo.Tube(br, r=24, c=VIRIDIS4[idx % len(VIRIDIS4)], alpha=0.65))
 
     df = pd.read_csv(sites_csv)
     coords = _to_br(df["ccf_ap"], df["ccf_ml"], df["ccf_dv"])
@@ -107,7 +110,8 @@ def main():
     ap.add_argument("--cmap", default="viridis")
     ap.add_argument("--region", default="CP")
     ap.add_argument("--hemisphere", default="left")
-    ap.add_argument("--radius", type=float, default=40)
+    ap.add_argument("--radius", type=float, default=32,
+                    help="recording-site marker radius (µm); sits on the per-shank track line")
     ap.add_argument("--azimuth", type=float, default=90.0,
                     help="camera azimuth after render; 90 = coronal-facing (shows ML shank spread)")
     ap.add_argument("--elevation", type=float, default=15.0, help="camera tilt for a 3/4 view")
