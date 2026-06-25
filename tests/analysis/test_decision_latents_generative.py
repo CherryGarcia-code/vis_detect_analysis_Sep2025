@@ -3173,3 +3173,240 @@ def test_recovery_gate_ccc_checked_when_present_skipped_when_absent():
                              regime="expert")
     assert out2["per_dial_trust"]["sharpness"] == "generative"
     assert out2["passed"]["sharpness"]["ccc"] is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Task 4.1: append_generative_latents — append generative latents + provenance
+#   to the Phase-1 per-trial deliverable. Mock-driven, FAST (no fitting).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The 25 Phase-1 columns (representative subset incl. the load-bearing keys this
+# function reads: session_name, trial_idx, state_label, decision_time). A few more
+# are carried so the "none of the original columns overwritten" assertion is real.
+_PHASE1_COLS = [
+    "session_name", "trial_idx", "outcome", "change_size", "change_time_planned",
+    "change_reached", "decision_time", "lick", "censored", "state_label",
+    "state_confidence", "n_bins", "trial_in_session",
+    "sharpness_psy_slope", "criterion_c", "fa_rate_cell", "hazard_peak_cell",
+    "rt_cv_by_cs", "usable_psychometric", "usable_sdt", "usable_rtcv",
+    "usable_timing", "session_idx", "dprime", "comprehension_third",
+]
+
+
+def _mk_fitresult(dials_by_mood):
+    """A minimal FitResult carrying only the .dials that append reads."""
+    ps = dlg.ParamSpec()
+    theta = np.zeros(ps.n_params())
+    # fill theta so dials are self-consistent (not strictly required by append,
+    # which reads .dials, but keeps the mock honest)
+    for mood, d in dials_by_mood.items():
+        theta[ps._offset("v") + ps.moods.index(mood)] = d["sharpness"]
+        theta[ps._offset("z") + ps.moods.index(mood)] = d["itchiness"]
+        theta[ps._offset("u") + ps.moods.index(mood)] = d["timing"]
+    return dlg.FitResult(theta=theta, dials=dials_by_mood, ll=0.0,
+                         n_params=ps.n_params(), cov=None,
+                         hessian=np.eye(ps.n_params()), hessian_cond=1.0)
+
+
+def _write_phase1_csv(tmp_path, rows):
+    """Write a mock Phase-1 per-trial CSV with all _PHASE1_COLS; return its path."""
+    df = pd.DataFrame(rows)
+    for c in _PHASE1_COLS:
+        if c not in df.columns:
+            df[c] = np.nan
+    df = df[_PHASE1_COLS]
+    p = tmp_path / "decision_latents_by_state.csv"
+    df.to_csv(p, index=False)
+    return str(p)
+
+
+def _build_append_inputs(tmp_path):
+    """Construct a small 2-session / 2-mood mock and all append inputs.
+
+    Session 'S_expert' has a fitted anchor (known dials); 'S_naive' has a fitted
+    anchor too but its REGIME ('naive') fails sharpness in recovery. A third
+    session 'S_omitted' has NO anchor fit (QC-omitted) -> NaN latents, not dropped.
+    """
+    dt, sigma, leak_tau = 0.05, 0.8, 0.27
+    rect = "signed"
+
+    # ── per-trial rows (3 sessions) ──
+    rows = [
+        # S_expert, Impulsive trial (trial_idx 0)
+        dict(session_name="S_expert", trial_idx=0, state_label="Impulsive",
+             decision_time=0.30, outcome="hit", change_size=2.0,
+             change_time_planned=0.15, lick=1, censored=False, n_bins=6),
+        # S_expert, StimSens trial (trial_idx 1)
+        dict(session_name="S_expert", trial_idx=1, state_label="StimSens",
+             decision_time=0.20, outcome="hit", change_size=2.0,
+             change_time_planned=0.10, lick=1, censored=False, n_bins=4),
+        # S_naive, Impulsive trial (trial_idx 0)
+        dict(session_name="S_naive", trial_idx=0, state_label="Impulsive",
+             decision_time=0.25, outcome="hit", change_size=2.0,
+             change_time_planned=0.10, lick=1, censored=False, n_bins=5),
+        # S_omitted, Impulsive trial (trial_idx 0) — no anchor fit
+        dict(session_name="S_omitted", trial_idx=0, state_label="Impulsive",
+             decision_time=0.40, outcome="miss", change_size=2.0,
+             change_time_planned=0.20, lick=0, censored=True, n_bins=8),
+    ]
+    csv_path = _write_phase1_csv(tmp_path, rows)
+
+    # ── per-session evidence (build_trial_evidence_corrected form) ──
+    rng = np.random.default_rng(0)
+    def _ev(n):
+        return np.round(rng.normal(0.0, 1.0, size=n), 4)
+    ev_S_expert = pd.DataFrame([
+        {"trial_idx": 0, "evidence": _ev(6)},
+        {"trial_idx": 1, "evidence": _ev(4)},
+    ])
+    ev_S_naive = pd.DataFrame([{"trial_idx": 0, "evidence": _ev(5)}])
+    ev_S_omitted = pd.DataFrame([{"trial_idx": 0, "evidence": _ev(8)}])
+    trial_evidence_by_session = {
+        "S_expert": ev_S_expert, "S_naive": ev_S_naive, "S_omitted": ev_S_omitted}
+
+    # ── fitted anchors (FitResult per fitted session); S_omitted absent ──
+    anchor_fits = {
+        "S_expert": _mk_fitresult({
+            "Impulsive": {"sharpness": 1.3, "itchiness": -3.5, "timing": 0.45},
+            "StimSens": {"sharpness": 0.9, "itchiness": -4.1, "timing": 0.30},
+        }),
+        "S_naive": _mk_fitresult({
+            "Impulsive": {"sharpness": 0.7, "itchiness": -2.0, "timing": 0.20},
+            "StimSens": {"sharpness": 0.6, "itchiness": -2.5, "timing": 0.15},
+        }),
+    }
+
+    # ── recovery by regime: expert -> all generative; naive -> sharpness fails ──
+    recovery_by_regime = {
+        "expert": {"per_dial_trust": {"sharpness": "generative",
+                                      "caution": "generative",
+                                      "timing": "generative"}},
+        "naive": {"per_dial_trust": {"sharpness": "descriptive",
+                                     "caution": "generative",
+                                     "timing": "generative"}},
+    }
+
+    mu_by_session = {"S_expert": 0.15, "S_naive": 0.12, "S_omitted": 0.20}
+    regime_by_session = {"S_expert": "expert", "S_naive": "naive",
+                         "S_omitted": "naive"}
+
+    return dict(
+        per_trial_csv=csv_path, anchor_fits=anchor_fits,
+        recovery_by_regime=recovery_by_regime, param_spec=dlg.ParamSpec(),
+        mu_by_session=mu_by_session,
+        trial_evidence_by_session=trial_evidence_by_session,
+        regime_by_session=regime_by_session, sigma=sigma, dt=dt,
+        leak_tau=leak_tau, rectification=rect,
+        ev_S_expert=ev_S_expert,
+    )
+
+
+def test_append_generative_latents_appends_without_overwriting_phase1(tmp_path):
+    """Output has ALL 25 Phase-1 columns PLUS the appended set; none overwritten."""
+    kw = _build_append_inputs(tmp_path)
+    ev_ref = kw.pop("ev_S_expert")
+    out = dlg.append_generative_latents(**kw)
+
+    # (a) every original column survives, unchanged in value
+    orig = pd.read_csv(kw["per_trial_csv"])
+    for c in _PHASE1_COLS:
+        assert c in out.columns, f"missing original column {c}"
+    # the appended columns are NOT in the original
+    appended = [
+        "sharpness_drift", "itchiness_caution", "timing_urgency_at_decision",
+        "evidence_integral_at_decision", "expected_change_time",
+        "lick_minus_expected", "anchor_id", "rectification_kind", "leak_tau",
+        "recovery_regime", "trust_sharpness", "trust_caution", "trust_timing",
+    ]
+    for c in appended:
+        assert c in out.columns, f"missing appended column {c}"
+        assert c not in _PHASE1_COLS, f"appended {c} collides with a Phase-1 col"
+    # one row per input trial (nothing dropped)
+    assert len(out) == len(orig) == 4
+
+
+def test_append_generative_latents_realized_timing_and_evidence(tmp_path):
+    """(b)+(c): timing_urgency_at_decision == u*phi[event_bin] (the REALIZED value,
+    not the coefficient u) and evidence_integral_at_decision == A[event_bin],
+    hand-computed for the S_expert / Impulsive trial."""
+    kw = _build_append_inputs(tmp_path)
+    ev_ref = kw.pop("ev_S_expert")
+    out = dlg.append_generative_latents(**kw)
+
+    # the S_expert Impulsive trial (session_name='S_expert', trial_idx=0)
+    row = out[(out["session_name"] == "S_expert") & (out["trial_idx"] == 0)].iloc[0]
+
+    # hand-compute the expected realized quantities
+    evidence = ev_ref[ev_ref["trial_idx"] == 0]["evidence"].iloc[0]
+    n_bins = len(evidence)
+    event_bin = n_bins - 1
+    A = dlg.leaky_accumulate(evidence, dt=kw["dt"], leak_tau=kw["leak_tau"],
+                             rectification=kw["rectification"])
+    phi = dlg.expectation_bump(np.arange(n_bins) * kw["dt"],
+                               kw["mu_by_session"]["S_expert"], kw["sigma"])
+    u = kw["anchor_fits"]["S_expert"].dials["Impulsive"]["timing"]  # 0.45
+    v = kw["anchor_fits"]["S_expert"].dials["Impulsive"]["sharpness"]  # 1.3
+    z = kw["anchor_fits"]["S_expert"].dials["Impulsive"]["itchiness"]  # -3.5
+
+    expected_urgency = u * phi[event_bin]
+    expected_integral = A[event_bin]
+
+    # the realized urgency is NOT the coefficient u (phi[event_bin] != 1 here)
+    assert abs(phi[event_bin] - 1.0) > 1e-6, "phi[event_bin] must differ from 1"
+    assert row["timing_urgency_at_decision"] == pytest.approx(expected_urgency)
+    assert row["timing_urgency_at_decision"] != pytest.approx(u)  # NOT the coef
+    assert row["evidence_integral_at_decision"] == pytest.approx(expected_integral)
+
+    # the regression-varying coefficients are passed straight through
+    assert row["sharpness_drift"] == pytest.approx(v)
+    assert row["itchiness_caution"] == pytest.approx(z)
+
+    # expected_change_time + lick_minus_expected
+    assert row["expected_change_time"] == pytest.approx(0.15)
+    assert row["lick_minus_expected"] == pytest.approx(0.30 - 0.15)
+    assert row["anchor_id"] == "S_expert"
+    assert row["recovery_regime"] == "expert"
+    assert row["rectification_kind"] == "signed"
+    assert row["leak_tau"] == pytest.approx(0.27)
+
+
+def test_append_generative_latents_per_dial_trust_from_regime(tmp_path):
+    """(d): a dial failing recovery in a trial's regime -> that trial's
+    trust_<dial> == 'descriptive'. S_naive's regime fails sharpness only."""
+    kw = _build_append_inputs(tmp_path)
+    kw.pop("ev_S_expert")
+    out = dlg.append_generative_latents(**kw)
+
+    exp = out[out["session_name"] == "S_expert"].iloc[0]
+    assert exp["trust_sharpness"] == "generative"
+    assert exp["trust_caution"] == "generative"
+    assert exp["trust_timing"] == "generative"
+
+    nai = out[out["session_name"] == "S_naive"].iloc[0]
+    assert nai["trust_sharpness"] == "descriptive"   # failed in naive regime
+    assert nai["trust_caution"] == "generative"
+    assert nai["trust_timing"] == "generative"
+
+
+def test_append_generative_latents_qc_omitted_session_nan_not_dropped(tmp_path):
+    """(e): a QC-omitted session (no anchor fit) keeps its trials with NaN latents,
+    trust_*='descriptive', and a flag — never dropped."""
+    kw = _build_append_inputs(tmp_path)
+    kw.pop("ev_S_expert")
+    out = dlg.append_generative_latents(**kw)
+
+    om = out[out["session_name"] == "S_omitted"]
+    assert len(om) == 1, "QC-omitted trial must NOT be dropped"
+    r = om.iloc[0]
+    # latents are NaN
+    for c in ("sharpness_drift", "itchiness_caution",
+              "timing_urgency_at_decision", "evidence_integral_at_decision"):
+        assert np.isnan(r[c]), f"{c} should be NaN for a QC-omitted session"
+    # trust falls back to descriptive + a flag marks it
+    assert r["trust_sharpness"] == "descriptive"
+    assert r["trust_caution"] == "descriptive"
+    assert r["trust_timing"] == "descriptive"
+    assert bool(r["generative_omitted"]) is True
+    assert pd.isna(r["anchor_id"]) or r["anchor_id"] == ""
+    # the fitted sessions are NOT flagged omitted
+    assert bool(out[out["session_name"] == "S_expert"].iloc[0]["generative_omitted"]) is False

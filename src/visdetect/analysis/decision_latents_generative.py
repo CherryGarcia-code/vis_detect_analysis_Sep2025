@@ -2158,3 +2158,260 @@ def recovery_gate(point_res, confusion_res, truediff_res, cond_res, regime,
 
     return {"per_dial_trust": per_dial_trust, "regime": str(regime),
             "passed": passed}
+
+
+# ── Engine-A deliverable (Task 4.1) — append generative latents to Phase-1 ────
+# Maps the gate's per-dial trust keys -> the deliverable's trust_* columns. The
+# recovery gate names the caution dial 'caution' (= itchiness/z); the deliverable
+# keeps that name in `trust_caution` while the per-trial latent itself is named
+# `itchiness_caution` (Phase-1 vocabulary is "itchiness", Phase-2 dial is
+# "caution"; both refer to the z/start-point knob).
+_TRUST_GATE_KEY = {"trust_sharpness": "sharpness",
+                   "trust_caution": "caution",
+                   "trust_timing": "timing"}
+
+# The exact set of columns appended by `append_generative_latents` (documented so
+# downstream consumers + the test agree on the contract). 14 columns total.
+APPENDED_LATENT_COLUMNS = (
+    "sharpness_drift",                  # the trial mood's v   (FitResult.dials[mood]['sharpness'])
+    "itchiness_caution",               # the trial mood's z   (...['itchiness'])
+    "timing_urgency_at_decision",      # REALIZED: u * phi[event_bin] (NOT the coef u)
+    "evidence_integral_at_decision",   # REALIZED: A[event_bin]
+    "expected_change_time",            # mu_by_session[session]
+    "lick_minus_expected",             # decision_time - mu_by_session[session]
+    "anchor_id",                       # the session's anchor id (== session_name if fitted)
+    "rectification_kind",              # provenance: rectification used
+    "leak_tau",                        # provenance: leak time-constant
+    "recovery_regime",                 # the trial session's regime
+    "trust_sharpness",                 # per-dial trust: 'generative' | 'descriptive'
+    "trust_caution",
+    "trust_timing",
+    "generative_omitted",              # bool: True for QC-omitted (no-anchor) sessions
+)
+
+
+def _trial_evidence_lookup(ev_obj):
+    """Return a ``{trial_idx: evidence_array}`` map from a session's evidence object.
+
+    Accepts the canonical ``build_trial_evidence_corrected`` DataFrame (columns
+    ``trial_idx`` + ``evidence``) OR an already-built mapping
+    ``{trial_idx: np.ndarray}``. Anything else raises a clear error.
+    """
+    if ev_obj is None:
+        return {}
+    if isinstance(ev_obj, pd.DataFrame):
+        if "trial_idx" not in ev_obj.columns or "evidence" not in ev_obj.columns:
+            raise KeyError(
+                "trial-evidence DataFrame must have 'trial_idx' and 'evidence' "
+                f"columns; got {list(ev_obj.columns)}")
+        return {int(r.trial_idx): np.asarray(r.evidence, float)
+                for r in ev_obj.itertuples(index=False)}
+    if isinstance(ev_obj, dict):
+        return {int(k): np.asarray(v, float) for k, v in ev_obj.items()}
+    raise TypeError(
+        "trial_evidence_by_session values must be a DataFrame "
+        "(build_trial_evidence_corrected form) or a {trial_idx: array} dict; "
+        f"got {type(ev_obj)!r}")
+
+
+def append_generative_latents(per_trial_csv, anchor_fits, recovery_by_regime,
+                              param_spec, mu_by_session, trial_evidence_by_session,
+                              regime_by_session, sigma, dt=0.05, leak_tau=0.27,
+                              rectification="signed"):
+    """Append the Engine-A generative decision-latents to the Phase-1 deliverable.
+
+    Plain English: Phase 1 shipped a 25-column per-trial table that *measured* three
+    behavioural knobs per cell. This function reads that table and bolts on, per
+    trial, the GENERATIVE model's view of the same trial — the fitted dials for the
+    trial's mood, the genuinely **trial-specific realized** urgency and accumulated
+    evidence *at the decision bin*, the timing-expectation bookkeeping, and a full
+    provenance trail (which anchor, which rectification/leak, which regime, and —
+    per dial — whether the recovery battery earned that dial a 'generative'
+    interpretation or it falls back to the Phase-1 'descriptive' proxy). The 25
+    Phase-1 columns are **never** overwritten; this only APPENDS.
+
+    Appended columns (see :data:`APPENDED_LATENT_COLUMNS`, 14 total):
+
+    * ``sharpness_drift`` — the trial mood's ``v`` from its session's
+      ``FitResult.dials[mood]['sharpness']`` (a regression-varying coefficient).
+    * ``itchiness_caution`` — the trial mood's ``z`` (``...['itchiness']``).
+    * ``timing_urgency_at_decision`` — the **realized** urgency at the decision bin
+      ``= u * phi[event_bin]`` where ``u`` is the mood's timing coefficient,
+      ``phi = expectation_bump(arange(n_bins)*dt, mu_session, sigma)`` and
+      ``event_bin = n_bins - 1``. This is a genuinely TRIAL-SPECIFIC value (it
+      depends on the trial's length and ``mu``), **NOT** the coefficient ``u``.
+    * ``evidence_integral_at_decision`` — ``A[event_bin]`` for the trial, where
+      ``A = leaky_accumulate(trial_evidence, dt, leak_tau, rectification)``.
+    * ``expected_change_time`` — ``mu_by_session[session]``.
+    * ``lick_minus_expected`` — ``decision_time - mu_by_session[session]``.
+    * ``anchor_id`` — the session's anchor id (the session name when it was fitted;
+      empty/NaN for a QC-omitted session).
+    * ``rectification_kind``, ``leak_tau`` — accumulator provenance.
+    * ``recovery_regime`` — the trial's session regime (``regime_by_session``).
+    * ``trust_sharpness`` / ``trust_caution`` / ``trust_timing`` — per-dial
+      ``'generative' | 'descriptive'`` from
+      ``recovery_by_regime[regime]['per_dial_trust']`` (the gate names the z dial
+      ``'caution'``). A dial that failed recovery in the trial's regime is
+      ``'descriptive'`` here.
+    * ``generative_omitted`` — ``True`` for trials whose session has no fitted
+      anchor (QC-omitted): those rows get NaN latents and ``trust_*='descriptive'``
+      but are NEVER dropped.
+
+    Parameters
+    ----------
+    per_trial_csv : str | path-like
+        Path to the Phase-1 ``decision_latents_by_state.csv`` (the 25-column
+        per-trial deliverable). Read-only — never written.
+    anchor_fits : Mapping[str, FitResult]
+        ``{session_name: FitResult}`` for every fitted anchor. A session ABSENT
+        here is treated as QC-omitted (NaN latents, ``generative_omitted=True``).
+    recovery_by_regime : Mapping[str, dict]
+        ``{regime: recovery_gate_output}`` — only ``['per_dial_trust']`` is read
+        (keys ``'sharpness'``/``'caution'``/``'timing'``).
+    param_spec : ParamSpec
+        Accepted for interface symmetry / future-proofing (the dials are read from
+        ``FitResult.dials``, which already encodes the layout). Not indexed here.
+    mu_by_session : Mapping[str, float]
+        Per-session temporal-expectation anchor μ (Task 0.4).
+    trial_evidence_by_session : Mapping[str, DataFrame|dict]
+        Per-session evidence: the ``build_trial_evidence_corrected`` DataFrame
+        (``trial_idx`` + ``evidence`` columns) or a ``{trial_idx: array}`` map.
+    regime_by_session : Mapping[str, str]
+        ``{session_name: regime}`` (e.g. ``'expert'`` / ``'naive'``) — selects the
+        ``recovery_by_regime`` trust row for the session's trials.
+    sigma : float
+        FIXED urgency-bump width (seconds; a ``ParamSpec`` field, not fitted).
+    dt, leak_tau, rectification :
+        Generative time-grid + leaky-accumulator settings (contract §A.3); recorded
+        as provenance and used to compute ``A`` (so they MATCH the fit).
+
+    Returns
+    -------
+    pandas.DataFrame
+        The Phase-1 table with :data:`APPENDED_LATENT_COLUMNS` appended (one row
+        per input trial; nothing dropped).
+    """
+    df = pd.read_csv(per_trial_csv)
+    n = len(df)
+
+    # Pre-resolve the per-dial trust row for each regime (gate keys ->
+    # trust_* columns). QC-omitted trials override these to 'descriptive'.
+    def _trust_row(regime):
+        rec = recovery_by_regime.get(regime, {}) or {}
+        pdt = rec.get("per_dial_trust", {}) or {}
+        return {col: str(pdt.get(gate_key, "descriptive"))
+                for col, gate_key in _TRUST_GATE_KEY.items()}
+
+    # Per-session evidence lookups built lazily (so absent sessions cost nothing).
+    _ev_cache: dict = {}
+
+    def _ev_for(session):
+        if session not in _ev_cache:
+            _ev_cache[session] = _trial_evidence_lookup(
+                trial_evidence_by_session.get(session))
+        return _ev_cache[session]
+
+    # Output accumulators (preallocated so omitted/failed rows stay aligned).
+    sharpness_drift = np.full(n, np.nan)
+    itchiness_caution = np.full(n, np.nan)
+    timing_urgency = np.full(n, np.nan)
+    evidence_integral = np.full(n, np.nan)
+    expected_change_time = np.full(n, np.nan)
+    lick_minus_expected = np.full(n, np.nan)
+    anchor_id = np.empty(n, dtype=object)
+    recovery_regime = np.empty(n, dtype=object)
+    trust_sharpness = np.empty(n, dtype=object)
+    trust_caution = np.empty(n, dtype=object)
+    trust_timing = np.empty(n, dtype=object)
+    generative_omitted = np.zeros(n, dtype=bool)
+
+    sess_arr = df["session_name"].astype(str).to_numpy()
+    tidx_arr = df["trial_idx"].to_numpy()
+    mood_arr = df["state_label"].astype(object).to_numpy()
+    dtime_arr = pd.to_numeric(df["decision_time"], errors="coerce").to_numpy(float)
+
+    for i in range(n):
+        session = sess_arr[i]
+        regime = regime_by_session.get(session)
+        recovery_regime[i] = regime if regime is not None else None
+
+        fit = anchor_fits.get(session)
+        mu = mu_by_session.get(session, np.nan)
+        expected_change_time[i] = float(mu) if mu is not None else np.nan
+
+        # ── QC-omitted session (no fitted anchor): NaN latents, flag, descriptive ─
+        if fit is None:
+            generative_omitted[i] = True
+            anchor_id[i] = None
+            trust_sharpness[i] = "descriptive"
+            trust_caution[i] = "descriptive"
+            trust_timing[i] = "descriptive"
+            # lick_minus_expected is a behavioural quantity; still well-defined if
+            # we have decision_time + mu, but the latent is "omitted" so keep NaN
+            # unless mu is known (it is informative bookkeeping, not a fitted latent).
+            if np.isfinite(dtime_arr[i]) and mu is not None and np.isfinite(mu):
+                lick_minus_expected[i] = float(dtime_arr[i]) - float(mu)
+            continue
+
+        anchor_id[i] = session
+
+        # per-dial trust for the trial's regime (gate -> trust_* columns)
+        trust = _trust_row(regime)
+        trust_sharpness[i] = trust["trust_sharpness"]
+        trust_caution[i] = trust["trust_caution"]
+        trust_timing[i] = trust["trust_timing"]
+
+        # behavioural bookkeeping (defined regardless of mood-dial availability)
+        if np.isfinite(dtime_arr[i]) and mu is not None and np.isfinite(mu):
+            lick_minus_expected[i] = float(dtime_arr[i]) - float(mu)
+
+        mood = mood_arr[i]
+        dials = fit.dials.get(mood) if hasattr(fit, "dials") else None
+        if dials is None:
+            # Fitted session but this trial's mood is not in the fit (e.g. a
+            # Disengaged trial in a MAIN_MOODS-only fit): latents stay NaN, but the
+            # row is kept with its provenance + trust (NOT flagged omitted).
+            continue
+
+        v = float(dials["sharpness"])
+        z = float(dials["itchiness"])
+        u = float(dials["timing"])
+        sharpness_drift[i] = v
+        itchiness_caution[i] = z
+
+        # ── realized quantities at the decision bin ──
+        ev_map = _ev_for(session)
+        tkey = int(tidx_arr[i]) if np.isfinite(tidx_arr[i]) else None
+        evidence = ev_map.get(tkey) if tkey is not None else None
+        if evidence is None or len(evidence) == 0:
+            # no evidence for this trial -> cannot realize A/phi; leave NaN
+            continue
+        n_bins = len(evidence)
+        event_bin = n_bins - 1
+
+        A = leaky_accumulate(evidence, dt=dt, leak_tau=leak_tau,
+                             rectification=rectification)
+        phi = expectation_bump(np.arange(n_bins) * dt, float(mu), float(sigma))
+
+        # REALIZED urgency = coefficient u * the bump value at the decision bin
+        # (genuinely trial-specific; NOT the coefficient u itself).
+        timing_urgency[i] = u * float(phi[event_bin])
+        evidence_integral[i] = float(A[event_bin])
+
+    # ── append (never overwrite the originals) ──
+    df["sharpness_drift"] = sharpness_drift
+    df["itchiness_caution"] = itchiness_caution
+    df["timing_urgency_at_decision"] = timing_urgency
+    df["evidence_integral_at_decision"] = evidence_integral
+    df["expected_change_time"] = expected_change_time
+    df["lick_minus_expected"] = lick_minus_expected
+    df["anchor_id"] = anchor_id
+    df["rectification_kind"] = str(rectification)
+    df["leak_tau"] = float(leak_tau)
+    df["recovery_regime"] = recovery_regime
+    df["trust_sharpness"] = trust_sharpness
+    df["trust_caution"] = trust_caution
+    df["trust_timing"] = trust_timing
+    df["generative_omitted"] = generative_omitted
+
+    return df
