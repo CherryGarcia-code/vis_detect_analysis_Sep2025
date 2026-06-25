@@ -1959,3 +1959,202 @@ def recover_true_difference(design_naive, design_expert, param_spec, true_delta,
             shrunk = True
 
     return {"recovered_delta": recovered_delta, "shrunk": bool(shrunk)}
+
+
+# ── Recovery gate (Task 3.5) — per-dial generative/descriptive trust ─────────
+# The gate's public dial keys are the CONFUSION labels (sharpness / caution /
+# timing). recover_point names the z dial 'itchiness'; this map bridges it.
+_GATE_DIALS = ("sharpness", "caution", "timing")
+_GATE_DIAL_TO_RAW = {"sharpness": "v", "caution": "z", "timing": "u"}
+_GATE_DIAL_TO_POINT = {"sharpness": "sharpness", "caution": "itchiness",
+                       "timing": "timing"}
+
+
+def recovery_gate(point_res, confusion_res, truediff_res, cond_res, regime,
+                  r_min=0.8, bias_max_frac=0.1, coverage_min=0.90, ccc_min=0.70,
+                  confusion_min_diag=0.8, confusion_max_offdiag=0.2,
+                  naive_relax=0.0):
+    """Per-dial generative/descriptive trust verdict (contract §A.9; gate_criteria.md).
+
+    Plain English: each behavioural dial (sharpness ``v``, caution/itchiness ``z``,
+    timing ``u``) only EARNS a 'generative' (mechanistic) interpretation for this
+    (dial x regime) cell if our recovery battery proves we can actually get that
+    dial back from data. This gate applies the RATIFIED thresholds
+    (``.superpowers/sdd/gate_criteria.md``) as a conservative AND rule: a dial is
+    ``'generative'`` IFF it passes EVERY applicable diagnostic; otherwise it falls
+    back to the Phase-1 ``'descriptive'`` proxy. A failing dial does NOT contaminate
+    a passing one — the verdict is PER-DIAL, not binary.
+
+    The four diagnostics and how this gate consumes their real return shapes:
+
+    * **POINT RECOVERY** (``recover_point``) — per-dial
+      ``{r, bias, sd_true, ci_coverage, [ccc]}`` keyed by the PUBLIC point names
+      (``sharpness``/``itchiness``/``timing``; this gate bridges ``itchiness`` ->
+      ``caution``). The dial passes the point block iff ALL hold:
+
+      - ``r >= r_min`` (Pearson recovered-vs-true across the jittered-true grid);
+      - ``|bias| <= bias_max_frac * sd_true`` — ``bias`` is the RAW
+        ``mean(recovered - true)`` and ``sd_true`` is reported alongside it, so the
+        tolerance is the SD-scaled ``0.1 * SD(true)`` of gate_criteria.md (we do NOT
+        assume ``bias`` is pre-normalized);
+      - ``ci_coverage >= coverage_min`` — a STRICT LOWER bound (under-coverage =
+        false confidence = a fail). OVER-coverage (up to ~0.99) is conservative and
+        ACCEPTABLE — it never fails the gate (gate_criteria.md §1);
+      - if a ``ccc`` field is PRESENT (Lin's concordance — the cluster run provides
+        it; absent in the local Wald smoke), ``ccc >= ccc_min``. When ABSENT the CCC
+        sub-check is SKIPPED and recorded as ``None`` (not a failure).
+
+    * **CONFUSION** (``recover_confusion``) — ``matrix`` (3x3) + ``labels``
+      (``sharpness``/``caution``/``timing``). The dial passes the confusion block iff
+      its DIAGONAL ``>= confusion_min_diag`` AND every SPECIFIC off-diagonal in its
+      true-row ``<= confusion_max_offdiag`` (the ``no_single`` residual is NOT an
+      off-diagonal and is not charged here).
+
+    * **shrunk veto** (``recover_true_difference['shrunk']``) — if the L2 prior
+      CRUSHED a genuine across-stage difference for that dial, it is ``'descriptive'``
+      (sweep-level veto, where applicable). ``shrunk`` may be a per-dial mapping
+      (keyed by raw ``v``/``z``/``u`` or by gate label) OR a scalar bool; a scalar
+      ``True`` applies to every dial.
+
+    * **Hessian veto** (``hessian_conditioning['deficient']``) — a rank-deficient /
+      ill-conditioned Hessian is an ANCHOR-LEVEL veto: if ``cond_res['deficient']``
+      is ``True``, ALL dials are ``'descriptive'`` regardless of the other dicts (the
+      fit sits on a ridge; no dial is trustworthy there).
+
+    Regime relaxation (``naive_relax``): per the statistician's ratified default of
+    **0.0** the thresholds are UNIFORM across regimes (the honest naive-``v`` ->
+    ``'descriptive'`` IS the finding, not something to relax away). The parameter is
+    KEPT for flexibility: when ``regime == 'naive'`` it subtracts ``naive_relax`` from
+    BOTH ``r_min`` and ``confusion_min_diag``. With the default ``0.0`` this is a
+    no-op; it is ignored entirely outside the naive regime.
+
+    .. warning::
+       The published ``'generative'`` VERDICT is only valid at FULL config on the
+       cluster (R1): ``n_rep >= 100`` for point recovery, ``n_rep >= 50`` for
+       confusion, full-size designs, ``n_restarts >= 2`` (``>= 4`` for point). A
+       local reduced-config run PROVES THE MACHINERY, not the verdict. R3: the gate
+       reads whatever ``ci_coverage`` the upstream produced — local smoke uses
+       asymptotic Wald (inverse-Hessian) coverage as a PROXY (flagged), while the
+       cluster gate uses PARAMETRIC BOOTSTRAP coverage (the v<->z ridge makes the
+       Hessian unreliable exactly where sharpness lives).
+
+    Parameters
+    ----------
+    point_res : dict
+        ``recover_point`` output: per-dial ``{r, bias, sd_true, ci_coverage,
+        [ccc], ...}`` keyed by public point names.
+    confusion_res : dict
+        ``recover_confusion`` output: ``{matrix, labels, ...}``.
+    truediff_res : dict
+        ``recover_true_difference`` output: ``{recovered_delta, shrunk}``;
+        ``shrunk`` may be a bool or a per-dial mapping.
+    cond_res : dict
+        ``hessian_conditioning`` output: ``{cond_number, rank, deficient}``.
+    regime : str
+        The regime label (e.g. ``'expert'`` / ``'naive'``); echoed in the result and
+        gates the ``naive_relax`` path.
+    r_min, bias_max_frac, coverage_min, ccc_min : float
+        Point-recovery thresholds (gate_criteria.md §1).
+    confusion_min_diag, confusion_max_offdiag : float
+        Confusion thresholds (gate_criteria.md §2).
+    naive_relax : float
+        Threshold relaxation applied to ``r_min``/``confusion_min_diag`` ONLY when
+        ``regime == 'naive'`` (default 0.0 = uniform thresholds; see above).
+
+    Returns
+    -------
+    dict
+        ``{"per_dial_trust": {dial: "generative"|"descriptive"}, "regime": str,
+        "passed": {dial: {sub_check: bool|None}}}`` for ``dial`` in
+        ``("sharpness", "caution", "timing")``. ``passed`` is the auditable record
+        of every sub-check (``point_r``, ``bias``, ``coverage``, ``ccc``,
+        ``confusion_diag``, ``confusion_offdiag``, ``not_shrunk``, ``hessian_ok``);
+        ``ccc`` is ``None`` when CCC was unavailable (skipped, not failed).
+    """
+    # ── regime-gated relaxation (no-op at the ratified default 0.0) ──
+    relax = float(naive_relax) if str(regime).lower() == "naive" else 0.0
+    r_thr = float(r_min) - relax
+    diag_thr = float(confusion_min_diag) - relax
+
+    # ── anchor-level Hessian veto (reads once; applies to every dial) ──
+    hessian_ok = not bool(cond_res.get("deficient", False))
+
+    # ── confusion matrix + labels ──
+    M = np.asarray(confusion_res.get("matrix"), float)
+    labels = list(confusion_res.get("labels", _GATE_DIALS))
+
+    # ── normalize the shrunk veto into a per-dial lookup ──
+    shrunk_raw = truediff_res.get("shrunk", False)
+
+    def _is_shrunk(gate_dial):
+        """True if this dial's genuine difference was crushed by the L2 prior."""
+        if isinstance(shrunk_raw, dict):
+            # accept either raw (v/z/u) or gate-label keys; default False if absent
+            raw = _GATE_DIAL_TO_RAW[gate_dial]
+            if raw in shrunk_raw:
+                return bool(shrunk_raw[raw])
+            if gate_dial in shrunk_raw:
+                return bool(shrunk_raw[gate_dial])
+            return False
+        return bool(shrunk_raw)   # scalar bool -> applies to every dial
+
+    per_dial_trust = {}
+    passed = {}
+
+    for gate_dial in _GATE_DIALS:
+        checks = {}
+
+        # ── POINT RECOVERY block ──
+        pkey = _GATE_DIAL_TO_POINT[gate_dial]
+        pr = point_res.get(pkey, {}) or {}
+
+        r_val = pr.get("r", float("nan"))
+        checks["point_r"] = bool(np.isfinite(r_val) and r_val >= r_thr)
+
+        bias = pr.get("bias", float("nan"))
+        sd_true = pr.get("sd_true", float("nan"))
+        if np.isfinite(bias) and np.isfinite(sd_true):
+            checks["bias"] = bool(abs(bias) <= float(bias_max_frac) * sd_true)
+        else:
+            checks["bias"] = False
+
+        cov = pr.get("ci_coverage", float("nan"))
+        # STRICT lower bound; over-coverage is acceptable (never fails)
+        checks["coverage"] = bool(np.isfinite(cov) and cov >= float(coverage_min))
+
+        # CCC: checked WHEN AVAILABLE, else skipped (None = not a failure)
+        if "ccc" in pr and pr["ccc"] is not None:
+            ccc = pr["ccc"]
+            checks["ccc"] = bool(np.isfinite(ccc) and ccc >= float(ccc_min))
+        else:
+            checks["ccc"] = None
+
+        # ── CONFUSION block ──
+        if gate_dial in labels and M.size:
+            i = labels.index(gate_dial)
+            checks["confusion_diag"] = bool(M[i, i] >= diag_thr)
+            # every SPECIFIC off-diagonal in this true-row <= max
+            offdiag_ok = True
+            for j in range(M.shape[1]):
+                if j != i and M[i, j] > float(confusion_max_offdiag):
+                    offdiag_ok = False
+                    break
+            checks["confusion_offdiag"] = offdiag_ok
+        else:
+            # no confusion info for this dial -> cannot certify it
+            checks["confusion_diag"] = False
+            checks["confusion_offdiag"] = False
+
+        # ── vetoes ──
+        checks["not_shrunk"] = not _is_shrunk(gate_dial)
+        checks["hessian_ok"] = hessian_ok
+
+        passed[gate_dial] = checks
+
+        # ── AND rule across applicable sub-checks (None CCC = skipped) ──
+        applicable = [v for v in checks.values() if v is not None]
+        is_generative = all(applicable)
+        per_dial_trust[gate_dial] = "generative" if is_generative else "descriptive"
+
+    return {"per_dial_trust": per_dial_trust, "regime": str(regime),
+            "passed": passed}

@@ -2967,3 +2967,209 @@ def test_recover_true_difference_shrunk_flag_logic():
             design_naive, design_expert, ps, {"v": 1.0}, l2=1.0, seed=0)
     assert abs(out2["recovered_delta"]["v"] - 0.9) < 1e-9
     assert out2["shrunk"] is False
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Task 3.5: recovery_gate — per-dial generative/descriptive trust (MOCK-DRIVEN)
+# (contract §A.9; thresholds = .superpowers/sdd/gate_criteria.md, ratified.)
+# ════════════════════════════════════════════════════════════════════════════
+# THE QUESTION: given the four recovery diagnostics for an anchor/regime, which
+# dials have EARNED a 'generative' interpretation (passed ALL applicable checks,
+# AND-rule) and which fall back to the Phase-1 'descriptive' proxy? These tests
+# are EXHAUSTIVE on the BRANCH LOGIC using MOCK diagnostic dicts (no fitting), so
+# they run in milliseconds and pin every gate decision: the AND rule, the
+# confusion off-diagonal, the point-recovery floor, the Hessian anchor-level
+# veto, the shrunk dial veto, and the naive_relax path.
+#
+# The gate's public dial keys are the CONFUSION labels: sharpness / caution /
+# timing (note: point-recovery names z 'itchiness'; the gate bridges it to
+# 'caution'). Mock builders below mirror the REAL return shapes of recover_point
+# / recover_confusion / recover_true_difference / hessian_conditioning.
+
+# point-recovery key per gate dial (z -> 'itchiness' in recover_point output)
+_POINT_KEY = {"sharpness": "sharpness", "caution": "itchiness", "timing": "timing"}
+_CONF_LABELS = ("sharpness", "caution", "timing")
+
+
+def _mk_point(**overrides):
+    """Mock recover_point output: per-dial {r, bias, sd_true, ci_coverage, ...}.
+
+    Defaults make EVERY dial pass (r=0.95, bias~0, coverage=0.93). Override a dial
+    by passing e.g. timing={"r": 0.5} to fail that dial's point recovery. Keys use
+    the recover_point PUBLIC names (sharpness / itchiness / timing)."""
+    base = {pk: {"r": 0.95, "bias": 0.0, "sd_true": 1.0, "ci_coverage": 0.93,
+                 "n_pairs": 200, "n_cov_excluded": 0}
+            for pk in ("sharpness", "itchiness", "timing")}
+    for gate_dial, patch in overrides.items():
+        base[_POINT_KEY[gate_dial]].update(patch)
+    return base
+
+
+def _mk_confusion(diag=0.95, offdiag=0.0, overrides=None):
+    """Mock recover_confusion output: 3x3 matrix + labels (sharpness/caution/timing).
+
+    Default = clean identity-ish matrix (diag 0.95, off 0.0 -> all dials pass).
+    `overrides` is {(true_label, pred_label): value} to set a SPECIFIC cell, e.g.
+    {("caution","sharpness"): 0.3} fails caution's off-diagonal."""
+    n = len(_CONF_LABELS)
+    M = np.full((n, n), float(offdiag))
+    for i in range(n):
+        M[i, i] = float(diag)
+    if overrides:
+        for (tl, pl), val in overrides.items():
+            M[_CONF_LABELS.index(tl), _CONF_LABELS.index(pl)] = float(val)
+    return {"matrix": M, "labels": _CONF_LABELS,
+            "no_single": {l: 0 for l in _CONF_LABELS},
+            "winners": {l: [] for l in _CONF_LABELS}, "n_rep": 50}
+
+
+def _mk_truediff(recovered_delta=None, shrunk=False):
+    """Mock recover_true_difference output: {recovered_delta:{dial:..}, shrunk:bool|dict}."""
+    return {"recovered_delta": recovered_delta or {}, "shrunk": shrunk}
+
+
+def _mk_cond(deficient=False):
+    """Mock hessian_conditioning output: {cond_number, rank, deficient}."""
+    return {"cond_number": 1e3 if not deficient else 1e9,
+            "rank": 6 if not deficient else 4, "deficient": bool(deficient)}
+
+
+def test_recovery_gate_mixed_verdict_and_rule():
+    """sharpness passes ALL; caution fails confusion off-diag; timing fails point r.
+
+    The brief's canonical edge case: per_dial_trust ==
+    {sharpness:'generative', caution:'descriptive', timing:'descriptive'}."""
+    point = _mk_point(timing={"r": 0.5})                 # timing r < 0.8 -> fail
+    conf = _mk_confusion(overrides={("caution", "sharpness"): 0.30})  # off > 0.2
+    truediff = _mk_truediff()
+    cond = _mk_cond(deficient=False)
+
+    out = dlg.recovery_gate(point, conf, truediff, cond, regime="expert")
+    assert out["per_dial_trust"] == {
+        "sharpness": "generative", "caution": "descriptive",
+        "timing": "descriptive"}, out["per_dial_trust"]
+    assert out["regime"] == "expert"
+    # auditable per-sub-check record exists for every dial
+    assert set(out["passed"].keys()) == {"sharpness", "caution", "timing"}
+    assert out["passed"]["sharpness"]["point_r"] is True
+    assert out["passed"]["timing"]["point_r"] is False
+    assert out["passed"]["caution"]["confusion_offdiag"] is False
+    assert out["passed"]["sharpness"]["confusion_offdiag"] is True
+
+
+def test_recovery_gate_hessian_deficient_vetoes_all_dials():
+    """A rank/ill-conditioned Hessian -> EVERY dial 'descriptive' (anchor-level veto)."""
+    point = _mk_point()              # all dials would otherwise pass
+    conf = _mk_confusion()           # clean matrix
+    truediff = _mk_truediff()
+    cond = _mk_cond(deficient=True)  # the veto
+
+    out = dlg.recovery_gate(point, conf, truediff, cond, regime="expert")
+    assert out["per_dial_trust"] == {
+        "sharpness": "descriptive", "caution": "descriptive",
+        "timing": "descriptive"}
+    # the auditable record marks the Hessian veto on every dial
+    for dial in ("sharpness", "caution", "timing"):
+        assert out["passed"][dial]["hessian_ok"] is False
+
+
+def test_recovery_gate_shrunk_dial_veto():
+    """shrunk on a dial that otherwise passes -> that dial 'descriptive' only."""
+    point = _mk_point()              # all pass
+    conf = _mk_confusion()           # all pass
+    # per-dial shrunk veto on caution (z) only
+    truediff = _mk_truediff(recovered_delta={"v": 1.5, "z": 0.05, "u": 0.3},
+                            shrunk={"v": False, "z": True, "u": False})
+    cond = _mk_cond(deficient=False)
+
+    out = dlg.recovery_gate(point, conf, truediff, cond, regime="expert")
+    assert out["per_dial_trust"]["caution"] == "descriptive"
+    assert out["per_dial_trust"]["sharpness"] == "generative"
+    assert out["per_dial_trust"]["timing"] == "generative"
+    assert out["passed"]["caution"]["not_shrunk"] is False
+    assert out["passed"]["sharpness"]["not_shrunk"] is True
+
+
+def test_recovery_gate_shrunk_scalar_bool_applies_to_all_dials():
+    """A scalar shrunk==True (sweep-level) vetoes every dial it could apply to."""
+    point = _mk_point()
+    conf = _mk_confusion()
+    truediff = _mk_truediff(shrunk=True)   # scalar bool, sweep-level
+    cond = _mk_cond(deficient=False)
+
+    out = dlg.recovery_gate(point, conf, truediff, cond, regime="expert")
+    assert all(v == "descriptive" for v in out["per_dial_trust"].values())
+
+
+def test_recovery_gate_naive_relax_flips_borderline_dial():
+    """naive_relax in the naive regime lowers r_min/confusion_min_diag thresholds.
+
+    Construct a borderline sharpness dial (r=0.78, diag=0.78). At naive_relax=0.0
+    it FAILS (below 0.80); with naive_relax=0.05 in the naive regime the floor
+    drops to 0.75 so it PASSES. Exercises the relaxation branch."""
+    # borderline: r and diag both 0.78 (between 0.75 and 0.80)
+    point = _mk_point(sharpness={"r": 0.78})
+    conf = _mk_confusion()
+    conf["matrix"][_CONF_LABELS.index("sharpness"),
+                   _CONF_LABELS.index("sharpness")] = 0.78
+    truediff = _mk_truediff()
+    cond = _mk_cond(deficient=False)
+
+    # naive regime, no relaxation -> sharpness fails (0.78 < 0.80)
+    strict = dlg.recovery_gate(point, conf, truediff, cond, regime="naive",
+                               naive_relax=0.0)
+    assert strict["per_dial_trust"]["sharpness"] == "descriptive"
+
+    # naive regime WITH relaxation -> floor 0.75, sharpness passes
+    relaxed = dlg.recovery_gate(point, conf, truediff, cond, regime="naive",
+                                naive_relax=0.05)
+    assert relaxed["per_dial_trust"]["sharpness"] == "generative"
+
+    # the relaxation is regime-gated: in EXPERT regime naive_relax is ignored
+    expert = dlg.recovery_gate(point, conf, truediff, cond, regime="expert",
+                               naive_relax=0.05)
+    assert expert["per_dial_trust"]["sharpness"] == "descriptive"
+
+
+def test_recovery_gate_coverage_lower_bound_strict_overcoverage_ok():
+    """Coverage gate: under-coverage FAILS; over-coverage (>=min, up to ~0.99) PASSES."""
+    # under-coverage on caution -> fail; over-coverage on timing -> pass
+    point = _mk_point(caution={"ci_coverage": 0.80},   # < 0.90 -> fail
+                      timing={"ci_coverage": 0.99})     # >= 0.90 -> pass
+    conf = _mk_confusion()
+    out = dlg.recovery_gate(point, conf, _mk_truediff(), _mk_cond(),
+                            regime="expert")
+    assert out["per_dial_trust"]["caution"] == "descriptive"
+    assert out["per_dial_trust"]["timing"] == "generative"
+    assert out["passed"]["caution"]["coverage"] is False
+    assert out["passed"]["timing"]["coverage"] is True
+
+
+def test_recovery_gate_bias_uses_sd_true_scaled_tolerance():
+    """|bias| <= bias_max_frac * sd_true: a bias above the scaled tolerance FAILS."""
+    # sd_true=1.0, bias_max_frac=0.1 -> tolerance 0.1; bias 0.2 fails, 0.05 passes
+    point = _mk_point(sharpness={"bias": 0.20, "sd_true": 1.0},   # 0.2 > 0.1 -> fail
+                      caution={"bias": 0.05, "sd_true": 1.0})     # 0.05 <= 0.1 -> pass
+    out = dlg.recovery_gate(point, _mk_confusion(), _mk_truediff(), _mk_cond(),
+                            regime="expert")
+    assert out["per_dial_trust"]["sharpness"] == "descriptive"
+    assert out["per_dial_trust"]["caution"] == "generative"
+    assert out["passed"]["sharpness"]["bias"] is False
+    assert out["passed"]["caution"]["bias"] is True
+
+
+def test_recovery_gate_ccc_checked_when_present_skipped_when_absent():
+    """CCC is checked WHEN AVAILABLE (cluster) and skipped (noted) when absent (local)."""
+    # CCC present and below floor on sharpness -> fail
+    point = _mk_point(sharpness={"ccc": 0.5})            # < 0.70 -> fail
+    out = dlg.recovery_gate(point, _mk_confusion(), _mk_truediff(), _mk_cond(),
+                            regime="expert")
+    assert out["per_dial_trust"]["sharpness"] == "descriptive"
+    assert out["passed"]["sharpness"]["ccc"] is False
+
+    # CCC absent (local Wald smoke) -> CCC sub-check is None (skipped), dial passes
+    point2 = _mk_point()                                 # no ccc key
+    out2 = dlg.recovery_gate(point2, _mk_confusion(), _mk_truediff(), _mk_cond(),
+                             regime="expert")
+    assert out2["per_dial_trust"]["sharpness"] == "generative"
+    assert out2["passed"]["sharpness"]["ccc"] is None
