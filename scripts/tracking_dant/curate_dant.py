@@ -133,3 +133,73 @@ def build_render_cmd(python_exe, paths: DantCurationPaths, tier: str,
     if uids:
         cmd += ["--uids", *[str(u) for u in uids]]
     return cmd
+
+
+def write_validation_json(result: dict, out_dir) -> Path:
+    """Write the per-tier AUC result to the GIVEN out_dir (never the UM dir)."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    p = out_dir / "curation_validation.json"
+    with open(p, "w") as f:
+        json.dump(result, f, indent=2)
+    return p
+
+
+def _import_pipeline(subj: str):
+    """Lazy-import the worktree pipeline modules (visdetect + _subject_paths).
+
+    VISDETECT_SUBJECT must be set before _subject_paths is imported. We prepend the
+    worktree src + tracking dir so we get THIS worktree's code, not the editable
+    install pinned to PRIMARY (memory worktree_editable_install_pythonpath).
+    """
+    os.environ["VISDETECT_SUBJECT"] = subj
+    sys.path.insert(0, str(WORKTREE_ROOT / "src"))
+    sys.path.insert(0, str(WORKTREE_ROOT / "scripts" / "pipelines" / "tracking"))
+    import _subject_paths as sjp
+    from visdetect.analysis import track_curation as tc
+    from visdetect.core.session import load_session
+    return sjp, tc, load_session
+
+
+def collect_holdout_isi(kept_pairs: Dict[Tuple[int, str], int], subj: str,
+                        pkl_dir) -> Dict[Tuple[int, str], "object"]:
+    """Holdout (odd-partition) log-ISI hist per kept (uid, session). Loads each
+    session pkl once. Faithful to validate_curation.py lines 67-80."""
+    import numpy as np
+    sjp, tc, load_session = _import_pipeline(subj)
+    holdout: Dict[Tuple[int, str], object] = {}
+    for sess in sorted({s for (_, s) in kept_pairs}):
+        pkl = sjp.session_pkl(subj, sess, pkl_dir)
+        if pkl is None:
+            print(f"  [validate] skip {sess}: no pkl", flush=True)
+            continue
+        S = load_session(str(pkl))
+        cmap = {c.cluster_id: c for c in S.clusters}
+        for (uid, s), kid in kept_pairs.items():
+            if s != sess or kid not in cmap:
+                continue
+            _, hold = tc.partitioned_isi_hists(np.asarray(cmap[kid].spike_times))
+            holdout[(uid, s)] = hold
+        del S
+    return holdout
+
+
+def step_validate(paths: DantCurationPaths, subj: str = "BG_046") -> dict:
+    """Held-out ISI AUC by tier, written IN-PROCESS to the DANT out-dir."""
+    sjp, tc, load_session = _import_pipeline(subj)
+    tracks = pd.read_csv(paths.out_dir / "curated_tracks.csv")
+    reg = pd.read_csv(paths.registry_curation, dtype={"session": str})
+    reg["uid"] = reg["dant_uid"].astype(int)
+    # (uid, session) -> ks_unit_id, restricted to each track's kept sessions.
+    kept_pairs: Dict[Tuple[int, str], int] = {}
+    for _, row in tracks.iterrows():
+        uid = int(row["curated_uid"])
+        for s in [s for s in str(row["kept_sessions"]).split(";") if s]:
+            m = reg[(reg["uid"] == uid) & (reg["session"] == s)]
+            if len(m):
+                kept_pairs[(uid, s)] = int(m.iloc[0]["ks_unit_id"])
+    holdout = collect_holdout_isi(kept_pairs, subj, paths.pkl_dir)
+    result = tc.held_out_isi_auc_by_tier(tracks, holdout)
+    write_validation_json(result, paths.out_dir)
+    print(f"[validate] held-out ISI AUC by tier: {result}", flush=True)
+    return result

@@ -100,3 +100,19 @@ def test_build_render_cmd_uids_and_no_max(tmp_path):
     assert "--max-uids" not in cmd
     i = cmd.index("--uids")
     assert cmd[i + 1:i + 4] == ["1", "2", "3"]
+
+
+import json
+
+
+def test_write_validation_json_writes_to_given_dir(tmp_path):
+    result = {"trusted": {"auc": 0.9, "n_matched": 5, "n_nonmatched": 7}}
+    out_dir = tmp_path / "FIGURES" / "tracking_dant" / "BG_046" / "curation"
+
+    p = curate_dant.write_validation_json(result, out_dir)
+
+    assert p == out_dir / "curation_validation.json"
+    assert p.exists()                                  # parent dirs created
+    assert json.loads(p.read_text())["trusted"]["auc"] == 0.9
+    # clobber-safety: nothing written outside the given dir
+    assert "tracking_qc" not in str(p).replace("\\", "/")
