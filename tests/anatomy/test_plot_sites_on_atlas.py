@@ -53,3 +53,10 @@ def test_sites_figure_with_values_colorbar(tmp_path):
     p = plot_sites_on_atlas("BG_046", acsv, tj, out, atlas=_atlas(),
                             values=np.arange(8), value_label="rate (Hz)")
     assert os.path.exists(p)
+
+
+def test_sites_figure_stereotaxic_png(tmp_path):
+    acsv, tj = _inputs(tmp_path)
+    out = tmp_path / "f_stereo.png"
+    assert os.path.exists(plot_sites_on_atlas("BG_046", acsv, tj, out, atlas=_atlas(),
+                                              coords="stereotaxic"))

@@ -66,6 +66,13 @@ def test_units_categorical_png(tmp_path):
         "BG_046", "17092025", "preferred_state", df, _art(), out, atlas=_atlas()))
 
 
+def test_units_stereotaxic_png(tmp_path):
+    out = tmp_path / "sc_stereo.png"
+    assert os.path.exists(plot_units_on_atlas(
+        "BG_046", "17092025", "fr", _df([1., 5., 10., 20., 30., 45.]),
+        _art(), out, atlas=_atlas(), coords="stereotaxic"))
+
+
 def test_lick_metrics_registered():
     for m in ("lick_hit", "lick_fa", "lick_contrast"):
         assert METRIC_INFO[m]["diverging"] is True

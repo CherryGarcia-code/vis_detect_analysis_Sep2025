@@ -37,6 +37,7 @@ from scipy.stats import mannwhitneyu, wilcoxon
 
 from visdetect.anatomy.atlas import AllenAtlas
 from visdetect.anatomy.tracks import load_track_artifact
+from visdetect.anatomy.stereotaxic import CoordMap, pia_dv_um
 from visdetect.analysis.config import STATE_LABEL_COLORS
 from visdetect.analysis.utils import compute_auroc, fdr_correct
 
@@ -188,25 +189,26 @@ def fdr_significant(pvals, alpha=0.05):
     return sig
 
 
-def _draw(ax, atlas, ap_um, art, df, metric, *, zoom, sc, win, cmap, norm):
+def _draw(ax, atlas, ap_um, art, df, metric, *, zoom, sc, win, cmap, norm, cm):
     img, extent = coronal_coarse_image(atlas, ap_um)
+    img, extent = cm.image(img, extent)
     ax.imshow(img, extent=extent, origin="upper", interpolation="nearest", aspect="equal")
     for s in art.shanks:
         poly = np.asarray(s.ccf_polyline, float)
-        ax.plot(poly[:, 1], poly[:, 2], "-", lw=0.9, color="0.4", alpha=0.7, zorder=4)
+        ax.plot(cm.x(poly[:, 1]), cm.y(poly[:, 2]), "-", lw=0.9, color="0.4", alpha=0.7, zorder=4)
     lw = 0.25 if zoom else 0.15
     if metric == "preferred_state":
         for stt in MOOD_STATES:
             d = df[df["value"] == stt]
             if len(d):
-                ax.scatter(d.ccf_ml, d.ccf_dv, s=sc, c=STATE_LABEL_COLORS[stt],
+                ax.scatter(cm.x(d.ccf_ml), cm.y(d.ccf_dv), s=sc, c=STATE_LABEL_COLORS[stt],
                            edgecolors="white", linewidths=lw, alpha=0.85,
                            zorder=5, label=stt)
     else:
         good = df[np.isfinite(df["value"])]
-        ax.scatter(good.ccf_ml, good.ccf_dv, c=good["value"], cmap=cmap, norm=norm,
+        ax.scatter(cm.x(good.ccf_ml), cm.y(good.ccf_dv), c=good["value"], cmap=cmap, norm=norm,
                    s=sc, edgecolors="white", linewidths=lw, alpha=0.85, zorder=5)
-    ax.set_xlabel("ML (µm)"); ax.set_ylabel("DV (µm)")
+    ax.set_xlabel(cm.xlabel); ax.set_ylabel(cm.ylabel)
     if zoom:
         ax.set_xlim(win[0], win[1]); ax.set_ylim(win[3], win[2])
 
@@ -222,15 +224,20 @@ def _cbar_label(metric, effect, fr_scale, info):
 
 
 def plot_units_on_atlas(subject, session_name, metric, df, art, out_png,
-                        atlas=None, *, effect="auroc", fr_scale="log", n_total=None) -> str:
+                        atlas=None, *, effect="auroc", fr_scale="log", n_total=None,
+                        coords="ccf") -> str:
     """Render the 2-panel (whole section + zoom) map. `df` has ccf_ml/ccf_dv/ccf_ap/value
-    (already significance-filtered upstream). n_total = pre-mask unit count for the label."""
+    (already significance-filtered upstream). n_total = pre-mask unit count for the label.
+    coords="stereotaxic" relabels/flips axes to Bregma-referenced mm (left on the left)."""
     atlas = atlas or AllenAtlas()
     info = METRIC_INFO[metric]
     ap_um = float(df["ccf_ap"].median())
-    ml0, ml1 = df.ccf_ml.min() - 700, df.ccf_ml.max() + 700
-    dv0, dv1 = df.ccf_dv.min() - 1500, df.ccf_dv.max() + 500
-    win = (ml0, ml1, dv0, dv1)
+    cm = CoordMap(coords, pia_dv_um(art))
+    # zoom window in plot coordinates (sorted to absorb the ML flip)
+    xs = np.sort(cm.x(np.array([df.ccf_ml.min() - 700, df.ccf_ml.max() + 700])))
+    ys = np.sort(cm.y(np.array([df.ccf_dv.min() - 1500, df.ccf_dv.max() + 500])))
+    xlo, xhi = float(xs[0]), float(xs[1]); ylo, yhi = float(ys[0]), float(ys[1])
+    win = (xlo, xhi, ylo, yhi)
 
     cmap = norm = None
     if metric != "preferred_state":
@@ -255,19 +262,20 @@ def plot_units_on_atlas(subject, session_name, metric, df, art, out_png,
     axA, axB = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
     for ax, zoom in ((axA, False), (axB, True)):
         _draw(ax, atlas, ap_um, art, df, metric, zoom=zoom,
-              sc=13 if zoom else 5, win=win, cmap=cmap, norm=norm)
-    axA.add_patch(Rectangle((ml0, dv0), ml1 - ml0, dv1 - dv0, fill=False, ec="k",
+              sc=13 if zoom else 5, win=win, cmap=cmap, norm=norm, cm=cm)
+    axA.add_patch(Rectangle((xlo, ylo), xhi - xlo, yhi - ylo, fill=False, ec="k",
                             lw=1.0, ls="--", zorder=6))
     n_plot = len(df)
     n_lab = (f"n = {n_plot}/{n_total} units (FDR<0.05)"
              if (n_total is not None and metric != "fr") else f"n = {n_plot} units")
-    axA.set_title(f"A. Coronal section (AP ≈ {ap_um:.0f} µm)", fontweight="bold", fontsize=12)
+    axA.set_title(f"A. Coronal section ({cm.ap_title(ap_um)})", fontweight="bold", fontsize=12)
     axA.text(0.02, 0.02, n_lab, transform=axA.transAxes, fontsize=8, color="0.3", va="bottom")
     axB.set_title("B. Striatum zoom", fontweight="bold", fontsize=12)
-    # scale bar
-    x0 = ml0 + 0.08 * (ml1 - ml0); y0 = dv1 - 0.08 * (dv1 - dv0)
-    axB.plot([x0, x0 + 500], [y0, y0], "k-", lw=2.5)
-    axB.text(x0 + 250, y0 - 0.02 * (dv1 - dv0), "500 µm", ha="center", va="bottom", fontsize=8)
+    # scale bar (500 um -> 0.5 mm in stereotaxic)
+    x0 = xlo + 0.08 * (xhi - xlo); y0 = yhi - 0.08 * (yhi - ylo)
+    axB.plot([x0, x0 + cm.length(500)], [y0, y0], "k-", lw=2.5)
+    axB.text(x0 + cm.length(250), y0 - 0.02 * (yhi - ylo), "500 µm",
+             ha="center", va="bottom", fontsize=8)
 
     if metric == "preferred_state":
         handles = [Line2D([0], [0], marker="o", ls="", mec="white", mew=0.3,
@@ -289,7 +297,7 @@ def plot_units_on_atlas(subject, session_name, metric, df, art, out_png,
 
 
 def _build(subject, session_name, metric, anatomy_dir, out_png, session=None, tags=None,
-           *, effect="auroc", mask_nonsig=True, fr_scale="log"):
+           *, effect="auroc", mask_nonsig=True, fr_scale="log", coords="ccf"):
     from visdetect.core.session import load_session
     tok = str(int(session_name))
     if session is None:
@@ -313,7 +321,7 @@ def _build(subject, session_name, metric, anatomy_dir, out_png, session=None, ta
     if len(df) == 0:
         return None, session, tags
     out = plot_units_on_atlas(subject, tok, metric, df, art, out_png,
-                              effect=effect, fr_scale=fr_scale, n_total=n_total)
+                              effect=effect, fr_scale=fr_scale, n_total=n_total, coords=coords)
     return out, session, tags
 
 
@@ -329,16 +337,21 @@ def main():
     ap.add_argument("--show-nonsig", action="store_true",
                     help="also show units that are NOT FDR-significant (default: hide them)")
     ap.add_argument("--fr-scale", choices=["log", "linear"], default="log")
+    ap.add_argument("--coords", choices=["ccf", "stereotaxic"], default="ccf",
+                    help="ccf (raw Allen microns; default) or stereotaxic "
+                         "(Bregma-referenced mm, ML flipped so anatomical left is on the left)")
     args = ap.parse_args()
     args.anatomy_dir = args.anatomy_dir or os.path.join("data", "anatomy", args.subject)
+    coord_suffix = "_stereotaxic" if args.coords == "stereotaxic" else ""
     session = tags = None
     for m in args.metric:
         suffix = "" if m == "fr" else f"_{args.effect}"
         out = os.path.join("FIGURES", "anatomy", args.subject,
-                           f"{args.subject}_{args.session}_{m}{suffix}.png")
+                           f"{args.subject}_{args.session}_{m}{suffix}{coord_suffix}.png")
         out, session, tags = _build(args.subject, args.session, m, args.anatomy_dir, out,
                                     session=session, tags=tags, effect=args.effect,
-                                    mask_nonsig=not args.show_nonsig, fr_scale=args.fr_scale)
+                                    mask_nonsig=not args.show_nonsig, fr_scale=args.fr_scale,
+                                    coords=args.coords)
         print(f"wrote {out}" if out else f"{m}: no units to plot (none significant?)")
 
 
