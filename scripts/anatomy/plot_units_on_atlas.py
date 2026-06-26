@@ -42,7 +42,7 @@ from visdetect.analysis.config import STATE_LABEL_COLORS
 from visdetect.analysis.utils import compute_auroc, fdr_correct
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from plot_sites_on_atlas import coronal_coarse_image
+from plot_sites_on_atlas import coronal_coarse_image, dominant_region_label
 
 MOOD_STATES = ["Impulsive", "StimSens", "Disengaged"]
 
@@ -225,14 +225,18 @@ def _cbar_label(metric, effect, fr_scale, info):
 
 def plot_units_on_atlas(subject, session_name, metric, df, art, out_png,
                         atlas=None, *, effect="auroc", fr_scale="log", n_total=None,
-                        coords="ccf") -> str:
+                        coords="ccf", stage="Expert", masked=True, n_sig=None) -> str:
     """Render the 2-panel (whole section + zoom) map. `df` has ccf_ml/ccf_dv/ccf_ap/value
     (already significance-filtered upstream). n_total = pre-mask unit count for the label.
-    coords="stereotaxic" relabels/flips axes to Bregma-referenced mm (left on the left)."""
+    coords="stereotaxic" relabels/flips axes to Bregma-referenced mm (left on the left).
+    Region words in the titles come from `df.region_coarse` (so a cortical probe reads
+    'cortex', not 'CPu')."""
     atlas = atlas or AllenAtlas()
     info = METRIC_INFO[metric]
     ap_um = float(df["ccf_ap"].median())
     cm = CoordMap(coords, pia_dv_um(art))
+    reg = dominant_region_label(df)            # 'cortex' / 'CPu' / ... from the units
+    reg_zoom = reg.split("/")[0]; reg_zoom = reg_zoom[:1].upper() + reg_zoom[1:]
     # zoom window in plot coordinates (sorted to absorb the ML flip)
     xs = np.sort(cm.x(np.array([df.ccf_ml.min() - 700, df.ccf_ml.max() + 700])))
     ys = np.sort(cm.y(np.array([df.ccf_dv.min() - 1500, df.ccf_dv.max() + 500])))
@@ -266,11 +270,15 @@ def plot_units_on_atlas(subject, session_name, metric, df, art, out_png,
     axA.add_patch(Rectangle((xlo, ylo), xhi - xlo, yhi - ylo, fill=False, ec="k",
                             lw=1.0, ls="--", zorder=6))
     n_plot = len(df)
-    n_lab = (f"n = {n_plot}/{n_total} units (FDR<0.05)"
-             if (n_total is not None and metric != "fr") else f"n = {n_plot} units")
+    if metric == "fr" or n_total is None:
+        n_lab = f"n = {n_plot} units"
+    elif masked:
+        n_lab = f"n = {n_plot}/{n_total} units (FDR<0.05)"
+    else:  # showing all units (incl. non-significant) — say how many actually pass FDR
+        n_lab = f"n = {n_plot} units" + (f" · {n_sig} FDR-sig" if n_sig is not None else "")
     axA.set_title(f"A. Coronal section ({cm.ap_title(ap_um)})", fontweight="bold", fontsize=12)
     axA.text(0.02, 0.02, n_lab, transform=axA.transAxes, fontsize=8, color="0.3", va="bottom")
-    axB.set_title("B. Striatum zoom", fontweight="bold", fontsize=12)
+    axB.set_title(f"B. {reg_zoom} zoom", fontweight="bold", fontsize=12)
     # scale bar (500 um -> 0.5 mm in stereotaxic)
     x0 = xlo + 0.08 * (xhi - xlo); y0 = yhi - 0.08 * (yhi - ylo)
     axB.plot([x0, x0 + cm.length(500)], [y0, y0], "k-", lw=2.5)
@@ -288,8 +296,8 @@ def plot_units_on_atlas(subject, session_name, metric, df, art, out_png,
         cb = fig.colorbar(sm, ax=axB, fraction=0.046, pad=0.04)
         cb.set_label(_cbar_label(metric, effect, fr_scale, info), fontsize=9)
 
-    fig.suptitle(f"{subject} {session_name} (Expert) — {info['label'].split('(')[0].strip()}"
-                 f"  ·  {art.hemisphere} CPu", fontsize=13, fontweight="bold")
+    fig.suptitle(f"{subject} {session_name} ({stage}) — {info['label'].split('(')[0].strip()}"
+                 f"  ·  {art.hemisphere} {reg}", fontsize=13, fontweight="bold")
     os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
     fig.savefig(out_png, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -297,16 +305,21 @@ def plot_units_on_atlas(subject, session_name, metric, df, art, out_png,
 
 
 def _build(subject, session_name, metric, anatomy_dir, out_png, session=None, tags=None,
-           *, effect="auroc", mask_nonsig=True, fr_scale="log", coords="ccf"):
+           *, effect="auroc", mask_nonsig=True, fr_scale="log", coords="ccf",
+           coarse_region=None, stage="Expert"):
     from visdetect.core.session import load_session
-    tok = str(int(session_name))
+    # DDMMYYYY token; zero-pad so leading-zero dates (e.g. 08072025) resolve their
+    # pkl/tag files (str(int(...)) would drop the zero -> 8072025 -> FileNotFound).
+    tok = str(session_name).zfill(8)
     if session is None:
         session = load_session(os.path.join("data", "pkls", subject, f"{subject}_{tok}.pkl"))
     if tags is None:
-        tags = pd.read_csv(os.path.join("data", "cache", "state_tags", subject, f"{tok.zfill(8)}.csv"))
+        tags = pd.read_csv(os.path.join("data", "cache", "state_tags", subject, f"{tok}.csv"))
     met = compute_unit_metric(session, tags, metric, effect=effect)
     ua = pd.read_csv(os.path.join(anatomy_dir, "unit_anatomy.csv"))
     ua = ua[ua.session_name == int(tok)]
+    if coarse_region:                          # e.g. restrict to cortical units (CTX)
+        ua = ua[ua.region_coarse == coarse_region]
     df = ua.merge(met, on="cluster_id")
     # keep only units with a computable value
     if metric == "preferred_state":
@@ -314,14 +327,17 @@ def _build(subject, session_name, metric, anatomy_dir, out_png, session=None, ta
     else:
         df = df[np.isfinite(pd.to_numeric(df["value"], errors="coerce"))]
     n_total = len(df)
+    n_sig = int(fdr_significant(df["pval"].to_numpy()).sum()) if metric != "fr" else None
     # hide non-responsive units (FDR-significant only); fr has no significance test
-    if mask_nonsig and metric != "fr":
+    masked = mask_nonsig and metric != "fr"
+    if masked:
         df = df[fdr_significant(df["pval"].to_numpy())]
     art = load_track_artifact(os.path.join(anatomy_dir, f"{subject}_shank_tracks.json"))
     if len(df) == 0:
         return None, session, tags
     out = plot_units_on_atlas(subject, tok, metric, df, art, out_png,
-                              effect=effect, fr_scale=fr_scale, n_total=n_total, coords=coords)
+                              effect=effect, fr_scale=fr_scale, n_total=n_total, coords=coords,
+                              stage=stage, masked=masked, n_sig=n_sig)
     return out, session, tags
 
 
@@ -340,6 +356,10 @@ def main():
     ap.add_argument("--coords", choices=["ccf", "stereotaxic"], default="ccf",
                     help="ccf (raw Allen microns; default) or stereotaxic "
                          "(Bregma-referenced mm, ML flipped so anatomical left is on the left)")
+    ap.add_argument("--coarse-region", default=None,
+                    help="restrict to units in one coarse region (e.g. CTX, CP, GPe). "
+                         "Titles auto-label the region either way.")
+    ap.add_argument("--stage", default="Expert", help="stage label shown in the title")
     args = ap.parse_args()
     args.anatomy_dir = args.anatomy_dir or os.path.join("data", "anatomy", args.subject)
     coord_suffix = "_stereotaxic" if args.coords == "stereotaxic" else ""
@@ -351,7 +371,8 @@ def main():
         out, session, tags = _build(args.subject, args.session, m, args.anatomy_dir, out,
                                     session=session, tags=tags, effect=args.effect,
                                     mask_nonsig=not args.show_nonsig, fr_scale=args.fr_scale,
-                                    coords=args.coords)
+                                    coords=args.coords, coarse_region=args.coarse_region,
+                                    stage=args.stage)
         print(f"wrote {out}" if out else f"{m}: no units to plot (none significant?)")
 
 

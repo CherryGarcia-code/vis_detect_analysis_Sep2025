@@ -32,7 +32,25 @@ COARSE_FILL = {
     "CP": "#c6dbef", "CTX": "#d9f0d3", "WM": "#e8e8e8", "VS": "#ffffff",
     "GPe": "#fdd0a2", "other": "#f4f4f4", "out": "#ffffff", "unknown": "#f7f7f7",
 }
+# Readable names for figure titles, keyed by coarse class.
+COARSE_NAME = {
+    "CP": "CPu", "CTX": "cortex", "WM": "white matter", "VS": "ventral striatum",
+    "GPe": "GPe", "other": "mixed", "out": "—", "unknown": "—",
+}
 _OUTLINE = (0.55, 0.55, 0.55)
+
+
+def dominant_region_label(ch) -> str:
+    """Readable label for where the bank sits: the dominant coarse region, plus a
+    secondary if the probe straddles regions (e.g. 'cortex/WM'). Used in titles so
+    a cortical probe isn't mislabelled 'CPu'."""
+    if "region_coarse" not in ch.columns or ch.empty:
+        return "—"
+    frac = ch["region_coarse"].value_counts(normalize=True)
+    parts = [COARSE_NAME.get(frac.index[0], frac.index[0])]
+    if len(frac) > 1 and frac.iloc[1] >= 0.2:
+        parts.append(COARSE_NAME.get(frac.index[1], frac.index[1]))
+    return "/".join(parts)
 
 
 def coronal_coarse_image(atlas: AllenAtlas, ap_um: float):
@@ -141,7 +159,7 @@ def plot_sites_on_atlas(subject: str, atlas_csv, tracks_json, out_png,
                    frameon=False, fontsize=8, title_fontsize=8)
 
     hemi = art.hemisphere
-    fig.suptitle(f"{subject} — recording site localization ({hemi} CPu)",
+    fig.suptitle(f"{subject} — recording site localization ({hemi} {dominant_region_label(ch)})",
                  fontsize=13, fontweight="bold")
     os.makedirs(os.path.dirname(out_png) or ".", exist_ok=True)
     fig.savefig(out_png, dpi=300, bbox_inches="tight")

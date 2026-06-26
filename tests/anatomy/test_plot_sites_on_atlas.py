@@ -5,7 +5,7 @@ import os, sys
 import numpy as np
 import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "anatomy"))
-from plot_sites_on_atlas import plot_sites_on_atlas, coronal_coarse_image
+from plot_sites_on_atlas import plot_sites_on_atlas, coronal_coarse_image, dominant_region_label
 from visdetect.anatomy.atlas import AllenAtlas
 from visdetect.anatomy.tracks import TrackArtifact, ShankTrack, save_track_artifact
 
@@ -53,6 +53,17 @@ def test_sites_figure_with_values_colorbar(tmp_path):
     p = plot_sites_on_atlas("BG_046", acsv, tj, out, atlas=_atlas(),
                             values=np.arange(8), value_label="rate (Hz)")
     assert os.path.exists(p)
+
+
+def test_dominant_region_label():
+    # pure cortex -> "cortex"; not "CPu"
+    assert dominant_region_label(pd.DataFrame({"region_coarse": ["CTX"] * 10})) == "cortex"
+    # straddling probe (>=20% second region) -> "cortex/white matter"
+    mixed = pd.DataFrame({"region_coarse": ["CTX"] * 6 + ["WM"] * 4})
+    assert dominant_region_label(mixed) == "cortex/white matter"
+    # dominant CP with a small tail -> just "CPu"
+    cp = pd.DataFrame({"region_coarse": ["CP"] * 9 + ["WM"]})
+    assert dominant_region_label(cp) == "CPu"
 
 
 def test_sites_figure_stereotaxic_png(tmp_path):

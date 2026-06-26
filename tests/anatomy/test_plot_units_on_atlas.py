@@ -23,11 +23,12 @@ def _art():
     return TrackArtifact("BG_046", "allen_mouse_25um", "left", "forward", "t", "2026-06-24", sh)
 
 
-def _df(values):
+def _df(values, region_coarse="CP"):
     k = len(values)
     return pd.DataFrame({"cluster_id": range(k), "ccf_ap": [2500.0] * k,
                          "ccf_ml": np.linspace(1600, 2350, k),
-                         "ccf_dv": np.linspace(2600, 3200, k), "value": values})
+                         "ccf_dv": np.linspace(2600, 3200, k), "value": values,
+                         "region_coarse": [region_coarse] * k})
 
 
 def test_state_contrast_cmap_endpoints():
@@ -71,6 +72,14 @@ def test_units_stereotaxic_png(tmp_path):
     assert os.path.exists(plot_units_on_atlas(
         "BG_046", "17092025", "fr", _df([1., 5., 10., 20., 30., 45.]),
         _art(), out, atlas=_atlas(), coords="stereotaxic"))
+
+
+def test_units_cortical_label_png(tmp_path):
+    # a cortical df must render (region words come from region_coarse, not hardcoded CPu)
+    out = tmp_path / "ctx.png"
+    assert os.path.exists(plot_units_on_atlas(
+        "BG_038", "12052025", "fr", _df([1., 5., 10., 20., 30., 45.], region_coarse="CTX"),
+        _art(), out, atlas=_atlas(), stage="Learning"))
 
 
 def test_lick_metrics_registered():

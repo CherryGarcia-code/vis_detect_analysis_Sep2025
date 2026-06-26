@@ -35,7 +35,7 @@ def _to_br(ap, ml, dv):
 
 def _build_scene(tracks_json, sites_csv, *, color_col="shank", cmap="viridis",
                  region="CP", hemisphere="left", radius=28, title=None,
-                 shader="cartoon", wireframe=False, root_alpha=0.06):
+                 shader="cartoon", wireframe=False, root_alpha=0.06, coarse_region=None):
     """Build a brainrender Scene with the brain, CP region, per-shank tracks and sites.
     Everything is a brainrender Points actor so tracks and sites share one coord frame."""
     settings.OFFSCREEN = True
@@ -72,6 +72,8 @@ def _build_scene(tracks_json, sites_csv, *, color_col="shank", cmap="viridis",
             sc.add(Points(br[::4], radius=12, colors=VIRIDIS4[idx % len(VIRIDIS4)], alpha=0.6))
 
     df = pd.read_csv(sites_csv)
+    if coarse_region and "region_coarse" in df.columns:   # e.g. cortical sites only (CTX)
+        df = df[df["region_coarse"] == coarse_region].reset_index(drop=True)
     coords = _to_br(df["ccf_ap"], df["ccf_ml"], df["ccf_dv"])
 
     if color_col == "shank" and "shank" in df.columns:
@@ -172,6 +174,9 @@ def main():
                     choices=["plastic", "glossy", "metallic", "shiny", "cartoon", "default"],
                     help="brain-surface style; 'cartoon' (default) = silhouette outlines")
     ap.add_argument("--wireframe", action="store_true", help="render the whole-brain outline as a mesh/wireframe")
+    ap.add_argument("--coarse-region", default=None,
+                    help="plot only sites in this coarse region (e.g. CTX); pair with --region to "
+                         "highlight the matching mesh (e.g. Isocortex)")
     ap.add_argument("--spin", action="store_true",
                     help="render a slow 360° rotation as an animated GIF (use a .gif --out)")
     ap.add_argument("--frames", type=int, default=160, help="number of frames for --spin (more = smoother)")
@@ -179,7 +184,7 @@ def main():
     a = ap.parse_args()
     scene_kw = dict(color_col=a.color_col, cmap=a.cmap, region=a.region,
                     hemisphere=a.hemisphere, radius=a.radius, shader=a.shader,
-                    wireframe=a.wireframe)
+                    wireframe=a.wireframe, coarse_region=a.coarse_region)
     if a.spin:
         out = render_spin(a.tracks, a.sites, a.out, frames=a.frames, fps=a.fps,
                           start_azimuth=a.azimuth, elevation=a.elevation, zoom=a.zoom, **scene_kw)
