@@ -236,7 +236,10 @@ def _point_rep(args):
 
 
 _DIAL_PUBLIC = {"v": "sharpness", "z": "itchiness", "u": "timing"}
-_RECOVER_JITTER_SD = {"v": 0.30, "z": 0.45, "u": 0.20}
+# matches the validated recovery test jitter
+# (test_decision_latents_generative.py:2393); narrower values tighten the bias/r
+# tolerances below what was validated.
+_RECOVER_JITTER_SD = {"v": 0.60, "z": 0.55, "u": 0.55}
 
 
 def run_point_recovery(regime, dlg, make_recovery_design, *, n_rep, n_trials,
@@ -634,6 +637,64 @@ def _jsonable(obj):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# Incremental checkpointing + resume
+# ════════════════════════════════════════════════════════════════════════════
+# The stages are expensive and the cluster job can time out / be preempted. We
+# write recovery_results.json after EVERY completed stage so a kill is never a
+# total loss, and resume from it on restart. Only the MAIN process ever writes.
+def _write_checkpoint(results, out_dir):
+    """Atomically write ``_jsonable(results)`` to ``recovery_results.json``.
+
+    Dump to a ``.tmp`` sibling then ``os.replace`` it onto the final path — the
+    replace is atomic on Linux + Windows, so a kill mid-write can never leave a
+    half-written / corrupt JSON behind.
+    """
+    final = os.path.join(out_dir, "recovery_results.json")
+    tmp = final + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(_jsonable(results), fh, indent=2)
+    os.replace(tmp, final)
+    print(f"[checkpoint] wrote {final}", flush=True)
+
+
+# The SCIENTIFIC-knob signature: the tuple of args that actually change the
+# numbers. ``cpus`` and ``out_dir`` are EXCLUDED — seeds are drawn in the master
+# process and the imap_unordered reduction is order-independent, so resuming on a
+# different core count is bit-identical.
+def _config_signature(args):
+    return (args.n_rep_point, args.n_rep_confusion, args.n_trials,
+            args.n_restarts, args.bootstrap, args.seed, args.quick)
+
+
+def _config_signature_from_dict(cfg_dict):
+    """Same tuple as ``_config_signature`` but from a loaded JSON ``config`` dict."""
+    return (cfg_dict.get("n_rep_point"), cfg_dict.get("n_rep_confusion"),
+            cfg_dict.get("n_trials"), cfg_dict.get("n_restarts"),
+            cfg_dict.get("bootstrap"), cfg_dict.get("seed"),
+            cfg_dict.get("quick"))
+
+
+# Numeric per-dial point fields that the gate/figure consume as floats. After a
+# JSON round-trip a NaN was serialised as ``null`` -> Python ``None``; coerce it
+# back to ``float('nan')`` on resume so ``np.isfinite`` (gate) and the figure get
+# floats, NOT None (which would raise / silently change a sub-check).
+_POINT_NUMERIC_FIELDS = ("r", "bias", "sd_true", "ccc", "ci_coverage")
+
+
+def _coerce_point_nans(point_results):
+    """In-place: turn JSON-null point metrics back into float('nan')."""
+    for reg, dials in (point_results or {}).items():
+        if not isinstance(dials, dict):
+            continue
+        for dial, metrics in dials.items():
+            if not isinstance(metrics, dict):
+                continue
+            for field in _POINT_NUMERIC_FIELDS:
+                if field in metrics and metrics[field] is None:
+                    metrics[field] = float("nan")
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # Main
 # ════════════════════════════════════════════════════════════════════════════
 def parse_args(argv=None):
@@ -645,8 +706,10 @@ def parse_args(argv=None):
                    help="point-recovery replicates per regime (gate: >=100)")
     p.add_argument("--n-rep-confusion", type=int, default=50,
                    help="confusion replicates per scenario per regime (gate: >=50)")
-    p.add_argument("--n-trials", type=int, default=2000,
-                   help="trials per synthetic anchor")
+    p.add_argument("--n-trials", type=int, default=800,
+                   help="trials per synthetic anchor (default 800 = the validated "
+                        "point-recovery config and above the 600-trial confusion "
+                        "floor; matches the real per-anchor operating point closely).")
     p.add_argument("--n-restarts", type=int, default=4,
                    help="fit_anchor random restarts (point: >=4)")
     p.add_argument("--cpus", type=int, default=os.cpu_count(),
@@ -670,7 +733,8 @@ def main(argv=None):
         args.n_restarts = min(args.n_restarts, 2)
         args.bootstrap = min(args.bootstrap, 8)
 
-    os.makedirs(args.out_dir, exist_ok=True)
+    out_dir = args.out_dir
+    os.makedirs(out_dir, exist_ok=True)
     dlg, make_recovery_design = preflight()
 
     print(f"[config] {'QUICK SMOKE' if args.quick else 'FULL'}  "
@@ -685,8 +749,43 @@ def main(argv=None):
     t_start = time.time()
     regimes = ["expert", "naive"]
 
-    # ── process pool (one shared pool for both point + confusion) ──
     n_workers = max(1, int(args.cpus))
+
+    # ── RESUME: load a prior checkpoint if one exists in this --out-dir ──
+    #    Only the MAIN process writes/reads it. The config signature (SCIENTIFIC
+    #    knobs only; cpus/out_dir excluded) must MATCH or we refuse — resuming a
+    #    different config into the same file would silently mix incompatible runs.
+    json_path = os.path.join(out_dir, "recovery_results.json")
+    resumed = False
+    if os.path.exists(json_path):
+        with open(json_path, encoding="utf-8") as fh:
+            prior = json.load(fh)
+        if _config_signature_from_dict(prior.get("config", {})) != _config_signature(args):
+            raise SystemExit(
+                f"REFUSING to resume: config in {json_path} differs from requested "
+                "args. Use a fresh --out-dir or delete the file.")
+        results = prior
+        resumed = True
+        for k in ("point", "confusion", "veto", "gate"):
+            results.setdefault(k, {})
+        results["veto"].setdefault("cond", {})
+        # coerce any JSON-null (NaN round-trip) back to nan in loaded point metrics
+        # so the gate/figure consume floats, not None.
+        _coerce_point_nans(results.get("point", {}))
+        # refresh metadata only (NOT any scientific sub-tree); keep loaded config.
+        results["meta"]["timestamp_utc"] = datetime.now(timezone.utc).isoformat()
+        results["meta"]["n_workers"] = n_workers
+        print(f"[resume] loaded {json_path}; skipping completed stages", flush=True)
+    else:
+        results = {"config": vars(args),
+                   "meta": {"timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                            "visdetect_file": dlg.__file__,
+                            "python": platform.python_version(),
+                            "numpy": np.__version__,
+                            "n_workers": n_workers},
+                   "point": {}, "confusion": {}, "veto": {}, "gate": {}}
+
+    # ── process pool (one shared pool for both point + confusion) ──
     pool = None
     if n_workers > 1:
         ctx = mp.get_context("spawn")  # safe on Windows + Linux
@@ -695,49 +794,58 @@ def main(argv=None):
     else:
         print("[pool] serial (cpus=1)", flush=True)
 
-    results = {"config": vars(args),
-               "meta": {"timestamp_utc": datetime.now(timezone.utc).isoformat(),
-                        "visdetect_file": dlg.__file__,
-                        "python": platform.python_version(),
-                        "numpy": np.__version__,
-                        "n_workers": n_workers},
-               "point": {}, "confusion": {}, "veto": {}, "gate": {}}
-
     try:
         # ── shrunk veto: regime-independent (tests the seeding) — compute ONCE ──
-        truediff_res = run_truediff(dlg, make_recovery_design,
-                                    n_trials=args.n_trials, seed=args.seed)
-        results["veto"]["truediff"] = truediff_res
+        #    Skip if already present (resumed); checkpoint after computing.
+        if "truediff" not in results["veto"]:
+            results["veto"]["truediff"] = run_truediff(
+                dlg, make_recovery_design, n_trials=args.n_trials, seed=args.seed)
+            _write_checkpoint(results, out_dir)
+        # the gate loop needs it whether fresh or loaded.
+        truediff_res = results["veto"]["truediff"]
 
         designs = {}
         for reg in regimes:
-            point_res, design, true_theta, ps = run_point_recovery(
-                reg, dlg, make_recovery_design,
-                n_rep=args.n_rep_point, n_trials=args.n_trials,
-                n_restarts=args.n_restarts, n_bootstrap=args.bootstrap,
-                seed=args.seed, pool=pool)
-            results["point"][reg] = point_res
-            designs[reg] = (design, true_theta, ps)
+            if reg not in results["point"]:
+                point_res, design, true_theta, ps = run_point_recovery(
+                    reg, dlg, make_recovery_design,
+                    n_rep=args.n_rep_point, n_trials=args.n_trials,
+                    n_restarts=args.n_restarts, n_bootstrap=args.bootstrap,
+                    seed=args.seed, pool=pool)
+                results["point"][reg] = point_res
+                designs[reg] = (design, true_theta, ps)
+                _write_checkpoint(results, out_dir)
+            else:
+                # resumed: cheaply rebuild the deterministic (design, true_theta,
+                # ps) triple the veto loop needs (identical by construction).
+                designs[reg] = tuple(make_recovery_design(
+                    reg, n_trials=args.n_trials, seed=args.seed))
 
         for reg in regimes:
-            conf_res = run_confusion(
-                reg, dlg, make_recovery_design,
-                n_rep=args.n_rep_confusion, n_trials=args.n_trials,
-                n_restarts=max(2, args.n_restarts), seed=args.seed, pool=pool)
-            results["confusion"][reg] = conf_res
+            if reg not in results["confusion"]:
+                conf_res = run_confusion(
+                    reg, dlg, make_recovery_design,
+                    n_rep=args.n_rep_confusion, n_trials=args.n_trials,
+                    n_restarts=max(2, args.n_restarts), seed=args.seed, pool=pool)
+                results["confusion"][reg] = conf_res
+                _write_checkpoint(results, out_dir)
 
+        results["veto"].setdefault("cond", {})
         for reg in regimes:
-            design, true_theta, ps = designs[reg]
-            cond_res = run_vetoes(
-                reg, design, true_theta, ps, dlg, make_recovery_design,
-                n_trials=args.n_trials, n_restarts=args.n_restarts,
-                seed=args.seed)
-            results["veto"].setdefault("cond", {})[reg] = cond_res
-
-            gate = dlg.recovery_gate(
-                results["point"][reg], results["confusion"][reg],
-                truediff_res, cond_res, regime=reg)
-            results["gate"][reg] = gate
+            # recompute only if BOTH the gate and the cond veto are missing — write
+            # cond + gate together so a half-done regime is never persisted.
+            if not (reg in results["gate"]
+                    and reg in results["veto"].get("cond", {})):
+                design, true_theta, ps = designs[reg]
+                cond_res = run_vetoes(
+                    reg, design, true_theta, ps, dlg, make_recovery_design,
+                    n_trials=args.n_trials, n_restarts=args.n_restarts,
+                    seed=args.seed)
+                results["veto"]["cond"][reg] = cond_res
+                results["gate"][reg] = dlg.recovery_gate(
+                    results["point"][reg], results["confusion"][reg],
+                    truediff_res, cond_res, regime=reg)
+                _write_checkpoint(results, out_dir)
     finally:
         if pool is not None:
             pool.close()

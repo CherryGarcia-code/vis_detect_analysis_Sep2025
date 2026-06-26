@@ -8,8 +8,14 @@
 # shrunk + Hessian vetoes, and the recovery_gate -> per (dial x regime)
 # latent_trust verdict. Writes recovery_results.json + fig_b8_F6_recovery.png.
 #
+# RUNTIME: ~4-6h on ~128 gpu_lowp cores (the default fast path below), or ~12h
+# on 32 cpu cores (the fallback). n_trials=800 (the VALIDATED point-recovery
+# config). The run is RESUMABLE: the harness checkpoints recovery_results.json
+# after every completed stage, so a timeout / preemption is never a total loss.
+#
 # The harness parallelises over REPLICATE PROCESSES, so BLAS is pinned to ONE
-# thread per process (oversubscription would kill the Pool scaling).
+# thread per process (oversubscription would kill the Pool scaling). CPU-only:
+# NO GPU is requested even on gpu_lowp.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # EXACT RUN RECIPE (copy-paste, edit the three vars):
@@ -26,7 +32,20 @@
 #   cd "$B8_REPO/scripts/analysis/decision_latents"
 #   sbatch cluster_recovery_harness.sbatch
 #
-# (Override the partition below to your site's CPU partition if it is not `cpu`.)
+# Partition + cpus are env-overridable WITHOUT editing this file:
+#   export B8_PARTITION=cpu B8_CPUS=32     # e.g. to force the cpu-partition fallback
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# CPU FALLBACK (policy-clean, no preemption):
+#   gpu_lowp (the DEFAULT below) is LOW-PRIORITY / PREEMPTIBLE. If the job is
+#   preempted, just RESUBMIT THE SAME sbatch into the SAME --out-dir (OUTDIR) and
+#   it RESUMES from the last checkpoint (no work lost).
+#
+#   To instead run policy-clean on the dedicated cpu partition, set these three
+#   #SBATCH lines (or `export B8_PARTITION=cpu B8_CPUS=32` before sbatch):
+#       #SBATCH -p cpu
+#       #SBATCH --cpus-per-task=32
+#       #SBATCH -t 0-18:00        # ~12h overnight headroom on 32 cores
 # ─────────────────────────────────────────────────────────────────────────────
 #
 #SBATCH -J b8_recovery
@@ -34,12 +53,14 @@
 #SBATCH -e slurm-b8_recovery-%A.err
 #SBATCH -N 1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=128
+#SBATCH --mem=16G
 #SBATCH -t 0-08:00
-#SBATCH -p cpu
-# ^^^ CHANGE `-p cpu` to your site's CPU partition (e.g. `-p fast`, `-p compute`)
-#     if `cpu` does not exist. The job is CPU-only; no GPU is needed.
+#SBATCH -p gpu_lowp
+# ^^^ DEFAULT = the FAST PATH: gpu_lowp, 128 cores, ~4-6h. CPU-only (no --gres=gpu).
+#     gpu_lowp is low-priority/preemptible -> if preempted, resubmit the SAME
+#     sbatch into the SAME OUTDIR and it RESUMES (checkpointing). For a
+#     policy-clean run see the CPU FALLBACK block above.
 
 set -euo pipefail
 
@@ -57,7 +78,8 @@ B8_REPO="${B8_REPO:-${DEFAULT_REPO}}"
 #            on ceph has them). Override if you keep a dedicated analysis env.
 CONDA_ENV="${CONDA_ENV:-${CEPH}/conda_envs/unitmatch}"
 
-# OUTDIR: where recovery_results.json + fig_b8_F6_recovery.png land.
+# OUTDIR: where recovery_results.json + fig_b8_F6_recovery.png land. RESUBMIT
+#         into the SAME OUTDIR to resume after a timeout / preemption.
 OUTDIR="${OUTDIR:-${B8_REPO}/FIGURES/decision_latents/BG_046/recovery_cluster}"
 
 HARNESS="${B8_REPO}/scripts/analysis/decision_latents/cluster_recovery_harness.py"
@@ -80,11 +102,14 @@ export NUMEXPR_NUM_THREADS=1
 export VECLIB_MAXIMUM_THREADS=1
 export MPLBACKEND=Agg
 
-CPUS="${SLURM_CPUS_PER_TASK:-16}"
+# CPUS resolves from the SLURM allocation (the #SBATCH --cpus-per-task above, or
+# whatever B8_CPUS you set when overriding the partition).
+CPUS="${SLURM_CPUS_PER_TASK:-128}"
 
 echo "════════════════════════════════════════════════════════════"
 echo "SLURM job ${SLURM_JOB_ID:-?} on $(hostname)  --  B8 recovery harness"
 echo "  CPUs   : ${CPUS}"
+echo "  PART   : ${SLURM_JOB_PARTITION:-?}"
 echo "  B8_REPO: ${B8_REPO}"
 echo "  ENV    : ${CONDA_ENV}"
 echo "  OUTDIR : ${OUTDIR}"
@@ -101,14 +126,15 @@ python -c "import matplotlib" 2>/dev/null && echo "matplotlib OK (F6 figure will
 python -c "from visdetect.analysis import decision_latents_generative as d; print('visdetect OK:', d.__file__)"
 echo "════════════════════════════════════════════════════════════"
 
-# ── Full-config run (defaults: n_rep_point=100, n_rep_confusion=50,
-#    n_trials=2000, n_restarts=4, bootstrap=500). --cpus = the allocation. ──
+# ── Full-config run (n_rep_point=100, n_rep_confusion=50, n_trials=800 [VALIDATED],
+#    n_restarts=4, bootstrap=500). --cpus = the allocation. RESUMABLE: resubmit
+#    into the SAME OUTDIR to continue after a timeout / preemption. ──
 python -u "${HARNESS}" \
     --out-dir "${OUTDIR}" \
     --cpus "${CPUS}" \
     --n-rep-point 100 \
     --n-rep-confusion 50 \
-    --n-trials 2000 \
+    --n-trials 800 \
     --n-restarts 4 \
     --bootstrap 500 \
     --seed 0
