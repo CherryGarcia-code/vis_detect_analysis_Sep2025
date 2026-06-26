@@ -191,17 +191,25 @@ def step_validate(paths: DantCurationPaths, subj: str = "BG_046") -> dict:
     reg = pd.read_csv(paths.registry_curation, dtype={"session": str})
     reg["uid"] = reg["dant_uid"].astype(int)
     # (uid, session) -> ks_unit_id, restricted to each track's kept sessions.
+    # NORMALIZE the join on session_date_key: curate_tracks.py reads the registry
+    # WITHOUT dtype=str, so pandas strips leading zeros and writes kept_sessions
+    # 7-digit ("8092025") for single-digit-day sessions, while here the registry is
+    # read as str (padded "08092025"). Raw string equality would silently drop the
+    # 14 single-digit-day sessions (~31% of pairs). See memory session-zfill issue.
+    lut = {(int(u), sjp.session_date_key(k)): int(ks)
+           for u, k, ks in zip(reg["uid"], reg["session"], reg["ks_unit_id"])}
     kept_pairs: Dict[Tuple[int, str], int] = {}
     for _, row in tracks.iterrows():
         uid = int(row["curated_uid"])
         for s in [s for s in str(row["kept_sessions"]).split(";") if s]:
-            m = reg[(reg["uid"] == uid) & (reg["session"] == s)]
-            if len(m):
-                kept_pairs[(uid, s)] = int(m.iloc[0]["ks_unit_id"])
+            ks = lut.get((uid, sjp.session_date_key(s)))
+            if ks is not None:
+                kept_pairs[(uid, s)] = ks
     holdout = collect_holdout_isi(kept_pairs, subj, paths.pkl_dir)
     result = tc.held_out_isi_auc_by_tier(tracks, holdout)
     write_validation_json(result, paths.out_dir)
-    print(f"[validate] held-out ISI AUC by tier: {result}", flush=True)
+    print(f"[validate] kept_pairs={len(kept_pairs)}; held-out ISI AUC by tier: {result}",
+          flush=True)
     return result
 
 

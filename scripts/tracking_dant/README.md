@@ -152,3 +152,27 @@ Pilot a few sheets before the full render:
 Re-render only (reuse the curate cache):
 
     ... curate_dant.py --steps render,summary
+
+## Inclusive-trusted re-tiering + dual validation (`inclusive_trusted.py`)
+
+Post-hoc re-tiers the existing `curated_tracks.csv` (NO sweep re-run, Expert-anchored
+order preserved) under a looser rule — `trusted = span>=3 AND <=1 warn kept-link`
+(bridges allowed) — then validates every tier on two INDEPENDENT axes:
+held-out ISI AUC (identity) and functional-PSTH AUC (matched cross-session vs random
+within-session, reusing `extract_unit_psths`). Also stratifies matched PSTH similarity
+by the earlier session's learning epoch, with a trial-count-robust baseline-only series.
+
+    <PRIMARY>/.venv/Scripts/python.exe scripts/tracking_dant/inclusive_trusted.py
+
+Outputs to `FIGURES/tracking_dant/BG_046/curation/`: `inclusive_trusted_validation.{csv,png}`.
+
+Result (BG_046): shipped-trusted 155 (ISI AUC 0.940) -> inclusive-trusted 287 (0.867);
+the 132 newly-promoted tracks sit at ISI AUC 0.818. Functional agreement is modest
+everywhere and declines into early learning (partly a trial-count artifact in the
+hit-trial-starved Naive sessions) -- lean identity claims on biophysics, treat PSTH
+shape as the signal that changes across learning.
+
+Session-token JOIN note: always match registry sessions to `kept_sessions` via
+`session_date_key` (NOT raw string ==). `curate_tracks.py` reads the registry without
+`dtype=str`, so it writes `kept_sessions` with leading zeros stripped ("8092025"); a
+raw-string join against the padded registry silently drops single-digit-day sessions.
