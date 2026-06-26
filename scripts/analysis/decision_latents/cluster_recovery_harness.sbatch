@@ -32,8 +32,8 @@
 #   cd "$B8_REPO/scripts/analysis/decision_latents"
 #   sbatch cluster_recovery_harness.sbatch
 #
-# Partition + cpus are env-overridable WITHOUT editing this file:
-#   export B8_PARTITION=cpu B8_CPUS=32     # e.g. to force the cpu-partition fallback
+# Partition / cpus / walltime are overridable AT SUBMIT TIME with sbatch CLI flags,
+# which take PRECEDENCE over the #SBATCH defaults below (see CPU FALLBACK) -- no edit.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # CPU FALLBACK (policy-clean, no preemption):
@@ -41,11 +41,10 @@
 #   preempted, just RESUBMIT THE SAME sbatch into the SAME --out-dir (OUTDIR) and
 #   it RESUMES from the last checkpoint (no work lost).
 #
-#   To instead run policy-clean on the dedicated cpu partition, set these three
-#   #SBATCH lines (or `export B8_PARTITION=cpu B8_CPUS=32` before sbatch):
-#       #SBATCH -p cpu
-#       #SBATCH --cpus-per-task=32
-#       #SBATCH -t 0-18:00        # ~12h overnight headroom on 32 cores
+#   To instead run policy-clean on the dedicated cpu partition, SUBMIT WITH CLI
+#   OVERRIDES (these BEAT the #SBATCH defaults below; no file edit needed):
+#       sbatch -p cpu --cpus-per-task=32 -t 0-18:00 cluster_recovery_harness.sbatch
+#       (~12h overnight on 32 cores; CPUS below auto-follows SLURM_CPUS_PER_TASK)
 # ─────────────────────────────────────────────────────────────────────────────
 #
 #SBATCH -J b8_recovery
@@ -102,8 +101,8 @@ export NUMEXPR_NUM_THREADS=1
 export VECLIB_MAXIMUM_THREADS=1
 export MPLBACKEND=Agg
 
-# CPUS resolves from the SLURM allocation (the #SBATCH --cpus-per-task above, or
-# whatever B8_CPUS you set when overriding the partition).
+# CPUS resolves from the SLURM allocation -- the #SBATCH --cpus-per-task above, or a
+# `sbatch --cpus-per-task=N` CLI override (both set SLURM_CPUS_PER_TASK).
 CPUS="${SLURM_CPUS_PER_TASK:-128}"
 
 echo "════════════════════════════════════════════════════════════"

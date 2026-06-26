@@ -853,10 +853,11 @@ def main(argv=None):
 
     results["meta"]["elapsed_s"] = round(time.time() - t_start, 1)
 
-    # ── write JSON ──
+    # ── write JSON (atomic tmp+os.replace, via the SAME _write_checkpoint used per
+    #    stage, so a kill during the FINAL write can't truncate the last good
+    #    checkpoint — the "a kill is never a total loss" guarantee holds end-to-end) ──
     json_path = os.path.join(args.out_dir, "recovery_results.json")
-    with open(json_path, "w", encoding="utf-8") as fh:
-        json.dump(_jsonable(results), fh, indent=2)
+    _write_checkpoint(results, out_dir)
     print(f"[json] wrote {json_path}", flush=True)
 
     # ── write F6 figure ──
