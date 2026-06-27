@@ -86,6 +86,11 @@ def main() -> int:
     ap.add_argument("--no-pair-scores", action="store_true",
                     help="skip the UM match-probability bar (avoids loading the large "
                          "prob_matrix; use to keep heavy I/O off the X: mount)")
+    ap.add_argument("--kept-only", action="store_true",
+                    help="render ONLY the kept sessions (drop trimmed/removed rows from "
+                         "all panels). Cleaner page-2 heatmap colors for heavily-trimmed "
+                         "tracks (dropped rows otherwise pin the diverging colormap "
+                         "extremes). Default keeps dropped rows (dimmed/red).")
     args = ap.parse_args()
     subj = args.subject
     cur_dir = sjp.curation_out_dir(subj)
@@ -184,10 +189,14 @@ def main() -> int:
                                   suspect_known=False, sessions=kept_recs)
         m = compute_uid_metrics(kept_iv)
         out = args.out_dir / f"{args.tier}_uid{u}_span{len(kept_recs)}.pdf"
-        write_uid_pdf(out, iv, pair_scores.get(u),
+        # --kept-only: feed the kept-only intermediate so dropped sessions vanish from
+        # every panel (no red dropped-rows compressing the page-2 colormap).
+        render_iv = kept_iv if args.kept_only else iv
+        render_dropped = None if args.kept_only else (dropped_idx or None)
+        write_uid_pdf(out, render_iv, pair_scores.get(u),
                       isi_score=m["isi_hist_corr"], depth_std=m["depth_std_um"],
                       wave_corr=m["wave_corr"], fr_cv_val=m["fr_cv"],
-                      dropped_indices=dropped_idx or None,
+                      dropped_indices=render_dropped,
                       n_kept=len(kept_recs), trimmed_verdict=args.tier)
         n += 1
         print(f"  wrote {out.name} (kept {len(kept_recs)}/{len(iv.sessions)})", flush=True)
