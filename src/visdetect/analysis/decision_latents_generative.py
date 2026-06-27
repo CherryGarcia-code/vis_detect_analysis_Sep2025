@@ -1905,13 +1905,17 @@ def recover_true_difference(design_naive, design_expert, param_spec, true_delta,
 
     where each anchor's recovered dial value is the MEAN over moods of that anchor's
     fitted dial (so the comparison is at the dial level, matching ``true_delta``
-    which is keyed by dial). A dial is judged **crushed** when its recovered
-    magnitude falls below HALF the true magnitude::
+    which is keyed by dial). Each dial is judged **crushed** (PER DIAL) when its
+    recovered magnitude falls below HALF the true magnitude::
 
-        shrunk = any(|recovered_delta[d]| < 0.5 * |true_delta[d]|  for d in true_delta)
+        shrunk[d] = (|recovered_delta[d]| < 0.5 * |true_delta[d]|)   for each d
 
-    so ``shrunk == True`` means the prior erased (at least one) genuine difference —
-    the failure mode this guardrail exists to catch.
+    so ``shrunk[d] == True`` means the prior erased THAT dial's genuine difference.
+    The veto is PER-DIAL on purpose (gate_criteria.md line 11: "shrunk == True ->
+    *that dial* 'descriptive'"): a scalar ``any()`` would let one crushed dial (e.g.
+    the weakly-identified sharpness ``v``) veto every dial in the sweep, wrongly
+    downgrading well-recovered dials (``z``/``u``) whose own across-stage difference
+    was NOT crushed. :func:`recovery_gate` accepts this per-dial mapping directly.
 
     Parameters
     ----------
@@ -1936,10 +1940,10 @@ def recover_true_difference(design_naive, design_expert, param_spec, true_delta,
     Returns
     -------
     dict
-        ``{"recovered_delta": {dial: float}, "shrunk": bool}`` where
+        ``{"recovered_delta": {dial: float}, "shrunk": {dial: bool}}`` where
         ``recovered_delta[dial] == recovered_expert - recovered_naive`` (mean over
-        moods) for each dial in ``true_delta``, and ``shrunk`` is the crushed-flag
-        above.
+        moods) for each dial in ``true_delta``, and ``shrunk[dial]`` is that dial's
+        crushed-flag (PER DIAL — see above).
 
     Notes
     -----
@@ -1968,15 +1972,16 @@ def recover_true_difference(design_naive, design_expert, param_spec, true_delta,
         return float(np.mean(vals)) if vals else float("nan")
 
     recovered_delta = {}
-    shrunk = False
+    shrunk = {}
     for dial, td in true_delta.items():
         rd = _rec_dial(fit_expert, dial) - _rec_dial(fit_naive, dial)
         recovered_delta[dial] = rd
-        # crushed: recovered magnitude is below HALF the true magnitude
-        if abs(rd) < 0.5 * abs(float(td)):
-            shrunk = True
+        # crushed PER DIAL: recovered magnitude below HALF the true magnitude.
+        # A per-dial mapping (NOT a scalar any()) so one crushed dial cannot veto
+        # the others — gate_criteria.md L11 "shrunk -> THAT dial 'descriptive'".
+        shrunk[dial] = bool(abs(rd) < 0.5 * abs(float(td)))
 
-    return {"recovered_delta": recovered_delta, "shrunk": bool(shrunk)}
+    return {"recovered_delta": recovered_delta, "shrunk": shrunk}
 
 
 # ── Recovery gate (Task 3.5) — per-dial generative/descriptive trust ─────────

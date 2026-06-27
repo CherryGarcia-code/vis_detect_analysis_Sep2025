@@ -2890,7 +2890,8 @@ def test_recover_true_difference_recovers_identifiable_z_delta(capsys):
 
     # structure
     assert set(rec.keys()) == set(true_delta.keys())
-    assert isinstance(out["shrunk"], bool)
+    assert isinstance(out["shrunk"], dict)               # PER-DIAL mapping
+    assert set(out["shrunk"].keys()) == set(true_delta.keys())
 
     td = true_delta["z"]
     rd = rec["z"]
@@ -2906,16 +2907,16 @@ def test_recover_true_difference_recovers_identifiable_z_delta(capsys):
         f"0.3*|true| = {tol:.4f}: the seeded fit did not recover the difference")
 
     # ── (3) NOT crushed: the prior informed but did NOT erase the difference ──
-    assert out["shrunk"] is False, (
-        f"shrunk==True: the L2 prior crushed an identifiable, recoverable "
+    assert out["shrunk"]["z"] is False, (
+        f"shrunk['z']==True: the L2 prior crushed an identifiable, recoverable "
         f"difference at l2=1.0 (recovered {rd:+.4f} < 0.5*|true {td:+.4f}|) — "
         f"a real finding if it persists; do NOT loosen the tolerance")
 
 
 def test_recover_true_difference_shrunk_flag_logic():
-    """`shrunk` is purely a function of recovered vs true delta:
-    shrunk == any(|recovered_delta[d]| < 0.5*|true_delta[d]|). A small recovered
-    delta against a large true delta -> shrunk True; a faithful one -> False.
+    """`shrunk` is a PER-DIAL mapping, purely a function of recovered vs true delta:
+    shrunk[d] == (|recovered_delta[d]| < 0.5*|true_delta[d]|). A small recovered
+    delta against a large true delta -> shrunk[d] True; a faithful one -> False.
 
     Asserted WITHOUT a fit by monkeypatching the per-anchor fit to return fixed
     dials, so the flag logic itself is pinned independently of recovery noise."""
@@ -2948,7 +2949,7 @@ def test_recover_true_difference_shrunk_flag_logic():
         out = dlg.recover_true_difference(
             design_naive, design_expert, ps, {"v": 1.0}, l2=1.0, seed=0)
     assert abs(out["recovered_delta"]["v"] - 0.1) < 1e-9
-    assert out["shrunk"] is True, "small recovered delta vs large true -> shrunk"
+    assert out["shrunk"]["v"] is True, "small recovered delta vs large true -> shrunk"
 
     # a faithful recovery (delta 1.0 recovered as 0.9) -> NOT shrunk
     def _fake_fit_faithful(design, param_spec, seed_theta=None, l2=0.0, **kw):
@@ -2966,7 +2967,68 @@ def test_recover_true_difference_shrunk_flag_logic():
         out2 = dlg.recover_true_difference(
             design_naive, design_expert, ps, {"v": 1.0}, l2=1.0, seed=0)
     assert abs(out2["recovered_delta"]["v"] - 0.9) < 1e-9
-    assert out2["shrunk"] is False
+    assert out2["shrunk"]["v"] is False
+
+
+def test_recover_true_difference_shrunk_is_per_dial_not_global(capsys):
+    """REGRESSION (cluster verdict, Jun 2026): `shrunk` must be PER DIAL so one
+    crushed dial does NOT veto the others. This is the exact cluster scenario:
+    sharpness (v) gets crushed by the L2 prior while caution (z) and timing (u)
+    recover their across-stage difference faithfully. A scalar any() would mark the
+    whole sweep shrunk and (via recovery_gate) downgrade z+u to 'descriptive' even
+    though their own differences were NOT crushed -> the artifact we are fixing."""
+    ps = dlg.ParamSpec(moods=("Impulsive", "StimSens"),
+                       dials=("v", "z", "u"), state_terms=("v", "z", "u"))
+    d_n, theta_n = _ramp_anchor_design(0.4, n_trials=20, seed=1)
+    d_e, theta_e = _ramp_anchor_design(1.4, n_trials=20, seed=1)
+    eb_n, lk_n, cs_n = dlg.simulate_licks(d_n, theta_n, ps, seed=1)
+    eb_e, lk_e, cs_e = dlg.simulate_licks(d_e, theta_e, ps, seed=2)
+    design_naive = dlg.design_with_outcomes(d_n, eb_n, lk_n, cs_n)
+    design_expert = dlg.design_with_outcomes(d_e, eb_e, lk_e, cs_e)
+
+    import unittest.mock as _mock
+
+    # true_delta = {v:1.0, z:-0.85, u:0.05} (the cluster shape). Fits: v CRUSHED
+    # (naive 1.0 -> expert 1.1, recovered 0.1 << 0.5*1.0); z FAITHFUL (recovered
+    # -0.83 ~ true -0.85); u not crushable (true ~0).
+    def _fake_fit(design, param_spec, seed_theta=None, l2=0.0, **kw):
+        is_expert = seed_theta is None
+        v = 1.1 if is_expert else 1.0          # recovered v delta = 0.1 (crushed)
+        z = -4.83 if is_expert else -4.0       # recovered z delta = -0.83 (faithful)
+        u = 0.33 if is_expert else 0.30        # recovered u delta = 0.03
+        dials = {m: {"sharpness": v, "itchiness": z, "timing": u}
+                 for m in param_spec.moods}
+        theta = np.array([v, v, z, z, u, u], float)
+        return dlg.FitResult(theta=theta, dials=dials, ll=0.0,
+                             n_params=param_spec.n_params(), cov=None,
+                             hessian=np.eye(param_spec.n_params()), hessian_cond=1.0)
+
+    with _mock.patch.object(dlg, "fit_anchor", _fake_fit):
+        out = dlg.recover_true_difference(
+            design_naive, design_expert, ps,
+            {"v": 1.0, "z": -0.85, "u": 0.05}, l2=1.0, seed=0)
+
+    with capsys.disabled():
+        print(f"\n[shrunk per-dial] {out['shrunk']}  recovered={out['recovered_delta']}")
+
+    # PER-DIAL: only v crushed; z and u NOT crushed
+    assert out["shrunk"]["v"] is True,  "v delta crushed (0.1 << 0.5*1.0)"
+    assert out["shrunk"]["z"] is False, "z delta recovered faithfully -> NOT crushed"
+    assert out["shrunk"]["u"] is False, "u recovered magnitude exceeds 0.5*|tiny true|"
+
+    # and recovery_gate must veto ONLY sharpness, not caution/timing, on this shrunk
+    point_ok = {d: {"r": 0.95, "bias": 0.0, "sd_true": 0.5, "ccc": 0.9,
+                    "ci_coverage": 0.95, "n_pairs": 200} for d in
+                ("sharpness", "itchiness", "timing")}
+    conf_ok = {"matrix": [[0.9, 0.0, 0.0], [0.0, 0.9, 0.0], [0.0, 0.0, 0.9]],
+               "labels": ["sharpness", "caution", "timing"], "no_single": {},
+               "n_rep": 50}
+    cond_ok = {"deficient": False, "cond_number": 50.0, "rank": 6}
+    g = dlg.recovery_gate(point_ok, conf_ok, out, cond_ok, regime="expert")
+    pdt = g["per_dial_trust"]
+    assert pdt["caution"] == "generative", "caution must NOT be vetoed by v's shrink"
+    assert pdt["timing"] == "generative", "timing must NOT be vetoed by v's shrink"
+    assert pdt["sharpness"] == "descriptive", "sharpness IS shrunk -> descriptive"
 
 
 # ════════════════════════════════════════════════════════════════════════════
