@@ -1122,7 +1122,7 @@ def _ladder_rung_inits(rung, param_spec, n_anchors, n_restarts, seed):
     init followed by ``n_restarts`` Normal(0,1) draws from a single
     ``np.random.default_rng(seed)`` stream. Factored out so the SEQUENTIAL and the
     (rung x restart) PARALLEL paths share EXACTLY the same inits -> byte-identical
-    results regardless of ``n_jobs``.
+    results regardless of ``n_workers``.
     """
     total_len, _shared, _anchor = _ladder_layout(rung, param_spec, n_anchors)
     rng = np.random.default_rng(seed)
@@ -1304,7 +1304,7 @@ def _ladder_rung_cvll(rung, designs, param_spec, k=5, seed=0, n_restarts=2):
 
 
 # ── Engine-A ladder parallelism (process-pool workers; contract §A.10) ─────────
-# Module-level (picklable) workers so ``learning_ladder(n_jobs>1)`` can fan the
+# Module-level (picklable) workers so ``learning_ladder(n_workers>1)`` can fan the
 # 5 rungs' in-sample restarts out across processes. The designs + param_spec are
 # in-memory and PICKLABLE (audit-verified), so we send them to the workers
 # directly — NO session reloading (which would hit the X: gateway). Determinism is
@@ -1325,22 +1325,22 @@ def _ll_cvll_worker(args):
     return rung, _ladder_rung_cvll(rung, designs, param_spec, k=k, seed=seed)
 
 
-def _make_process_pool(n_jobs):
-    """A spawn-context ProcessPoolExecutor (Windows-safe), or None if n_jobs<=1.
+def _make_process_pool(n_workers):
+    """A spawn-context ProcessPoolExecutor (Windows-safe), or None if n_workers<=1.
 
     Late import of ``concurrent.futures`` / ``multiprocessing`` so importing this
     module stays cheap. ``spawn`` is the safe start method on Windows AND Linux
     (mirrors ``cluster_recovery_harness.py``)."""
-    if int(n_jobs) <= 1:
+    if int(n_workers) <= 1:
         return None
     import multiprocessing as _mp
     from concurrent.futures import ProcessPoolExecutor
-    return ProcessPoolExecutor(max_workers=int(n_jobs),
+    return ProcessPoolExecutor(max_workers=int(n_workers),
                                mp_context=_mp.get_context("spawn"))
 
 
 def learning_ladder(anchor_designs, param_spec, dt=0.05, k=5, seed=0,
-                    n_restarts=4, return_ll=False, compute_cvll=True, n_jobs=1):
+                    n_restarts=4, return_ll=False, compute_cvll=True, n_workers=1):
     """Which dial moves across anchors? Model-comparison ladder (Task 2.2).
 
     Plain English: the science question is *which* behavioural knob learning turns
@@ -1409,7 +1409,7 @@ def learning_ladder(anchor_designs, param_spec, dt=0.05, k=5, seed=0,
         does NOT depend on CV-LL, so callers that only need the winner (e.g.
         :func:`recover_confusion`) pass ``compute_cvll=False`` for a large speedup;
         in that case ``out["cvll"]`` maps every rung to ``np.nan``.
-    n_jobs : int
+    n_workers : int
         Process-parallelism for the (expensive) rung fits (default 1 = sequential,
         BYTE-IDENTICAL to the pre-parallel behaviour). When ``> 1`` the in-sample
         rung fits are flattened to (rung x restart) jobs and run across a
@@ -1418,7 +1418,7 @@ def learning_ladder(anchor_designs, param_spec, dt=0.05, k=5, seed=0,
         ``compute_cvll``) is fanned out one rung per job. Determinism is preserved:
         each restart uses the EXACT same pre-generated init (parent-side, one seeded
         RNG stream per rung) and the restart reduction tiebreaks on init index, so
-        the ``winner`` and ALL returned numbers are independent of ``n_jobs`` and of
+        the ``winner`` and ALL returned numbers are independent of ``n_workers`` and of
         worker arrival order. NO session loading happens in workers (designs are
         sent in-memory, picklable) — the X: gateway is never touched.
 
@@ -1436,13 +1436,13 @@ def learning_ladder(anchor_designs, param_spec, dt=0.05, k=5, seed=0,
 
     # ── per-rung inits + objectives, generated ONCE in the parent (deterministic).
     # The same inits are used by both the sequential and the parallel path, so the
-    # restart reduction is byte-identical regardless of n_jobs.
+    # restart reduction is byte-identical regardless of n_workers.
     rung_inits = {r: _ladder_rung_inits(r, param_spec, n_anchors, n_restarts, seed)
                   for r in _LADDER_RUNGS}
     rung_objectives = {r: _ladder_rung_objective(r, designs, param_spec)
                        for r in _LADDER_RUNGS}
 
-    pool = _make_process_pool(n_jobs)
+    pool = _make_process_pool(n_workers)
     try:
         # ── in-sample rung fits: flatten to (rung x restart) jobs when parallel ──
         ll_by_rung = {}

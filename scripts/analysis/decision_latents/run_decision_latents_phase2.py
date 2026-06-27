@@ -359,12 +359,12 @@ def parse_args(argv=None):
     p.add_argument("--l2", type=float, default=1.0,
                    help="ridge strength toward the more-expert neighbour in the "
                         "backward sweep (default 1.0).")
-    p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2),
+    p.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2),
                    help="process-parallel workers for the (CPU-bound) ladders: the "
                         "per-anchor STATE ladders and the LEARNING ladder's rung x "
                         "restart fits (default cpu_count-2). Session LOADING and the "
                         "backward sweep stay SEQUENTIAL (gateway + true dependency). "
-                        "Results are byte-identical regardless of --jobs (same seeds).")
+                        "Results are byte-identical regardless of --workers (same seeds).")
     p.add_argument("--with-cvll", action="store_true",
                    help="ALSO compute the k-fold cross-validated LL on BOTH ladders "
                         "(SLOW: k refits per rung, single-threaded over ~30 anchors "
@@ -499,29 +499,29 @@ def main(argv=None):
         anchor_designs, anchors_chrono, param_spec, l2=args.l2)
     print(f"[sweep] fit {len(anchor_fits)} anchors.")
 
-    n_jobs = max(1, int(args.jobs))
+    n_workers = max(1, int(args.workers))
     print(f"[ladder] learning ladder (which dial moves with learning; "
-          f"compute_cvll={compute_cvll}; n_jobs={n_jobs}) ...", flush=True)
+          f"compute_cvll={compute_cvll}; n_workers={n_workers}) ...", flush=True)
     learn = dlg.learning_ladder(anchor_designs, param_spec,
                                 compute_cvll=compute_cvll, n_restarts=n_restarts,
-                                n_jobs=n_jobs)
+                                n_workers=n_workers)
     print(f"[ladder] LEARNING winner = {learn['winner']}")
     print("         AIC: " + "  ".join(f"{k}={v:.1f}" for k, v in learn["aic"].items()))
 
     # ── state ladders: one INDEPENDENT job per anchor (the biggest parallel win) ──
     # Collect BY KEY (sname), never by arrival order, so the dict is deterministic.
     print(f"[ladder] state ladders over {len(anchor_designs)} anchors "
-          f"(n_jobs={n_jobs}) ...", flush=True)
+          f"(n_workers={n_workers}) ...", flush=True)
     state_ladders = {}
     sl_tasks = [(sname, design, param_spec, n_restarts, compute_cvll, 0)
                 for sname, design in anchor_designs.items()]
-    if n_jobs <= 1 or len(sl_tasks) <= 1:
+    if n_workers <= 1 or len(sl_tasks) <= 1:
         for t in sl_tasks:
             sname, sl = _state_ladder_worker(t)
             state_ladders[sname] = sl
     else:
         ctx = multiprocessing.get_context("spawn")  # Windows-safe
-        with ProcessPoolExecutor(max_workers=min(n_jobs, len(sl_tasks)),
+        with ProcessPoolExecutor(max_workers=min(n_workers, len(sl_tasks)),
                                  mp_context=ctx) as ex:
             for sname, sl in ex.map(_state_ladder_worker, sl_tasks):
                 state_ladders[sname] = sl
