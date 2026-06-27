@@ -176,3 +176,29 @@ Session-token JOIN note: always match registry sessions to `kept_sessions` via
 `session_date_key` (NOT raw string ==). `curate_tracks.py` reads the registry without
 `dtype=str`, so it writes `kept_sessions` with leading zeros stripped ("8092025"); a
 raw-string join against the padded registry silently drops single-digit-day sessions.
+
+## Exploration: comparing DANT vs UnitMatch + tracker-design experiments
+
+Read-only/analysis scripts written while evaluating DANT against UM and prototyping a
+from-scratch tracker. All reuse existing components; outputs land under
+`FIGURES/tracking_dant/BG_046/` (gitignored). Findings live in the `*_findings.md` /
+`*.csv` they emit.
+
+- `corroborator_compare.py` — re-curates DANT WITH the functional corroborator ON (fair
+  vs UM). Result: 155->48 trusted, held-out ISI AUC 0.940->0.953 — DANT ≈ UM once gated
+  the same way (UM's edge was the functional gate, not the tracker).
+- `prototype_rescorer.py` (+ `tests/.../test_prototype_rescorer.py`) — v1 of a
+  self-supervised within-session half-split identity metric + anatomy prior, re-scoring
+  UM∪DANT edges, validated leakage-free on held-out ISI. v1 is not a standalone win
+  (clean cross-feature signal ~0.58) but cleanly flags UM over-links (consensus high,
+  UM-only low). v2 TODO: drift-corrected footprint + global min-cost-flow assignment.
+- `laser_fingerprint_test.py` — optotag laser response as an identity axis, SCALAR
+  summary (latency/magnitude/collision). 0.738 AUC for the salt-responsive minority, but
+  yield-capped (97/4069 respond) -> niche anchor, not backbone.
+- `laser_psth_fingerprint.py` — richer laser-locked PSTH-SHAPE fingerprint for ALL units.
+  1237/2663 units have a structured pulse-locked pattern, BUT the shape doesn't reproduce
+  across sessions (matched r~0.03, AUC 0.56-0.59) -> too session-variable to fingerprint
+  single neurons (likely opsin/laser/SNR drift). Coarse cell-type class only.
+- `composite_retier.py` — counts DANT review tracks that are composite-pristine (the
+  4 whole-track badges all pass, like dant_uid 631 = UM's uid_0942) but were demoted by
+  the link-by-link warn rule. Motivates tiering on composite consistency, not link warns.
