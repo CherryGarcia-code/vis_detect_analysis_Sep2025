@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
-"""Validate the composite-verdict re-tiering on the INDEPENDENT held-out ISI axis.
+"""Validate the composite-verdict re-tiering on the held-out ISI axis.
 
-composite_retier.py found 411 "hidden gems" (curation=review but composite=trusted).
-Composite-trusted is a looser bar than the link-by-link sweep, so the question is whether
-these extra tracks are REAL. This computes held-out ISI AUC for three groups:
+composite_retier.py flags "hidden gems" (curation=review but the 4-badge BIOPHYSICAL
+composite passes). Composite-trusted is a looser bar than the link-by-link sweep, so the
+question is whether these extra tracks are REAL. This computes held-out ISI AUC for three
+groups:
   link_trusted  — curation tier == trusted (the 155 already reported)
-  hidden_gem    — curation review BUT composite verdict trusted (the 411)
+  hidden_gem    — curation review BUT composite verdict trusted
   other         — everything else
-If hidden_gem AUC ~= link_trusted AUC, the under-reporting is real and validated.
+If hidden_gem AUC ~= link_trusted AUC, the under-reporting is corroborated.
+
+⚠️ INDEPENDENCE CAVEAT: the held-out axis uses the ODD ISI partition, disjoint from the
+EVEN partition used as the curation ISI feature — so it is QUASI-independent (even/odd are
+autocorrelated estimates of one stationary ISI fingerprint, and the tier is partly
+ISI-gated). It is the best available independent-ish check but is NOT a fully orthogonal
+axis; no ISI-ablation is run here (see prototype_rescorer.py for the ablation logic).
 
 Reuses cd.collect_holdout_isi + tc.held_out_isi_auc_by_tier. One session pass.
 """
@@ -53,7 +60,7 @@ def main() -> int:
     res = tc.held_out_isi_auc_by_tier(df, holdout)
 
     counts = df["confidence_tier"].value_counts().to_dict()
-    print("\n=== held-out ISI AUC by group (independent axis) ===", flush=True)
+    print("\n=== held-out ISI AUC by group (odd-partition; quasi-independent) ===", flush=True)
     for grp in ["link_trusted", "hidden_gem", "other"]:
         r = res.get(grp, {})
         print(f"  {grp:13s} n={counts.get(grp,0):4d}  AUC={r.get('auc', float('nan')):.3f}  "

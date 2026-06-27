@@ -4,12 +4,20 @@ pristine cells the link-by-link tiering wrongly demoted?
 
 The curation sweep tiers link-by-link (any single warn link or bridge -> review). But a
 long track can be GLOBALLY pristine (overall waveform r=0.99, FR CV<0.2) yet have one or
-two noisy transitions. The QC-sheet header already shows a separate "composite verdict"
-(composite_verdict over the 4 whole-track badges) — e.g. dant_uid 631 reads composite
-TRUSTED but curation tier review. This counts those "hidden gems".
+two noisy transitions. This counts those "hidden gems" with a whole-track verdict.
 
-Reuses the EXACT renderer extraction + badges so the verdict matches the sheets:
-extract_session_records -> compute_uid_metrics -> badge_* -> composite_verdict.
+VERDICT DEFINITION (NOT identical to the QC-sheet header verdict): we use a 4-badge
+BIOPHYSICAL composite over [badge_isi_hist_corr(isi-hist shape), badge_depth, badge_waveform,
+badge_fr]. This INTENTIONALLY differs from the renderer's authoritative verdict
+(build_qc_sheets), which uses 6 badges (adds badge_func_resp + a median-ISI badge_isi) and
+then promotes via apply_isi_autopass. We deliberately EXCLUDE the functional badge (it would
+re-introduce the PSTH->identity circularity this whole effort is trying to avoid) and the
+median-ISI/autopass step (its isi_scores input comes from validate_long_tracks, not from
+compute_uid_metrics). So read the output as "review tracks that pass the 4 core BIOPHYSICAL
+badges", a biophysical-identity proxy — NOT "the sheet says trusted". The downstream held-out
+ISI validation (validate_composite.py) is what actually certifies these are real, and it does
+not depend on this verdict being renderer-exact.
+Reuses extract_session_records -> compute_uid_metrics -> badge_* -> composite_verdict.
 Run from the worktree root with the analysis interpreter (loads each session once).
 """
 from __future__ import annotations
@@ -42,7 +50,7 @@ def main() -> int:
     import _subject_paths as sjp
     from visdetect.analysis.tracking_qc import (
         extract_session_records, load_channel_positions, UIDIntermediate,
-        badge_isi, badge_depth, badge_waveform, badge_fr, composite_verdict)
+        badge_isi_hist_corr, badge_depth, badge_waveform, badge_fr, composite_verdict)
     from visdetect.core.session import load_session
     from build_qc_sheets import compute_uid_metrics
 
@@ -98,7 +106,7 @@ def main() -> int:
         kiv = UIDIntermediate(global_uid=u, span=len(kr), has_naive_to_expert=False,
                               suspect_known=False, sessions=kr)
         m = compute_uid_metrics(kiv)
-        bs = [badge_isi(m["isi_hist_corr"]), badge_depth(m["depth_std_um"]),
+        bs = [badge_isi_hist_corr(m["isi_hist_corr"]), badge_depth(m["depth_std_um"]),
               badge_waveform(m["wave_corr"]), badge_fr(m["fr_cv"])]
         rows.append(dict(curated_uid=u, curation_tier=tier_by_uid[u], span=len(kr),
                          composite_verdict=composite_verdict(bs),

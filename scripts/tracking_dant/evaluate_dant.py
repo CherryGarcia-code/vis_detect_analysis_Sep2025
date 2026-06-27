@@ -1,6 +1,15 @@
 """Evaluate DANT tracking on BG_046: yield + survival vs UnitMatch, co-membership agreement,
 and a held-out ISI-fingerprint AUC. Saves presentation-ready figures + a summary JSON.
 
+⚠️ CAVEAT (pre-merge audit, Jun 2026): the DANT-vs-UM MEAN-TRACKED-LENGTH / survival
+comparison is biased and OVERSTATES DANT's length advantage. DANT only emits multi-session
+(>=2) clusters, whereas melt_cellregistry assigns a um_uid to EVERY unit, so ~80% of UM
+UIDs are length-1 singletons that drag UM's mean down. The "~2x longer" framing is an
+apples-to-oranges artifact of that singleton asymmetry; the matched-pool fix does not fully
+cure it. The TRACKER-QUALITY conclusion does NOT rely on this — it rests on the held-out
+ISI-fingerprint AUC (DANT ~0.94 vs UM ~0.96, comparable), which is unaffected. Read the
+length/survival panels as descriptive, not as a head-to-head win.
+
 Run with ANALYSIS_PY from the worktree root.
 """
 import argparse

@@ -6,12 +6,18 @@ links AND zero bridges -> any single warn/bridge demotes an otherwise-long clean
 track to review, pinning trusted near the span-3 floor. This script re-tiers the
 EXISTING curated tracks under a looser "inclusive-trusted" rule (span>=3 AND
 <=max_warn warn-flagged kept links; bridges allowed) WITHOUT re-running the sweep,
-then validates every tier on two INDEPENDENT axes:
+then validates every tier on two axes (NOTE their independence differs):
 
-  * held-out ISI AUC  (identity fingerprint, same as the canonical validation)
+  * held-out ISI AUC  (identity fingerprint, even/odd partition split). This is the
+    PRIMARY precision axis. Caveat: even/odd partitions are autocorrelated estimates of
+    one stationary ISI distribution, and the tier itself is partly ISI-gated (the warn
+    flag uses badge_isi_hist_corr), so it is QUASI-independent, not fully independent.
   * functional-PSTH AUC (matched cross-session vs random within-session PSTH
-    similarity) -- the paper-consistent use of task PSTHs as a validation axis,
-    NOT an identity feature.
+    similarity) -- CORROBORATIVE BUT ENTANGLED, not independent: the warn flags that
+    define the tier are set partly by badge_func_resp (cross-session in-zone PSTH
+    similarity), so this axis partly re-confirms the rule it validates. (Mitigation:
+    here we pool ALL trials whereas the corroborator used in-zone-restricted trials, so
+    it's partial not trivial self-prediction.) Treat held-out ISI as primary.
 
 Reads only the canonical curation outputs + the session pkls (loaded once); writes
 to FIGURES/tracking_dant/BG_046/curation/. Touches no shared pipeline code.
@@ -21,6 +27,7 @@ Run from the worktree root with the analysis interpreter:
 """
 from __future__ import annotations
 
+import gc
 import json
 import sys
 from itertools import combinations
@@ -156,7 +163,7 @@ def collect_isi_and_psth(kept_pairs: Dict[Tuple[int, str], int], subj: str, pkl_
             holdout[(uid, s)] = hold
             psths = extract_unit_psths(S, int(kid))
             psth_fp[(uid, s)] = {k: v[0] for k, v in psths.items() if v[0] is not None}
-        del S
+        del S; gc.collect()
         print(f"  {sess}: features extracted", flush=True)
     return holdout, psth_fp
 
@@ -343,7 +350,7 @@ def _plot(out: pd.DataFrame, n_orig: int, n_inc: int, n_new: int,
     ax1.axhline(0.5, color="k", lw=0.8, ls=":", label="chance")
     ax1.set_xticks(x); ax1.set_xticklabels([g[2] for g in groups], fontsize=8)
     ax1.set_ylim(0.4, 1.0); ax1.set_ylabel("AUC (matched vs random)")
-    ax1.set_title("Precision: two independent axes")
+    ax1.set_title("Precision: held-out ISI (quasi-indep.) + functional (entangled)")
     ax1.legend(frameon=False, fontsize=8)
 
     # Panel 3: matched PSTH similarity vs learning epoch -- two series. If 'all'

@@ -15,6 +15,7 @@ Run from the worktree root with the analysis interpreter:
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import subprocess
@@ -180,7 +181,7 @@ def collect_holdout_isi(kept_pairs: Dict[Tuple[int, str], int], subj: str,
                 continue
             _, hold = tc.partitioned_isi_hists(np.asarray(cmap[kid].spike_times))
             holdout[(uid, s)] = hold
-        del S
+        del S; gc.collect()
     return holdout
 
 
@@ -257,7 +258,7 @@ def plot_summary(table: pd.DataFrame, out_png) -> None:
     axa.axhline(0.5, color="k", lw=0.8, ls=":", label="chance")
     axa.set_xticks(x); axa.set_xticklabels(tiers)
     axa.set_ylim(0.4, 1.0); axa.set_ylabel("held-out ISI AUC")
-    axa.set_title("Independent quality (held-out ISI)")
+    axa.set_title("Held-out ISI AUC (quasi-independent; ISI-gated, no ablation)")
     axa.legend(frameon=False, fontsize=8)
 
     fig.suptitle("DANT BG_046 track curation vs UnitMatch yardstick")
