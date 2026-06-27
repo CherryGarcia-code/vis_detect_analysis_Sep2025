@@ -161,6 +161,447 @@ def save_fig(fig, name):
     return p
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# Task 4.4 — figures F6 / F7 / F8 (built from CACHED outputs; no recompute of the
+# science). The ONLY compute these touch is the Engine-C spot-check for F8, which
+# is run once and cached to ENGINEC_CSV. Mood colours come from STATE_LABEL_COLORS
+# (the labeler palette — NOT the HMM palette); every figure carries a short
+# plain-English title/caption a non-expert can read.
+# ════════════════════════════════════════════════════════════════════════════
+from matplotlib import gridspec  # noqa: E402  (figure-only import; keep local-ish)
+from visdetect.analysis.config import STATE_LABEL_COLORS  # mood palette
+
+RESULTS_JSON = os.path.join(CACHE_DIR, "decision_latents_phase2_results.json")
+STATS_CSV = os.path.join(FIG_DIR, "decision_latents_phase2_stats.csv")
+ENGINEC_CSV = os.path.join(CACHE_DIR, "enginec_spotcheck.csv")  # F8 Engine-C cache
+
+# fitted moods that carry a generative dial (Disengaged is NOT fit -> no dials).
+_FIG_MOODS = ("Impulsive", "StimSens")
+# the top-3 expert anchors by d' (== the brief's 03092025/01092025/26082025);
+# int-form session_name as stored in the deliverable / stats CSVs.
+_ENGINEC_ANCHORS = ("3092025", "1092025", "26082025")
+# moderate, SEEDED differential-evolution config: more thorough than the unit-test
+# fast config but bounded so the spot-check completes in a sane wall-time.
+_ENGINEC_FITPARAMS = {"seed": 0, "maxiter": 12, "popsize": 6, "polish": True}
+
+
+def _zfill8(s):
+    """int-form / float-form / str session id -> canonical zfill8 string."""
+    return dlg.canonical_session_id(s)
+
+
+# ── F6: can we trust the dials? (recovery at the real long-baseline regime) ─────
+def make_f6_recovery(recovery_json=RECOVERY_JSON):
+    """F6 — recovery at the real long-baseline regime, from the CORRECTED per-dial
+    verdict in ``recovery_results.json`` (caution + timing = generative, sharpness =
+    descriptive). Reads ``point`` (r/CCC/coverage per dial x regime), ``confusion``
+    (3x3 matrices) and ``gate.<regime>.per_dial_trust`` — i.e. the SAME corrected
+    blob the orchestration ingests; NOT the scalar-shrunk *.cluster_raw.json."""
+    with open(recovery_json, "r", encoding="utf-8") as fh:
+        R = json.load(fh)
+
+    regimes = ["expert", "naive"]
+    dial_pub = ["sharpness", "itchiness", "timing"]   # JSON keys
+    dial_show = ["Sharpness\n(drift v)", "Itchiness/caution\n(start z)",
+                 "Timing\n(urgency u)"]
+    C = {"expert": "#1b7837", "naive": "#d6604d"}     # engaged-green vs hair-trigger-red
+
+    fig = plt.figure(figsize=(13.5, 9.0))
+    gs = gridspec.GridSpec(2, 3, height_ratios=[1.0, 1.0], hspace=0.50,
+                           wspace=0.34, left=0.07, right=0.97, top=0.88,
+                           bottom=0.11)
+    x = np.arange(3)
+    w = 0.38
+
+    def _quality_panel(ax, key, thresh, ylabel, title, thr_label):
+        for k, reg in enumerate(regimes):
+            vals = [R["point"][reg][d].get(key, np.nan) for d in dial_pub]
+            bars = ax.bar(x + (k - 0.5) * w, vals, w, color=C[reg],
+                          label=("Expert (engaged)" if reg == "expert"
+                                 else "Naive (hair-trigger)"))
+            for rect, v in zip(bars, vals):
+                if np.isfinite(v):
+                    ax.text(rect.get_x() + rect.get_width() / 2, v + 0.02,
+                            f"{v:.2f}", ha="center", fontsize=8, fontweight="bold")
+        ax.axhline(thresh, ls="--", lw=1.4, color="#333333")
+        ax.text(2.46, thresh + 0.01, thr_label, ha="right", fontsize=8,
+                color="#333333")
+        ax.set_xticks(x)
+        ax.set_xticklabels(dial_show, fontsize=8.3)
+        ax.set_ylim(0, 1.12)
+        ax.set_ylabel(ylabel, fontsize=9)
+        ax.set_title(title, fontsize=10.5, fontweight="bold")
+
+    axA = fig.add_subplot(gs[0, 0])
+    _quality_panel(axA, "r", 0.80, "recovered-vs-true  r",
+                   "A. Do we recover the dial?", "r >= 0.80")
+    axA.legend(frameon=False, fontsize=7.8, loc="lower left")
+
+    axB = fig.add_subplot(gs[0, 1])
+    _quality_panel(axB, "ccc", 0.70, "Lin's concordance (CCC)",
+                   "B. Is it concordant (bias/scale)?", "CCC >= 0.70")
+
+    axC = fig.add_subplot(gs[0, 2])
+    _quality_panel(axC, "ci_coverage", 0.90, "bootstrap CI coverage",
+                   "C. Is the error bar honest?", "coverage >= 0.90")
+
+    # ── D/E: confusion heatmaps (3x3) per regime ──
+    conf_labels = ["sharp.", "caution", "timing"]
+    for k, reg in enumerate(regimes):
+        ax = fig.add_subplot(gs[1, k])
+        M = np.asarray(R["confusion"][reg]["matrix"], float)
+        im = ax.imshow(M, cmap="Greens", vmin=0, vmax=1, aspect="equal")
+        for i in range(3):
+            for j in range(3):
+                ax.text(j, i, f"{M[i, j]:.2f}", ha="center", va="center",
+                        fontsize=9, color="white" if M[i, j] > 0.5 else "#222222")
+        ax.set_xticks(range(3)); ax.set_xticklabels(conf_labels, fontsize=8)
+        ax.set_yticks(range(3)); ax.set_yticklabels(conf_labels, fontsize=8)
+        ax.set_xlabel("model picked as", fontsize=8.5)
+        ax.set_ylabel("dial we actually turned", fontsize=8.5)
+        ax.set_title(f"D{k+1}. Mix-up matrix — {reg}", fontsize=10.5,
+                     fontweight="bold")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    # ── F: per-(dial x regime) trust verdict table (CORRECTED) ──
+    axT = fig.add_subplot(gs[1, 2])
+    axT.axis("off")
+    axT.set_title("F. Trust verdict (corrected, per dial x regime)",
+                  fontsize=10.5, fontweight="bold")
+    rows, cell_colors = [], []
+    name_show = {"sharpness": "sharpness", "caution": "caution", "timing": "timing"}
+    for reg in regimes:
+        verdict = R["gate"][reg]["per_dial_trust"]
+        for gd in ("sharpness", "caution", "timing"):
+            v = verdict.get(gd, "?")
+            rows.append([reg, name_show[gd], v])
+            col = "#a1d99b" if v == "generative" else "#fdbe85"
+            cell_colors.append(["#f0f0f0", "#f0f0f0", col])
+    tbl = axT.table(cellText=rows, colLabels=["regime", "dial", "trust"],
+                    cellColours=cell_colors, loc="center", cellLoc="center")
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9.0)
+    tbl.scale(1.0, 1.45)
+
+    fig.suptitle("B8 F6 -- Can we trust each behavioural dial as a real mechanism?  "
+                 "(recovery at the real long-baseline regime)",
+                 fontsize=14, fontweight="bold")
+    fig.text(0.5, 0.012,
+             "A dial is 'trustworthy / generative' only if it RECOVERS (r>=0.80), is "
+             "CONCORDANT (CCC>=0.70), has an HONEST error bar (coverage>=0.90) and is "
+             "NOT confused with another dial. Caution & timing pass everywhere -> "
+             "real mechanisms; sharpness fails (it trades off against the others) -> "
+             "fall back to the descriptive Phase-1 proxy.",
+             ha="center", fontsize=8.4, color="#555555")
+    return fig
+
+
+# ── F7: latent distributions, TIMING-LED ────────────────────────────────────────
+def _mood_color(mood):
+    return STATE_LABEL_COLORS.get(mood, "#888888")
+
+
+def make_f7_latents(stats_csv=STATS_CSV, deliverable_csv=DELIVERABLE_CSV):
+    """F7 — the three generative dials by mood + across learning anchors, LED by the
+    labeler-INDEPENDENT readouts (timing-urgency + RT variability), with FA-rate /
+    criterion x mood shown as CONFIRMATORY (state-label circularity). Sharpness is
+    marked 'descriptive-trust' (hatched) so trust is legible. Mood colours from
+    STATE_LABEL_COLORS."""
+    stats = pd.read_csv(stats_csv)
+    stats = stats[stats["mood"].isin(_FIG_MOODS)].copy()
+    stats["sid"] = stats["session"].map(_zfill8)
+
+    df = pd.read_csv(deliverable_csv)
+    gen = df[~df["generative_omitted"].astype(bool)].copy()
+    gen["sid"] = gen["session_name"].map(_zfill8)
+    gen = gen[gen["state_label"].isin(_FIG_MOODS)]
+
+    # per-anchor x mood confirmatory aggregates (labeler-dependent: FA / criterion)
+    agg = gen.groupby(["sid", "state_label"]).agg(
+        rtcv=("rt_cv_by_cs", "median"),
+        lme=("lick_minus_expected", "median"),
+        fa=("fa_rate_cell", "median"),
+        crit=("criterion_c", "median"),
+        sidx=("session_idx", "first"),
+        dpr=("session_dprime", "first")).reset_index()
+    M = stats.merge(agg, left_on=["sid", "mood"], right_on=["sid", "state_label"],
+                    how="inner")
+    M["sdate"] = M["sid"].map(lambda s: int(s))           # chrono-ish ordering key
+    M = M.sort_values("dpr")
+
+    moods = [m for m in _FIG_MOODS if m in set(M["mood"])]
+
+    fig = plt.figure(figsize=(15.5, 9.0))
+    gs = gridspec.GridSpec(2, 3, height_ratios=[1.0, 1.0], hspace=0.42,
+                           wspace=0.30, left=0.06, right=0.985, top=0.88,
+                           bottom=0.12)
+
+    def _violin_by_mood(ax, col, title, ylabel, descriptive=False):
+        data, labels, colors = [], [], []
+        for m in moods:
+            v = pd.to_numeric(M.loc[M["mood"] == m, col], errors="coerce").dropna()
+            if len(v):
+                data.append(v.values); labels.append(m); colors.append(_mood_color(m))
+        if not data:
+            ax.text(0.5, 0.5, "no data", ha="center"); return
+        parts = ax.violinplot(data, showmeans=True, showextrema=False, widths=0.8)
+        for pc, c in zip(parts["bodies"], colors):
+            pc.set_facecolor(c); pc.set_alpha(0.55); pc.set_edgecolor("#333333")
+            if descriptive:
+                pc.set_hatch("////")
+        parts["cmeans"].set_color("#222222")
+        for i, (d, c) in enumerate(zip(data, colors)):
+            jx = np.random.default_rng(0).normal(i + 1, 0.04, size=len(d))
+            ax.scatter(jx, d, s=10, color=c, edgecolor="white", linewidth=0.3,
+                       zorder=3, alpha=0.85)
+        ax.set_xticks(range(1, len(labels) + 1)); ax.set_xticklabels(labels)
+        ax.set_ylabel(ylabel, fontsize=9)
+        ttl = title + ("  [descriptive proxy]" if descriptive else "")
+        ax.set_title(ttl, fontsize=10.5, fontweight="bold")
+        if descriptive:
+            ax.text(0.98, 0.97, "rough estimate\n(not recovered)", transform=ax.transAxes,
+                    ha="right", va="top", fontsize=7.6, color="#7a1f12",
+                    bbox=dict(boxstyle="round", fc="#fff0e8", ec="#d6604d", lw=0.8))
+
+    # ── TOP ROW: LEAD with the labeler-INDEPENDENT readouts ──
+    # A: timing urgency u by mood (generative, trusted)
+    axA = fig.add_subplot(gs[0, 0])
+    _violin_by_mood(axA, "timing_u",
+                    "A. TIMING urgency by mood  (generative)",
+                    "fitted urgency dial  u")
+    # B: RT variability (RT CV) by mood — labeler-independent timing readout
+    axB = fig.add_subplot(gs[0, 1])
+    _violin_by_mood(axB, "rtcv",
+                    "B. RT variability by mood  (labeler-independent)",
+                    "RT coefficient of variation")
+    # C: timing urgency u ACROSS learning (vs d'), per mood
+    axC = fig.add_subplot(gs[0, 2])
+    for m in moods:
+        sub = M[M["mood"] == m].sort_values("dpr")
+        y = pd.to_numeric(sub["timing_u"], errors="coerce")
+        axC.scatter(sub["dpr"], y, s=26, color=_mood_color(m), label=m,
+                    edgecolor="white", linewidth=0.4, alpha=0.9)
+    axC.set_xlabel("session sensitivity d'  (learning axis ->)", fontsize=9)
+    axC.set_ylabel("fitted urgency dial  u", fontsize=9)
+    axC.set_title("C. TIMING urgency across learning", fontsize=10.5,
+                  fontweight="bold")
+    axC.legend(frameon=False, fontsize=8, title="mood")
+
+    # ── BOTTOM ROW: confirmatory (sharpness descriptive + caution circular) ──
+    # D: sharpness drift v by mood — MARKED descriptive
+    axD = fig.add_subplot(gs[1, 0])
+    _violin_by_mood(axD, "sharpness_v",
+                    "D. SHARPNESS drift by mood", "fitted drift dial  v",
+                    descriptive=True)
+    # E: itchiness/caution z by mood — CONFIRMATORY (circular w.r.t. early licks)
+    axE = fig.add_subplot(gs[1, 1])
+    _violin_by_mood(axE, "itchiness_z",
+                    "E. ITCHINESS/caution by mood  (confirmatory)",
+                    "fitted start-point dial  z")
+    axE.text(0.98, 0.04, "caution x mood is partly\nDEFINITIONAL (circularity)",
+             transform=axE.transAxes, ha="right", va="bottom", fontsize=7.6,
+             color="#7a1f12",
+             bbox=dict(boxstyle="round", fc="#fff0e8", ec="#d6604d", lw=0.8))
+    # F: FA rate by mood (confirmatory readout that caution loads on mood)
+    axF = fig.add_subplot(gs[1, 2])
+    _violin_by_mood(axF, "fa",
+                    "F. False-alarm rate by mood  (confirmatory)",
+                    "FA rate (catch-trial licks)")
+    axF.text(0.98, 0.04, "partly definitional\n(labels use early licks)",
+             transform=axF.transAxes, ha="right", va="bottom", fontsize=7.6,
+             color="#7a1f12",
+             bbox=dict(boxstyle="round", fc="#fff0e8", ec="#d6604d", lw=0.8))
+
+    fig.suptitle("B8 F7 -- The three behavioural dials by mood and across learning  "
+                 "(timing-led)", fontsize=14, fontweight="bold")
+    fig.text(0.5, 0.018,
+             "Leading with TIMING (labeler-independent) and RT variability. "
+             "FA-rate / criterion x mood (E,F) are CONFIRMATORY -- the mood labels are "
+             "defined partly from early-lick features (state-label circularity), so "
+             "caution x mood is partly definitional. Sharpness (D) is a descriptive "
+             "proxy (did not pass recovery) -- shown hatched. Mood colours: "
+             "Impulsive (red), StimSens (light blue).",
+             ha="center", fontsize=8.3, color="#555555")
+    return fig
+
+
+# ── F8: construct validity (GLM dials vs descriptive scores + Engine-C DDM) ──────
+def run_enginec_spotcheck(force=False):
+    """Run (or load) the Engine-C pyddm spot-check on the top-3 expert anchors and
+    cache to ENGINEC_CSV. This is the ONLY compute Task 4.4 performs. Cached on
+    disk so re-rendering F8 never re-fits pyddm."""
+    if os.path.exists(ENGINEC_CSV) and not force:
+        print(f"[enginec] loading cached spot-check -> {ENGINEC_CSV}")
+        return pd.read_csv(ENGINEC_CSV)
+    from visdetect.analysis.decision_latents_enginec import engine_c_spotcheck
+    rows = []
+    for a in _ENGINEC_ANCHORS:
+        sess = load_session(a)
+        try:
+            d = engine_c_spotcheck([sess], dt=0.02, fitparams=_ENGINEC_FITPARAMS)
+            d["anchor"] = a
+            rows.append(d)
+            print(f"[enginec] {a}: " + d.iloc[0][["v", "u", "a", "z", "ll",
+                                                  "failed", "n_trials"]].to_dict().__str__())
+        finally:
+            del sess
+            gc.collect()
+    out = pd.concat(rows, ignore_index=True)
+    out.to_csv(ENGINEC_CSV, index=False)
+    print(f"[enginec] wrote {ENGINEC_CSV}")
+    return out
+
+
+def make_f8_construct_validity(stats_csv=STATS_CSV, deliverable_csv=DELIVERABLE_CSV,
+                               enginec_df=None):
+    """F8 — construct validity. (a) the three generative dials vs the Phase-1
+    DESCRIPTIVE scores on the same anchors x moods (sharpness<->lapse-aware
+    psychometric slope; caution<->FA-rate; timing<->lick-minus-expected); (b) the
+    Engine-C panel: GLM dials (sharpness=v, timing=u, caution=z) vs the full pyddm
+    DDM params (v, u; a/z noted) on 2-3 expert anchors."""
+    from scipy.stats import spearmanr
+
+    stats = pd.read_csv(stats_csv)
+    stats = stats[stats["mood"].isin(_FIG_MOODS)].copy()
+    stats["sid"] = stats["session"].map(_zfill8)
+
+    df = pd.read_csv(deliverable_csv)
+    gen = df[~df["generative_omitted"].astype(bool)].copy()
+    gen["sid"] = gen["session_name"].map(_zfill8)
+    gen = gen[gen["state_label"].isin(_FIG_MOODS)]
+    agg = gen.groupby(["sid", "state_label"]).agg(
+        psy=("sharpness_psy_slope", "median"),
+        fa=("fa_rate_cell", "median"),
+        crit=("criterion_c", "median"),
+        lme=("lick_minus_expected", "median")).reset_index()
+    M = stats.merge(agg, left_on=["sid", "mood"], right_on=["sid", "state_label"],
+                    how="inner")
+
+    if enginec_df is None:
+        enginec_df = run_enginec_spotcheck()
+
+    fig = plt.figure(figsize=(15.5, 9.0))
+    gs = gridspec.GridSpec(2, 3, height_ratios=[1.0, 1.0], hspace=0.40,
+                           wspace=0.32, left=0.06, right=0.985, top=0.88,
+                           bottom=0.13)
+
+    def _scatter_corr(ax, xcol, ycol, xlabel, ylabel, title, descriptive=False,
+                      circular=False):
+        xx = pd.to_numeric(M[xcol], errors="coerce")
+        yy = pd.to_numeric(M[ycol], errors="coerce")
+        ok = xx.notna() & yy.notna()
+        for m in _FIG_MOODS:
+            sel = ok & (M["mood"] == m)
+            ax.scatter(xx[sel], yy[sel], s=34, color=_mood_color(m), label=m,
+                       edgecolor="white", linewidth=0.4, alpha=0.9)
+        if ok.sum() >= 3:
+            r, p = spearmanr(xx[ok], yy[ok])
+            # OLS guide line
+            b, a0 = np.polyfit(xx[ok], yy[ok], 1)
+            xs = np.linspace(xx[ok].min(), xx[ok].max(), 50)
+            ax.plot(xs, b * xs + a0, color="#444444", lw=1.3, ls="--")
+            ax.text(0.04, 0.95, f"Spearman r = {r:+.2f}\np = {p:.1e}  (n={ok.sum()})",
+                    transform=ax.transAxes, ha="left", va="top", fontsize=8.6,
+                    fontweight="bold",
+                    bbox=dict(boxstyle="round", fc="white", ec="#999999", lw=0.7))
+        ax.set_xlabel(xlabel, fontsize=9); ax.set_ylabel(ylabel, fontsize=9)
+        ttl = title + ("  [descriptive]" if descriptive else "")
+        ax.set_title(ttl, fontsize=10.3, fontweight="bold")
+        if circular:
+            ax.text(0.96, 0.06, "partly definitional\n(circularity)",
+                    transform=ax.transAxes, ha="right", va="bottom", fontsize=7.4,
+                    color="#7a1f12",
+                    bbox=dict(boxstyle="round", fc="#fff0e8", ec="#d6604d", lw=0.8))
+
+    # ── ROW 1: generative dial vs Phase-1 descriptive score ──
+    axA = fig.add_subplot(gs[0, 0])
+    _scatter_corr(axA, "timing_u", "lme",
+                  "generative TIMING dial  u", "lick - expected change time (s)",
+                  "A. Timing dial vs licking-early")
+    axA.legend(frameon=False, fontsize=8, title="mood", loc="lower left")
+    axB = fig.add_subplot(gs[0, 1])
+    _scatter_corr(axB, "itchiness_z", "fa",
+                  "generative CAUTION dial  z", "false-alarm rate",
+                  "B. Caution dial vs FA rate", circular=True)
+    axC = fig.add_subplot(gs[0, 2])
+    _scatter_corr(axC, "sharpness_v", "psy",
+                  "generative SHARPNESS dial  v", "lapse-aware psychometric slope",
+                  "C. Sharpness dial vs psychometric", descriptive=True)
+
+    # ── ROW 2: Engine-C — GLM dials vs full pyddm DDM params ──
+    ec = enginec_df.copy()
+    ec["sid"] = ec["anchor"].map(_zfill8) if "anchor" in ec.columns \
+        else ec["session"].map(_zfill8)
+    # per-anchor GLM dials = mean across the fitted moods (Impulsive/StimSens)
+    glm = stats.groupby("sid").agg(glm_v=("sharpness_v", "mean"),
+                                   glm_u=("timing_u", "mean"),
+                                   glm_z=("itchiness_z", "mean")).reset_index()
+    E = ec.merge(glm, on="sid", how="left")
+    ok_fit = ~E["failed"].astype(bool) if "failed" in E.columns else np.ones(len(E), bool)
+    E = E[ok_fit].copy()
+
+    def _ec_scatter(ax, glm_col, ddm_col, xlabel, ylabel, title, note=""):
+        if len(E) == 0 or E[glm_col].isna().all() or E[ddm_col].isna().all():
+            ax.text(0.5, 0.5, "no successful DDM fit", ha="center", va="center",
+                    transform=ax.transAxes)
+            ax.set_title(title, fontsize=10.3, fontweight="bold"); return
+        ax.scatter(E[glm_col], E[ddm_col], s=70, color="#54278f",
+                   edgecolor="white", linewidth=0.5, zorder=3)
+        for _, r in E.iterrows():
+            ax.annotate(str(int(r["sid"])), (r[glm_col], r[ddm_col]),
+                        fontsize=7.2, xytext=(4, 3), textcoords="offset points")
+        if E[[glm_col, ddm_col]].dropna().shape[0] >= 3:
+            rr, pp = spearmanr(E[glm_col], E[ddm_col])
+            ax.text(0.04, 0.95, f"Spearman r = {rr:+.2f}  (n={len(E)})",
+                    transform=ax.transAxes, ha="left", va="top", fontsize=8.4,
+                    fontweight="bold",
+                    bbox=dict(boxstyle="round", fc="white", ec="#999999", lw=0.7))
+        ax.set_xlabel(xlabel, fontsize=9); ax.set_ylabel(ylabel, fontsize=9)
+        ax.set_title(title, fontsize=10.3, fontweight="bold")
+        if note:
+            ax.text(0.5, -0.26, note, transform=ax.transAxes, ha="center",
+                    fontsize=7.6, color="#555555")
+
+    axD = fig.add_subplot(gs[1, 0])
+    _ec_scatter(axD, "glm_v", "v", "GLM sharpness dial  v (mean)",
+                "full-DDM drift  v", "D. Engine-C: sharpness vs DDM drift",
+                note="sharpness is descriptive-trust")
+    axE = fig.add_subplot(gs[1, 1])
+    _ec_scatter(axE, "glm_u", "u", "GLM timing dial  u (mean)",
+                "full-DDM urgency  u", "E. Engine-C: timing vs DDM urgency")
+    axF = fig.add_subplot(gs[1, 2])
+    _ec_scatter(axF, "glm_z", "z", "GLM caution dial  z (mean)",
+                "full-DDM start-point  z", "F. Engine-C: caution vs DDM start-point",
+                note="caution x mood is partly definitional (circularity)")
+
+    fig.suptitle("B8 F8 -- Construct validity: do the generative dials track "
+                 "independent measures of the same thing?", fontsize=14,
+                 fontweight="bold")
+    fig.text(0.5, 0.022,
+             "Top row: each generative dial vs its Phase-1 DESCRIPTIVE counterpart "
+             "(timing<->licking early, caution<->FA rate, sharpness<->psychometric "
+             "slope). Bottom row: Engine-C cross-check -- the GLM dials vs a full "
+             "drift-diffusion (pyddm) fit on the top-3 expert sessions (n=3 -> a "
+             "QUALITATIVE spot-check, not a statistical test). The caution<->FA panel "
+             "is partly DEFINITIONAL (state-label circularity); sharpness is "
+             "descriptive-trust (failed recovery).",
+             ha="center", fontsize=8.3, color="#555555")
+    return fig
+
+
+def make_task44_figures(force_enginec=False):
+    """Render F6 / F7 / F8 from cached outputs (+ the Engine-C spot-check for F8)."""
+    print("[F6] recovery (corrected per-dial verdict) ...", flush=True)
+    save_fig(make_f6_recovery(), "fig_b8_F6_recovery")
+    print("[F7] latent distributions (timing-led) ...", flush=True)
+    save_fig(make_f7_latents(), "fig_b8_F7_latents")
+    print("[F8] construct validity (+ Engine-C spot-check) ...", flush=True)
+    ec = run_enginec_spotcheck(force=force_enginec)
+    save_fig(make_f8_construct_validity(enginec_df=ec), "fig_b8_F8_construct_validity")
+    print("[done] F6/F7/F8 written to", FIG_DIR, flush=True)
+    return ec
+
+
 def _csv_key(sname) -> str:
     """Canonical zfill8 session-id key (project DDMMYYYY convention).
 
@@ -356,6 +797,14 @@ def parse_args(argv=None):
                         "paths and NEVER overwrites the real deliverable.")
     p.add_argument("--force", action="store_true",
                    help="recompute even if a cached results JSON exists.")
+    p.add_argument("--figures", action="store_true",
+                   help="FIGURE-ONLY mode (Task 4.4): render F6/F7/F8 from the cached "
+                        "outputs (recovery_results.json + the deliverable + stats CSVs) "
+                        "and the Engine-C spot-check. Runs NO recovery / orchestration "
+                        "science; the only compute is the cached Engine-C pyddm fit.")
+    p.add_argument("--force-enginec", action="store_true",
+                   help="with --figures: re-run the Engine-C pyddm spot-check even if "
+                        "enginec_spotcheck.csv is cached.")
     p.add_argument("--l2", type=float, default=1.0,
                    help="ridge strength toward the more-expert neighbour in the "
                         "backward sweep (default 1.0).")
@@ -377,6 +826,20 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+
+    # ── Task 4.4 FIGURE-ONLY mode: render F6/F7/F8 from cached outputs. NO recovery
+    # / orchestration science is run here (the only compute is the cached Engine-C
+    # pyddm spot-check). Decoupled so figures can be regenerated without the ~5h run.
+    if args.figures:
+        if not os.path.exists(RECOVERY_JSON):
+            raise SystemExit(f"FATAL: {RECOVERY_JSON} absent — F6 needs the corrected "
+                             "recovery verdict. (Run the cluster harness first.)")
+        if not os.path.exists(DELIVERABLE_CSV) or not os.path.exists(STATS_CSV):
+            raise SystemExit("FATAL: deliverable / stats CSV absent — F7/F8 need the "
+                             "FULL orchestration outputs.")
+        make_task44_figures(force_enginec=args.force_enginec)
+        return 0
+
     suffix = "_smoke" if args.quick else ""
     out_csv = os.path.join(CACHE_DIR, f"decision_latents_by_state{suffix}.csv")
     results_json = os.path.join(CACHE_DIR, f"decision_latents_phase2_results{suffix}.json")
