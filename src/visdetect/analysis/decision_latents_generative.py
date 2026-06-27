@@ -22,6 +22,17 @@ Behaviour-only: no session loading, no spikes, no ``ddm`` imports here.
 """
 from __future__ import annotations
 
+# BLAS = 1 thread for the process-parallel ladders (review I1): a spawned
+# learning_ladder(n_workers>1) worker re-imports THIS module fresh, so pin BLAS
+# BEFORE numpy loads or the workers oversubscribe the cores. setdefault respects an
+# explicit caller setting and is a no-op if numpy is already imported; the
+# orchestration + cluster harness also pin this at their top, so this only protects
+# any OTHER caller that fans the ladders out without pinning first.
+import os as _os
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+           "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    _os.environ.setdefault(_v, "1")
+
 from dataclasses import dataclass
 
 import numpy as np
