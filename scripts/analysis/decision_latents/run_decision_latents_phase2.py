@@ -56,11 +56,24 @@ Outputs:
 """
 from __future__ import annotations
 
+# ── BLAS single-thread BEFORE any numpy-importing module (process-parallel) ─────
+# We process-parallelise the ladders, so each worker must keep BLAS to one thread
+# or the threads oversubscribe the 20 cores and the ProcessPool stops scaling.
+# This MUST run before importing numpy / visdetect / config / dlg (any of which
+# pulls in numpy). Mirrors the pattern at the top of cluster_recovery_harness.py.
+import os as _os
+
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+           "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+    _os.environ.setdefault(_v, "1")
+
 import argparse
 import gc
 import json
+import multiprocessing
 import os
 import sys
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -109,6 +122,21 @@ SIGMA = dlg.ParamSpec().urgency_sigma  # FIXED urgency-bump width (a ParamSpec f
 QUICK_N_TRIALS = 200
 QUICK_N_RESTARTS = 2
 QUICK_N_ANCHORS = 3
+
+
+# ── state-ladder process-pool worker (MODULE-LEVEL so it is picklable) ──────────
+# Each anchor's state_ladder is fully INDEPENDENT (one Design, no cross-anchor
+# seeding), so it is the biggest parallel win. The in-memory ``Design`` +
+# ``param_spec`` are picklable (audit-verified) and sent directly — NO session
+# reloading in the worker (which would hammer the X: gateway). Determinism is
+# preserved because state_ladder derives all its seeds from the fixed ``seed`` arg;
+# results are collected BY KEY (sname), never by arrival order.
+def _state_ladder_worker(args):
+    """ONE anchor's state ladder. Returns ``(sname, result_dict)``."""
+    sname, design, param_spec, n_restarts, compute_cvll, seed = args
+    sl = dlg.state_ladder(design, param_spec, n_restarts=n_restarts,
+                          compute_cvll=compute_cvll, seed=seed)
+    return sname, sl
 
 
 def _quick_subsample(anchor_designs, n_trials=QUICK_N_TRIALS, seed=0):
@@ -331,6 +359,19 @@ def parse_args(argv=None):
     p.add_argument("--l2", type=float, default=1.0,
                    help="ridge strength toward the more-expert neighbour in the "
                         "backward sweep (default 1.0).")
+    p.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 2),
+                   help="process-parallel workers for the (CPU-bound) ladders: the "
+                        "per-anchor STATE ladders and the LEARNING ladder's rung x "
+                        "restart fits (default cpu_count-2). Session LOADING and the "
+                        "backward sweep stay SEQUENTIAL (gateway + true dependency). "
+                        "Results are byte-identical regardless of --jobs (same seeds).")
+    p.add_argument("--with-cvll", action="store_true",
+                   help="ALSO compute the k-fold cross-validated LL on BOTH ladders "
+                        "(SLOW: k refits per rung, single-threaded over ~30 anchors "
+                        "-> hours). The ladder winner is argmin AIC and does NOT "
+                        "depend on CV-LL, so by DEFAULT we skip it (AIC + BIC only, "
+                        "~minutes). Use this only for the CV robustness supplement "
+                        "(better run parallelized / on the cluster).")
     return p.parse_args(argv)
 
 
@@ -390,7 +431,10 @@ def main(argv=None):
         anchors_chrono = anchors_chrono[-QUICK_N_ANCHORS:]
         print(f"[quick] reduced to {len(anchors_chrono)} most-expert anchors: "
               f"{anchors_chrono}")
-    compute_cvll = not args.quick   # CV-LL is too slow on ~30 anchors -> AIC-only
+    # Default AIC-only on BOTH ladders (winner = argmin AIC, contract-locked; AIC +
+    # BIC still computed). CV-LL is slow + single-threaded over ~30 anchors -> opt-in
+    # via --with-cvll (and better run parallelized / on the cluster).
+    compute_cvll = bool(args.with_cvll)
     n_restarts = QUICK_N_RESTARTS if args.quick else 4
 
     # ── 2. per-session geometry: mu + regime + evidence ─────────────────────
@@ -455,17 +499,32 @@ def main(argv=None):
         anchor_designs, anchors_chrono, param_spec, l2=args.l2)
     print(f"[sweep] fit {len(anchor_fits)} anchors.")
 
+    n_jobs = max(1, int(args.jobs))
     print(f"[ladder] learning ladder (which dial moves with learning; "
-          f"compute_cvll={compute_cvll}) ...", flush=True)
+          f"compute_cvll={compute_cvll}; n_jobs={n_jobs}) ...", flush=True)
     learn = dlg.learning_ladder(anchor_designs, param_spec,
-                                compute_cvll=compute_cvll, n_restarts=n_restarts)
+                                compute_cvll=compute_cvll, n_restarts=n_restarts,
+                                n_jobs=n_jobs)
     print(f"[ladder] LEARNING winner = {learn['winner']}")
     print("         AIC: " + "  ".join(f"{k}={v:.1f}" for k, v in learn["aic"].items()))
 
+    # ── state ladders: one INDEPENDENT job per anchor (the biggest parallel win) ──
+    # Collect BY KEY (sname), never by arrival order, so the dict is deterministic.
+    print(f"[ladder] state ladders over {len(anchor_designs)} anchors "
+          f"(n_jobs={n_jobs}) ...", flush=True)
     state_ladders = {}
-    for sname, design in anchor_designs.items():
-        sl = dlg.state_ladder(design, param_spec, n_restarts=n_restarts)
-        state_ladders[sname] = sl
+    sl_tasks = [(sname, design, param_spec, n_restarts, compute_cvll, 0)
+                for sname, design in anchor_designs.items()]
+    if n_jobs <= 1 or len(sl_tasks) <= 1:
+        for t in sl_tasks:
+            sname, sl = _state_ladder_worker(t)
+            state_ladders[sname] = sl
+    else:
+        ctx = multiprocessing.get_context("spawn")  # Windows-safe
+        with ProcessPoolExecutor(max_workers=min(n_jobs, len(sl_tasks)),
+                                 mp_context=ctx) as ex:
+            for sname, sl in ex.map(_state_ladder_worker, sl_tasks):
+                state_ladders[sname] = sl
     # report the per-anchor state-ladder winners + the modal winner
     sl_winners = [sl["winner"] for sl in state_ladders.values()]
     from collections import Counter

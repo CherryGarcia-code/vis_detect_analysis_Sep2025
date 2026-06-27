@@ -1115,6 +1115,85 @@ def _ladder_effective_theta(combined, param_spec, shared_slices, anchor_slice):
     return theta
 
 
+def _ladder_rung_inits(rung, param_spec, n_anchors, n_restarts, seed):
+    """The deterministic list of L-BFGS-B init vectors for a ladder rung.
+
+    Layout-identical to the original ``_fit_ladder_rung`` inits: a single zero
+    init followed by ``n_restarts`` Normal(0,1) draws from a single
+    ``np.random.default_rng(seed)`` stream. Factored out so the SEQUENTIAL and the
+    (rung x restart) PARALLEL paths share EXACTLY the same inits -> byte-identical
+    results regardless of ``n_jobs``.
+    """
+    total_len, _shared, _anchor = _ladder_layout(rung, param_spec, n_anchors)
+    rng = np.random.default_rng(seed)
+    inits = [np.zeros(total_len)]
+    for _ in range(int(n_restarts)):
+        inits.append(rng.normal(loc=0.0, scale=1.0, size=total_len))
+    return inits
+
+
+def _ladder_rung_objective(rung, designs, param_spec):
+    """Build the rung's pooled-NLL objective ``f(combined) -> summed hazard_nll``."""
+    n_anchors = len(designs)
+    _total_len, shared_slices, anchor_slices = _ladder_layout(
+        rung, param_spec, n_anchors)
+
+    def objective(combined):
+        nll = 0.0
+        for a_idx, design in enumerate(designs):
+            theta_a = _ladder_effective_theta(
+                combined, param_spec, shared_slices, anchor_slices[a_idx])
+            nll += hazard_nll(theta_a, design, param_spec, l2=0.0)
+        return nll
+
+    return objective
+
+
+def _ladder_rung_optimize_one(rung, designs, param_spec, x0):
+    """Run ONE L-BFGS-B from a single init ``x0``; return ``(nll, theta)`` or None.
+
+    Deterministic given ``x0`` (L-BFGS-B has no RNG). Returns ``None`` when the
+    optimizer raises or produces a non-finite result, matching the original
+    skip-this-init behaviour.
+    """
+    from scipy.optimize import minimize
+
+    objective = _ladder_rung_objective(rung, designs, param_spec)
+    try:
+        res = minimize(objective, x0, method="L-BFGS-B")
+    except Exception:
+        return None
+    if not np.all(np.isfinite(res.x)):
+        return None
+    nll = float(res.fun)
+    if not np.isfinite(nll):
+        return None
+    return nll, np.asarray(res.x, float)
+
+
+def _reduce_restart_results(results, inits, objective):
+    """Reduce per-init ``(nll, theta)`` results to ``(ll, combined_theta)``.
+
+    ``results`` is a list ALIGNED to ``inits`` (same order/length); each entry is
+    ``(nll, theta)`` or ``None`` (a failed init). The tiebreak MIRRORS the
+    sequential ``if best is None or nll < best[0]`` (strict ``<`` keeps the FIRST
+    init that achieves the minimum), so the winner is INDEPENDENT of arrival order
+    -> byte-identical to the sequential path. If every init failed, fall back to
+    the first init (``inits[0]``) exactly as the sequential code did.
+    """
+    best = None        # (nll, theta, init_index)
+    for i, r in enumerate(results):
+        if r is None:
+            continue
+        nll, theta = r
+        if best is None or nll < best[0] or (nll == best[0] and i < best[2]):
+            best = (nll, theta, i)
+    if best is None:
+        combined = np.asarray(inits[0], float)
+        return float(-objective(combined)), combined
+    return float(-best[0]), best[1]
+
+
 def _fit_ladder_rung(rung, designs, param_spec, n_restarts=4, seed=0):
     """Fit one ladder rung's COMBINED model over the pooled anchor trials.
 
@@ -1127,46 +1206,12 @@ def _fit_ladder_rung(rung, designs, param_spec, n_restarts=4, seed=0):
     Returns ``(ll, combined_theta)`` where ``ll`` is the pooled data
     log-likelihood (``-summed_nll``).
     """
-    from scipy.optimize import minimize
-
     n_anchors = len(designs)
-    total_len, shared_slices, anchor_slices = _ladder_layout(
-        rung, param_spec, n_anchors)
-
-    def objective(combined):
-        nll = 0.0
-        for a_idx, design in enumerate(designs):
-            theta_a = _ladder_effective_theta(
-                combined, param_spec, shared_slices, anchor_slices[a_idx])
-            nll += hazard_nll(theta_a, design, param_spec, l2=0.0)
-        return nll
-
-    rng = np.random.default_rng(seed)
-    inits = [np.zeros(total_len)]
-    for _ in range(int(n_restarts)):
-        inits.append(rng.normal(loc=0.0, scale=1.0, size=total_len))
-
-    best = None
-    for x0 in inits:
-        try:
-            res = minimize(objective, x0, method="L-BFGS-B")
-        except Exception:
-            continue
-        if not np.all(np.isfinite(res.x)):
-            continue
-        nll = float(res.fun)
-        if not np.isfinite(nll):
-            continue
-        if best is None or nll < best[0]:
-            best = (nll, np.asarray(res.x, float))
-
-    if best is None:
-        combined = np.asarray(inits[0], float)
-        ll = -objective(combined)
-    else:
-        ll = -best[0]
-        combined = best[1]
-    return float(ll), combined
+    objective = _ladder_rung_objective(rung, designs, param_spec)
+    inits = _ladder_rung_inits(rung, param_spec, n_anchors, n_restarts, seed)
+    results = [_ladder_rung_optimize_one(rung, designs, param_spec, x0)
+               for x0 in inits]
+    return _reduce_restart_results(results, inits, objective)
 
 
 def _ladder_rung_cvll(rung, designs, param_spec, k=5, seed=0, n_restarts=2):
@@ -1258,8 +1303,44 @@ def _ladder_rung_cvll(rung, designs, param_spec, k=5, seed=0, n_restarts=2):
     return float(cv_ll)
 
 
+# ── Engine-A ladder parallelism (process-pool workers; contract §A.10) ─────────
+# Module-level (picklable) workers so ``learning_ladder(n_jobs>1)`` can fan the
+# 5 rungs' in-sample restarts out across processes. The designs + param_spec are
+# in-memory and PICKLABLE (audit-verified), so we send them to the workers
+# directly — NO session reloading (which would hit the X: gateway). Determinism is
+# preserved by (a) pre-generating the exact same per-rung inits in the parent and
+# (b) reducing restart results by a tiebreak that mirrors the sequential argmin.
+def _ll_restart_worker(args):
+    """ONE (rung, init) in-sample optimization. Returns ``(rung, init_idx, res)``
+    where ``res`` is ``(nll, theta)`` or ``None`` (a failed init)."""
+    rung, designs, param_spec, init_idx, x0 = args
+    res = _ladder_rung_optimize_one(rung, designs, param_spec, np.asarray(x0, float))
+    return rung, init_idx, res
+
+
+def _ll_cvll_worker(args):
+    """ONE rung's k-fold CV-LL (the CV internally keeps its own folds/restarts, so
+    this is byte-identical to the sequential call). Returns ``(rung, cvll)``."""
+    rung, designs, param_spec, k, seed = args
+    return rung, _ladder_rung_cvll(rung, designs, param_spec, k=k, seed=seed)
+
+
+def _make_process_pool(n_jobs):
+    """A spawn-context ProcessPoolExecutor (Windows-safe), or None if n_jobs<=1.
+
+    Late import of ``concurrent.futures`` / ``multiprocessing`` so importing this
+    module stays cheap. ``spawn`` is the safe start method on Windows AND Linux
+    (mirrors ``cluster_recovery_harness.py``)."""
+    if int(n_jobs) <= 1:
+        return None
+    import multiprocessing as _mp
+    from concurrent.futures import ProcessPoolExecutor
+    return ProcessPoolExecutor(max_workers=int(n_jobs),
+                               mp_context=_mp.get_context("spawn"))
+
+
 def learning_ladder(anchor_designs, param_spec, dt=0.05, k=5, seed=0,
-                    n_restarts=4, return_ll=False, compute_cvll=True):
+                    n_restarts=4, return_ll=False, compute_cvll=True, n_jobs=1):
     """Which dial moves across anchors? Model-comparison ladder (Task 2.2).
 
     Plain English: the science question is *which* behavioural knob learning turns
@@ -1328,6 +1409,18 @@ def learning_ladder(anchor_designs, param_spec, dt=0.05, k=5, seed=0,
         does NOT depend on CV-LL, so callers that only need the winner (e.g.
         :func:`recover_confusion`) pass ``compute_cvll=False`` for a large speedup;
         in that case ``out["cvll"]`` maps every rung to ``np.nan``.
+    n_jobs : int
+        Process-parallelism for the (expensive) rung fits (default 1 = sequential,
+        BYTE-IDENTICAL to the pre-parallel behaviour). When ``> 1`` the in-sample
+        rung fits are flattened to (rung x restart) jobs and run across a
+        spawn-context ``ProcessPoolExecutor`` — so ``M_full``'s restarts (the long
+        pole, ~all-dials-vary) run CONCURRENTLY — and the per-rung CV-LL (when
+        ``compute_cvll``) is fanned out one rung per job. Determinism is preserved:
+        each restart uses the EXACT same pre-generated init (parent-side, one seeded
+        RNG stream per rung) and the restart reduction tiebreaks on init index, so
+        the ``winner`` and ALL returned numbers are independent of ``n_jobs`` and of
+        worker arrival order. NO session loading happens in workers (designs are
+        sent in-memory, picklable) — the X: gateway is never touched.
 
     Returns
     -------
@@ -1341,18 +1434,61 @@ def learning_ladder(anchor_designs, param_spec, dt=0.05, k=5, seed=0,
     N = int(sum(len(d) for d in designs))
     log_N = np.log(N) if N > 0 else 0.0
 
-    aic, bic, cvll, ll_by_rung = {}, {}, {}, {}
+    # ── per-rung inits + objectives, generated ONCE in the parent (deterministic).
+    # The same inits are used by both the sequential and the parallel path, so the
+    # restart reduction is byte-identical regardless of n_jobs.
+    rung_inits = {r: _ladder_rung_inits(r, param_spec, n_anchors, n_restarts, seed)
+                  for r in _LADDER_RUNGS}
+    rung_objectives = {r: _ladder_rung_objective(r, designs, param_spec)
+                       for r in _LADDER_RUNGS}
+
+    pool = _make_process_pool(n_jobs)
+    try:
+        # ── in-sample rung fits: flatten to (rung x restart) jobs when parallel ──
+        ll_by_rung = {}
+        if pool is None:
+            for rung in _LADDER_RUNGS:
+                inits = rung_inits[rung]
+                results = [_ladder_rung_optimize_one(rung, designs, param_spec, x0)
+                           for x0 in inits]
+                ll_by_rung[rung] = _reduce_restart_results(
+                    results, inits, rung_objectives[rung])[0]
+        else:
+            tasks = [(rung, designs, param_spec, i, x0)
+                     for rung in _LADDER_RUNGS
+                     for i, x0 in enumerate(rung_inits[rung])]
+            # collect per-rung restart results into init-index ORDER (not arrival
+            # order), so the reduction tiebreak is deterministic.
+            per_rung = {r: [None] * len(rung_inits[r]) for r in _LADDER_RUNGS}
+            for rung, init_idx, res in pool.map(_ll_restart_worker, tasks):
+                per_rung[rung][init_idx] = res
+            for rung in _LADDER_RUNGS:
+                ll_by_rung[rung] = _reduce_restart_results(
+                    per_rung[rung], rung_inits[rung], rung_objectives[rung])[0]
+
+        # ── CV-LL per rung (the other costly bit): one rung per job when parallel ──
+        cvll = {}
+        if not compute_cvll:
+            cvll = {r: float("nan") for r in _LADDER_RUNGS}
+        elif pool is None:
+            for rung in _LADDER_RUNGS:
+                cvll[rung] = _ladder_rung_cvll(rung, designs, param_spec,
+                                               k=k, seed=seed)
+        else:
+            cv_tasks = [(rung, designs, param_spec, k, seed)
+                        for rung in _LADDER_RUNGS]
+            for rung, val in pool.map(_ll_cvll_worker, cv_tasks):
+                cvll[rung] = val
+    finally:
+        if pool is not None:
+            pool.shutdown()
+
+    aic, bic = {}, {}
     for rung in _LADDER_RUNGS:
-        ll, _theta = _fit_ladder_rung(
-            rung, designs, param_spec, n_restarts=n_restarts, seed=seed)
+        ll = ll_by_rung[rung]
         k_params = _ladder_k_params(rung, param_spec, n_anchors)
         aic[rung] = 2.0 * k_params - 2.0 * ll
         bic[rung] = k_params * log_N - 2.0 * ll
-        # CV-LL is the costly bit (k refits/rung) and is NOT used by argmin-AIC;
-        # skip it when the caller only needs the winner (the confusion measurement).
-        cvll[rung] = (_ladder_rung_cvll(rung, designs, param_spec, k=k, seed=seed)
-                      if compute_cvll else float("nan"))
-        ll_by_rung[rung] = ll
 
     winner = min(aic, key=aic.get)
     out = {"winner": winner, "aic": aic, "bic": bic, "cvll": cvll}
@@ -1444,7 +1580,7 @@ def _state_ladder_rung_cvll(rung, design, param_spec, folds, k, seed):
 
 
 def state_ladder(anchor_design, param_spec, k=5, seed=0, n_restarts=4,
-                 return_ll=False):
+                 return_ll=False, compute_cvll=True):
     """Which dial loads on MOOD within one anchor? Model-comparison ladder (Task 2.3).
 
     Plain English: within a single anchor, does the difference between the mouse's
@@ -1507,12 +1643,18 @@ def state_ladder(anchor_design, param_spec, k=5, seed=0, n_restarts=4,
     return_ll : bool
         If True, also return the per-rung pooled data log-likelihood under an
         ``"ll"`` key (lets callers/tests reconstruct AIC).
+    compute_cvll : bool
+        If False, SKIP the expensive k-fold CV-LL (k refits per rung) and set every
+        rung's ``cvll`` to ``np.nan``. The ``winner`` is ``argmin AIC`` and does NOT
+        depend on CV-LL, so callers that only need the winner pass ``False`` for a
+        large speedup (mirrors :func:`learning_ladder`'s ``compute_cvll``).
 
     Returns
     -------
     dict
         ``{"winner": str, "aic": {rung: float}, "cvll": {rung: float}}`` (plus
-        ``"ll"`` when ``return_ll``).
+        ``"ll"`` when ``return_ll``). With ``compute_cvll=False`` the ``cvll`` values
+        are ``np.nan`` placeholders.
     """
     n = len(anchor_design)
 
@@ -1535,11 +1677,13 @@ def state_ladder(anchor_design, param_spec, k=5, seed=0, n_restarts=4,
         k_params = _state_ladder_k_params(rung, param_spec)
         aic[rung] = 2.0 * k_params - 2.0 * fit.ll
         ll_by_rung[rung] = fit.ll
-        if can_cv:
+        if compute_cvll and can_cv:
             cvll[rung] = _state_ladder_rung_cvll(
                 rung, anchor_design, param_spec, folds, k, seed)
+        elif not compute_cvll:
+            cvll[rung] = float("nan")    # AIC-only fast path (winner = argmin AIC)
         else:
-            cvll[rung] = -np.inf
+            cvll[rung] = -np.inf         # too few trials to CV
 
     winner = min(aic, key=aic.get)
     out = {"winner": winner, "aic": aic, "cvll": cvll}
