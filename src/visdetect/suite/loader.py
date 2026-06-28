@@ -398,12 +398,23 @@ def load_waveform_labels(path: Optional[str] = None) -> pd.DataFrame:
 def load_unit_anatomy(path: Optional[str] = None) -> pd.DataFrame:
     """Per-unit anatomical localization (produced by scripts/anatomy/localize_units.py).
 
-    Returns an empty DataFrame if the file does not exist yet.
+    Layout is per-subject: ``data/anatomy/<subject>/unit_anatomy.csv`` (one file each).
+    All are concatenated (rows are keyed by Session_Date/Cluster_ID, so subjects don't
+    collide). The legacy flat ``data/anatomy/unit_anatomy.csv`` is still honoured for
+    back-compat. An explicit ``path`` overrides discovery. Empty DataFrame if none.
     """
-    p = path or os.path.join(ROOT, "data", "anatomy", "unit_anatomy.csv")
-    if not os.path.exists(p):
+    import glob
+    if path is not None:
+        return pd.read_csv(path) if os.path.exists(path) else pd.DataFrame()
+    base = os.path.join(ROOT, "data", "anatomy")
+    files = sorted(glob.glob(os.path.join(base, "*", "unit_anatomy.csv")))  # per-subject
+    flat = os.path.join(base, "unit_anatomy.csv")                            # legacy flat
+    if os.path.exists(flat):
+        files.append(flat)
+    frames = [pd.read_csv(f) for f in files]
+    if not frames:
         return pd.DataFrame()
-    return pd.read_csv(p)
+    return pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
 
 
 # ── Convenience: merged unit table ───────────────────────────────────

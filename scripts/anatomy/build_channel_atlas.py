@@ -86,19 +86,21 @@ def main():
     ap.add_argument("--raw-wf-root", default=None,
                     help="defaults to data/unit_match/input/<subject>")
     ap.add_argument("--artifact", default=None,
-                    help="defaults to data/anatomy/<subject>_shank_tracks.json")
-    ap.add_argument("--out-dir", default="data/anatomy")
+                    help="defaults to data/anatomy/<subject>/<subject>_shank_tracks.json")
+    ap.add_argument("--out-dir", default=None,
+                    help="defaults to data/anatomy/<subject>")
     args = ap.parse_args()
 
+    anat_dir = args.out_dir or os.path.join("data", "anatomy", args.subject)
     raw_root = args.raw_wf_root or os.path.join("data", "unit_match", "input", args.subject)
-    artifact = args.artifact or os.path.join("data", "anatomy", f"{args.subject}_shank_tracks.json")
+    artifact = args.artifact or os.path.join("data", "anatomy", args.subject, f"{args.subject}_shank_tracks.json")
     if not os.path.isdir(raw_root):
         print(f"{args.subject}: raw-wf root not found: {raw_root}")
         raise SystemExit(1)
     sessions = sorted(d for d in os.listdir(raw_root)
                       if os.path.isdir(os.path.join(raw_root, d)))
     atlas = AllenAtlas()  # real Allen atlas (downloads/caches on first use)
-    build_subject_atlas(args.subject, artifact, raw_root, sessions, atlas, args.out_dir)
+    build_subject_atlas(args.subject, artifact, raw_root, sessions, atlas, anat_dir)
 
 
 if __name__ == "__main__":

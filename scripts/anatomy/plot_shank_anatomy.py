@@ -49,11 +49,12 @@ def plot_subject_anatomy(subject, atlas_csv, out_png, unit_csv=None) -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--subject", required=True)
-    ap.add_argument("--anatomy-dir", default="data/anatomy")
+    ap.add_argument("--anatomy-dir", default=None, help="defaults to data/anatomy/<subject>")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
+    args.anatomy_dir = args.anatomy_dir or os.path.join("data", "anatomy", args.subject)
     atlas_csv = os.path.join(args.anatomy_dir, f"{args.subject}_channel_atlas.csv")
-    out = args.out or os.path.join("figures", "anatomy", f"{args.subject}_shank_anatomy.png")
+    out = args.out or os.path.join("FIGURES", "anatomy", args.subject, f"{args.subject}_shank_anatomy.png")
     plot_subject_anatomy(args.subject, atlas_csv, out)
     print(f"wrote {out}")
 
