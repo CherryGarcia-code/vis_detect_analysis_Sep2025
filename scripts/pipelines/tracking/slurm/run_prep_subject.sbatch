@@ -106,7 +106,15 @@ for s in sorted(os.listdir(proc)):
     imecs=glob.glob(os.path.join(proc,s,"Kilosort&Phy","*_imec0"))
     if not imecs: continue
     im=imecs[0]
-    ok = ((os.path.exists(os.path.join(im,"kilosort4","spike_times.npy")) or os.path.exists(os.path.join(im,"spike_times.npy")))
+    # Spikes: prefer KS4 in kilosort4/. If a kilosort4/ dir EXISTS it must carry
+    # spike_times.npy (an empty kilosort4/ = a failed KS4 run -> NOT ready, even if
+    # an OLD KS2.5 spike_times.npy lingers in the probe dir, as on re-sorted subjects
+    # like BG_012). Only fall back to probe-dir spikes when there's no kilosort4/ dir
+    # at all (subjects whose KS4 wrote directly to the probe folder).
+    ks4 = os.path.join(im,"kilosort4")
+    spikes_ok = (os.path.exists(os.path.join(ks4,"spike_times.npy"))
+                 or (not os.path.isdir(ks4) and os.path.exists(os.path.join(im,"spike_times.npy"))))
+    ok = (spikes_ok
           and glob.glob(os.path.join(im,"*tcat.imec*.ap.xd_*.txt"))
           and glob.glob(os.path.join(im,"*.ap.meta"))
           and os.path.isdir(os.path.join(proc,s,"Nidaq"))
