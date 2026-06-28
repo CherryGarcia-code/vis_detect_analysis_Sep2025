@@ -15,9 +15,13 @@ import pandas as pd
 from scipy.optimize import curve_fit
 from scipy.stats import norm
 
-from visdetect.analysis import ddm
 from visdetect.analysis.behavior import compute_session_performance, calculate_dprime
 from visdetect.analysis.config import parse_session_date  # DDMMYYYY parser
+# NOTE: `ddm` is imported LAZILY inside build_trial_table. ddm.py does `import pyddm`
+# at module load, so a top-level `import ddm` here would force pyddm onto every
+# importer of this module -- including the pure-synthetic recovery path
+# (_recovery_fixtures -> decision_latents.MAIN_MOODS). Keeping it lazy lets the
+# cluster recovery harness import this module on a numpy/scipy-only env (no pyddm).
 # CHANGE_SIZES is the canonical ordered go-trial list (sorted ALL_GO_CHANGE_SIZES);
 # it lives in config, NOT constants (the task brief's import path is a typo).
 from visdetect.analysis.config import CHANGE_SIZES
@@ -26,6 +30,82 @@ MAIN_MOODS = ("Impulsive", "StimSens")
 SEPARATE_MOODS = ("Disengaged",)
 EXCLUDED_MOODS = ("Abort",)
 _DEFAULT_TAG_DIR = os.path.join("data", "cache", "state_tags")
+
+# Provisional response-window end (s) used as the Miss decision time. Mirrors
+# ddm.RESPONSE_WINDOW_S; there is no canonical response-window constant in
+# visdetect.analysis.constants — confirm against task params during the
+# real-data run (spec §10). Defined HERE (not imported from ddm) so Phase-2 code
+# never touches the buggy ddm evidence sampler.
+RESPONSE_WINDOW_S = 2.155
+
+
+def _decision_time_dl(trial):
+    """Return (decision_time_s, lick {0,1}, censored), aligned to Baseline_ON.
+
+    Phase-1 local mirror of ``ddm._decision_time`` (deliberately NOT imported
+    from ddm, to keep Phase-2 off the buggy ``ddm.build_trial_evidence`` sampler):
+
+    * ``hit``  → ``(change_time + RT, 1, False)``   (RT from reactiontimes RT/Hit/hit)
+    * ``fa``   → ``(FA_latency, 1, False)``          (from reactiontimes FA/fa/RT)
+    * ``miss`` → ``(change_time + RESPONSE_WINDOW_S, 0, True)`` (response-window end, censored)
+    * anything else (abort/ref) → ``(nan, 0, True)`` (handled by the caller)
+
+    ``trialoutcome`` is lowercased (real data may capitalize it).
+    """
+    oc = (getattr(trial, "trialoutcome", "") or "").lower()
+    rts = getattr(trial, "reactiontimes", {}) or {}
+    ct = float(getattr(trial, "change_time", np.nan) or np.nan)
+    if oc == "hit":
+        rt = rts.get("RT", rts.get("Hit", rts.get("hit")))
+        return (ct + float(rt), 1, False)
+    if oc == "fa":
+        rt = rts.get("FA", rts.get("fa", rts.get("RT")))
+        return (float(rt), 1, False)            # anticipatory lick, aligned to Baseline_ON
+    if oc == "miss":
+        return (ct + RESPONSE_WINDOW_S, 0, True)   # response-window end; no crossing (censored)
+    return (np.nan, 0, True)                     # abort/ref handled by caller
+
+
+def build_trial_evidence_corrected(session, dt=0.05, tf_base=None):
+    """Per-trial log2-TF evidence on the dt grid, truncated to [0, decision_time].
+    Returns DataFrame: trial_idx, outcome, change_size, change_time, decision_time,
+    lick, censored, evidence(np.ndarray, len==n_bins), n_bins.
+    Evidence bin k reads baseline frame index 3*k (60 Hz storage, 50 ms holds)."""
+    MONITOR_HZ = 60.0
+    frames_per_bin = int(round(dt * MONITOR_HZ))   # == 3 for dt=0.05
+    trials = getattr(session, "trials", []) or []
+    rows = []
+    for uid, t in enumerate(trials):
+        oc = (getattr(t, "trialoutcome", "") or "").lower()
+        if oc in ("abort", "ref"):
+            continue
+        bv = getattr(t, "baseline_values", None)
+        if bv is None:
+            continue
+        bv = np.asarray(bv, float).ravel()
+        if bv.size == 0:
+            continue
+        cs = float(getattr(t, "change_size", np.nan) or np.nan)
+        ct = float(getattr(t, "change_time", np.nan) or np.nan)
+        base = float(tf_base) if tf_base is not None else float(np.nanmedian(bv)) or 1.0
+        dec_t, lick, censored = _decision_time_dl(t)        # Phase-1 helper (Task 0.1 Step 1)
+        if not np.isfinite(dec_t) or dec_t <= 0:
+            continue
+        n_bins = int(round(dec_t / dt))
+        if n_bins < 1:
+            continue
+        ev = np.empty(n_bins, float)
+        for k in range(n_bins):
+            j = min(bv.size - 1, k * frames_per_bin)        # 60 Hz frame for this 50 ms bin
+            tau = k * dt
+            tf = bv[j] * cs if (np.isfinite(ct) and tau >= ct and cs > 1.0) else bv[j]
+            ev[k] = np.log2(tf / base) if tf > 0 else 0.0
+        ev = np.nan_to_num(ev, nan=0.0)
+        rows.append({"trial_idx": uid, "outcome": oc, "change_size": cs,
+                     "change_time": ct, "decision_time": dec_t, "lick": int(lick),
+                     "censored": bool(censored), "evidence": ev, "n_bins": n_bins})
+    import pandas as pd
+    return pd.DataFrame(rows)
 
 def load_state_labels(session_name, subject="BG_046", tag_dir=None):
     base = os.path.join(tag_dir or _DEFAULT_TAG_DIR, subject)
@@ -65,14 +145,42 @@ def session_dprime(session):
     return float(compute_session_performance(session).get("d_prime", float("nan")))
 
 
-def assign_comprehension_flags(dprime_by_session, threshold=0.5):
-    """First chronological session with d′ ≥ threshold marks the pre→post
-    boundary; every session from there on is "post". (threshold=0.5 is the
-    low "knows-the-rule" bar, distinct from the QC 0.8 gate; spec §7.)"""
+def assign_comprehension_flags(dprime_by_session, threshold=0.5, rule="dprime",
+                               hitrate_by_session=None):
+    """First chronological session whose criterion clears ``threshold`` marks the
+    pre→post boundary; every session from there on is "post". (threshold=0.5 is
+    the low "knows-the-rule" bar, distinct from the QC 0.8 gate; spec §7.)
+
+    ``rule`` selects WHICH criterion crosses the boundary (fix f, "two
+    impulsivities" — pre- vs post-comprehension):
+
+      * ``"dprime"``       (default, back-compat): the first session with
+        ``dprime_by_session[s] >= threshold``. ``hitrate_by_session`` is ignored.
+      * ``"easy_hitrate"``: the first session whose EASY-change hit-rate
+        (``hitrate_by_session[s]``, e.g. P(lick) on the largest change-size go
+        trials) ``>= threshold`` (``threshold`` reinterpreted as a hit-rate bar).
+        Requires ``hitrate_by_session``; raises ``ValueError`` if it is None.
+
+    The chronological ordering (DDMMYYYY ids) and the "latch on, stays post"
+    semantics are identical across rules — only the per-session criterion differs.
+    """
+    if rule not in ("dprime", "easy_hitrate"):
+        raise ValueError(
+            f"assign_comprehension_flags: rule must be 'dprime' or 'easy_hitrate', "
+            f"got {rule!r}")
+    if rule == "easy_hitrate":
+        if hitrate_by_session is None:
+            raise ValueError(
+                "assign_comprehension_flags: rule='easy_hitrate' requires "
+                "hitrate_by_session (a {session: easy-change hit-rate} dict); got None")
+        criterion = hitrate_by_session
+    else:                                   # rule == "dprime"
+        criterion = dprime_by_session
+
     ordered = sorted(dprime_by_session, key=parse_session_date)
     flags, comprehended = {}, False
     for s in ordered:
-        if (dprime_by_session[s] or 0) >= threshold:
+        if (criterion.get(s) or 0) >= threshold:
             comprehended = True
         flags[s] = "post" if comprehended else "pre"
     return flags
@@ -88,6 +196,7 @@ def build_trial_table(session, state_labels, session_name, dt=0.05):
     here (its TF indexing is a Phase-2 concern); only ``n_bins = len(evidence)``
     is kept. ``trial_in_session`` is assigned after sorting so it is monotonic.
     """
+    from visdetect.analysis import ddm  # lazy: pulls pyddm at module load (see top-of-file note)
     ev = ddm.build_trial_evidence(session, dt=dt)   # trial_uid, outcome, change_size,
                                                     # change_time, decision_time, lick, censored, evidence
     rows = []
@@ -150,6 +259,14 @@ def _logistic(x, a, b):
     return 1.0 / (1.0 + np.exp(-(a + b * x)))
 
 
+def _logistic_lapse(x, a, b, lapse):
+    """Lapse-aware psychometric: a symmetric lapse rate floors AND ceilings the
+    logistic. ``P = lapse + (1 - 2*lapse) * logistic(a + b*x)`` so the lower
+    asymptote is ``lapse`` and the upper is ``1 - lapse`` (the mouse licks/withholds
+    by mistake at rate ``lapse`` regardless of evidence). ``x = log2(change_size)``."""
+    return lapse + (1.0 - 2.0 * lapse) / (1.0 + np.exp(-(a + b * x)))
+
+
 def sharpness_scores(trial_df):
     """Sharpness = how clearly the mouse tells the change happened.
 
@@ -163,6 +280,16 @@ def sharpness_scores(trial_df):
       ``psy_threshold = 2 ** x50``. NaN if the fit failed / ``psy_slope`` is NaN /
       ``abs(b) < 1e-3``; otherwise clamped to ``[1.0, 8.0]`` (change sizes span
       1.25–4.0, so this avoids wild extrapolation off a near-flat fit).
+    * ``psy_lapse`` / ``psy_threshold_lapse`` — a 3-param LAPSE-AWARE fit of the
+      SAME go-trial psychometric: ``P(lick|cs) = lapse + (1-2*lapse)*logistic(a +
+      b*log2(cs))`` (``_logistic_lapse``) with ``lapse ∈ [0, 0.3]``. This is the
+      psychometric the Phase-2 generative sharpness latent is validated against
+      (construct-validity F8), so both must measure the same thing. ``psy_lapse``
+      is the recovered lapse rate; ``psy_threshold_lapse = 2 ** (-a/b)`` clamped to
+      ``[1.0, 8.0]`` only when ``b > 0`` (the midpoint of the logistic core, where
+      P is the average of the two asymptotes). Both are NaN if the lapse fit fails
+      to converge or returns ``b <= 0``. Same go-trial support gate as the 2-param
+      fit (< 8 go trials or < 2 distinct change sizes → NaN).
     * ``dprime`` — ``calculate_dprime(hit_rate, fa_rate)`` with go-trial lick
       mean as the hit rate and catch-trial (``change_size ≈ 1.0``) lick mean as
       the FA rate. (``calculate_dprime`` log-linear-clips the rates.)
@@ -200,6 +327,24 @@ def sharpness_scores(trial_df):
         out["psy_threshold"] = float(np.clip(2.0 ** x50, 1.0, 8.0))
     else:
         out["psy_threshold"] = float("nan")
+    # 3-param LAPSE-AWARE fit on the SAME go-trial data (added alongside the
+    # 2-param keys for Phase-2 F8 construct validity). lapse bounded [0, 0.3];
+    # a/b kept wide. On convergence failure or non-increasing core (b<=0) → NaN.
+    out["psy_lapse"] = float("nan")
+    out["psy_threshold_lapse"] = float("nan")
+    if len(go) >= 8 and go["change_size"].nunique() >= 2:
+        xL = np.log2(go["change_size"].values); yL = go["lick"].values.astype(float)
+        try:
+            (aL, bL, lapseL), _ = curve_fit(
+                _logistic_lapse, xL, yL, p0=[0.0, 1.0, 0.05],
+                bounds=([-20.0, -20.0, 0.0], [20.0, 20.0, 0.3]), maxfev=10000)
+            if bL > 0:                       # threshold only defined for an increasing core
+                out["psy_lapse"] = float(lapseL)
+                x50L = -aL / bL
+                out["psy_threshold_lapse"] = float(np.clip(2.0 ** x50L, 1.0, 8.0))
+            # b<=0: a lapse rate off a flat/decreasing fit is not interpretable → leave NaN
+        except Exception:
+            pass                             # keep the NaN defaults set above
     hit_rate = float(go["lick"].mean()) if len(go) else float("nan")
     fa_rate = float(catch["lick"].mean()) if len(catch) else float("nan")
     out["dprime"] = float(calculate_dprime(hit_rate, fa_rate))
@@ -230,11 +375,15 @@ def itchiness_scores(trial_df, dt=0.05):
       gives a finite z.
     * ``fa_rate`` — fraction of trials whose ``outcome == "fa"`` (anticipatory
       lick; NOT the SDT false-alarm rate).
-    * ``baseline_hazard`` — mean lick hazard over the full decision timeline
-      (note: diluted by post-change bins; a pre-change-windowed version is a
-      Phase-2 refinement), computed from ``censored_hazard`` with FA-latency
-      events (``outcome == "fa"``) and ``decision_time`` durations (everything
-      else right-censored).
+    * ``baseline_hazard`` — mean FA (anticipatory-lick) hazard over the
+      PRE-CHANGE window only. An anticipatory lick can only occur before the
+      change, so non-FA trials are right-censored at ``change_time_planned``
+      (mirroring ``fa_lick_hazard``) — NaN change-times fall back to
+      ``decision_time``. This makes the baseline comparable across cells with
+      different max decision times: previously the hazard was averaged over the
+      full decision timeline, so post-change bins diluted it unevenly between
+      cells (fix c, Phase 2). Computed from ``censored_hazard`` with FA-latency
+      events (``outcome == "fa"``).
     """
     go = trial_df[trial_df["change_size"] > 1.0]
     catch = trial_df[np.isclose(trial_df["change_size"], 1.0)]
@@ -242,10 +391,16 @@ def itchiness_scores(trial_df, dt=0.05):
     FA = _loglinear(catch["lick"].mean() if len(catch) else 0.0, max(len(catch), 1))
     crit = -(norm.ppf(H) + norm.ppf(FA)) / 2.0
     fa_rate = float((trial_df["outcome"] == "fa").mean())
-    # baseline lick hazard: FA-latency events vs everything else censored at decision_time
+    # baseline lick hazard over the PRE-CHANGE window: FA-latency events, with
+    # non-FA trials censored at the change (min(change_time_planned, decision_time);
+    # NaN change_time falls back to decision_time) — the same censoring as
+    # fa_lick_hazard, so post-change bins never contaminate the baseline.
     is_fa = (trial_df["outcome"] == "fa").values
-    dur = trial_df["decision_time"].values.copy()
-    _, hz, _ = censored_hazard(dur, is_fa, dt=dt)
+    dtime = trial_df["decision_time"].values.astype(float)
+    ctime = trial_df["change_time_planned"].values.astype(float)
+    change_censor = np.where(np.isnan(ctime), dtime, np.minimum(ctime, dtime))
+    censor_t = np.where(is_fa, dtime, change_censor)
+    _, hz, _ = censored_hazard(censor_t, is_fa, dt=dt)
     return {"criterion_c": float(crit), "fa_rate": fa_rate,
             "baseline_hazard": float(np.nanmean(hz)) if hz.size else float("nan")}
 
@@ -306,6 +461,29 @@ def fa_lick_hazard(trial_df, dt=0.05):
     return censored_hazard(censor_t, is_fa, dt=dt)
 
 
+def change_time_anchor(trial_df):
+    """Empirical per-(session/cell) change-time anchor μ (fix d, Phase 2).
+
+    Returns the MEDIAN of ``change_time_planned`` over trials where the change was
+    actually reached (``change_reached == True``); ``nan`` if no change was ever
+    reached. This is the robust central tendency of WHEN the change occurs.
+
+    It deliberately does NOT use the change-onset hazard peak: the hazard
+    (events / #still-at-risk) is biased LATE by at-risk depletion — as time passes
+    the at-risk denominator shrinks, so the hazard keeps rising into the right tail
+    and its argmax lands after the true change-time centre. Only reached changes
+    count: a change planned at 20 s but pre-empted by an FA-lick (``change_reached
+    == False``) never occurred, so it must not drag the anchor up.
+
+    This μ seeds the Phase-2 urgency bump (``expectation_bump`` mu; contract A.3)
+    and the ``expected_change_time`` latent.
+    """
+    reached = trial_df["change_reached"].values.astype(bool)
+    ct = trial_df["change_time_planned"].values.astype(float)
+    vals = ct[reached & np.isfinite(ct)]
+    return float(np.median(vals)) if vals.size else float("nan")
+
+
 def _peak_and_spread(centers, hazard):
     """Peak time (argmax of the hazard) and the std of the hazard-weighted time
     distribution. Returns ``(nan, nan)`` when the hazard is all-zero so an empty
@@ -324,7 +502,13 @@ def timing_scores(trial_df, dt=0.05):
 
     Returns a dict:
 
-    * ``change_hazard_peak_time`` — when the change-onset hazard peaks.
+    * ``change_time_anchor_median`` — the empirical change-time anchor μ
+      (``change_time_anchor``: median planned change time over reached changes).
+      This is the robust seed for the Phase-2 urgency bump and the
+      ``expected_change_time`` latent (fix d). The hazard ``*_peak_time`` keys are
+      KEPT alongside it for the late-bias comparison (the change-onset hazard peak
+      is biased LATE by at-risk depletion, so anchor < peak typically holds).
+    * ``change_hazard_peak_time`` — when the change-onset hazard peaks (late-biased).
     * ``lick_hazard_peak_time`` — when the lick hazard peaks.
     * ``lick_hazard_spread`` — std of the hazard-weighted lick-time distribution
       (how temporally dispersed the licking is).
@@ -335,7 +519,8 @@ def timing_scores(trial_df, dt=0.05):
     lc, lh, _ = lick_hazard(trial_df, dt=dt)
     ch_peak, _ = _peak_and_spread(cc, ch)
     l_peak, l_spread = _peak_and_spread(lc, lh)
-    return {"change_hazard_peak_time": ch_peak, "lick_hazard_peak_time": l_peak,
+    return {"change_time_anchor_median": change_time_anchor(trial_df),
+            "change_hazard_peak_time": ch_peak, "lick_hazard_peak_time": l_peak,
             "lick_hazard_spread": l_spread,
             "peak_offset": (l_peak - ch_peak) if np.isfinite(l_peak) and np.isfinite(ch_peak) else float("nan")}
 
@@ -355,6 +540,48 @@ QC_MIN_RT_PER_CS = 3      # >= 3 hit-RTs at a change-size for a stable per-cs RT
 QC_MIN_RTCV_CS = 2        # >= 2 such change-sizes for the aggregate rt_cv_by_cs
 QC_MIN_TIMING_TRIALS = 20  # hazards/peaks need a populated trial timeline
 
+# ── Generative-sufficiency gate (fix e, part 1) ────────────────────────────
+# The Phase-2 generative model (Engine A) fits a per-cell {hazard, urgency-bump,
+# sharpness} from the cell's behaviour. It can only IDENTIFY those dials when the
+# cell carries enough of each kind of signal. ``usable_generative`` ANDs four
+# distribution-justified floors so junk cells never enter the fit:
+#   * n_lick_events           — the lick (FA/Hit) EVENTS the hazard fits to.
+#   * n_censored              — right-censored (no-lick / Miss) trials; without
+#                               them the survival curve never bends and the hazard
+#                               SLOPE is unidentifiable (an all-lick cell is flat).
+#   * n_trials_spanning_anchor— trials whose decision_time reaches the change-time
+#                               anchor μ, so the urgency-bump region is OBSERVED.
+#   * n_evidence_excursions   — go-trials where the change actually happened; the
+#                               sharpness latent needs real evidence excursions.
+# THRESHOLDS SET FROM THE REAL CELL DISTRIBUTIONS (behavioral_qc_profile.py run,
+# 2026-06-21; n=115 session×mood cells). Each distribution is bimodal: a thin
+# DEGENERATE tail near 0 (mood-sliced cells that barely populate) separated by a
+# gap from a populated BULK whose median sits in the 20s–60s. Each floor is placed
+# in that gap, above the degenerate tail. Rationale + numbers next to each value.
+# Combined yield with these floors: 71/115 cells usable_generative (Impulsive
+# 24/37, StimSens 34/43, Disengaged 13/35) — the degenerate tail is excluded.
+#
+# n_lick_events: sorted low tail = [0,0,0,1,1,1,1,2,2,2,2,2,3,3,3,3,4,4,4,4,5,5,
+#   7,7,8, …, 20, …] (median 61, max 628). Clear GAP from 8 → 20 (p30=20). 15
+#   sits in the gap: drops the 33 cells <15 (events too few for the hazard rate
+#   to be anchored) while keeping the populated bulk.
+QC_GEN_MIN_LICK_EVENTS = 15
+# n_censored: sorted low tail = [0,1,1,1,1,1,2,2,3,3,3,3,3,4,4,4,4,5,5,5,6,6,6,6,
+#   6, …] (median 21, max 449). Several cells have ~0 censored (all-lick → flat
+#   survival, hazard SLOPE unidentifiable). 8 (drops 30 cells <8) guarantees the
+#   survival curve carries enough no-lick exits to actually bend.
+QC_GEN_MIN_CENSORED = 8
+# n_trials_spanning_anchor: sorted low tail = [1,1,1,1,2,3,3,4,4,4,4,6,6,7,8,9,9,
+#   11,11,12,13,13,13,14,15, …] (median 61, max 457). Gap around 9 → 11+. 12
+#   (drops 19 cells <12) keeps cells whose decision times meaningfully reach the
+#   change-time anchor μ, so the urgency-bump region is genuinely observed.
+QC_GEN_MIN_SPAN = 12
+# n_evidence_excursions: sorted low tail = [0,1,1,1,2,2,2,2,3,3,3,3,3,5,5,7,7,7,8,
+#   9,9,9,10,10,10, …] (median 49, max 358). Degenerate cluster ≤3 (13 cells)
+#   then a gap to 5,7,…. 10 (drops 22 cells <10) keeps cells with a real
+#   psychometric's worth of reached-change excursions for the sharpness dial.
+QC_GEN_MIN_EXCURSION = 10
+
 
 def compute_cell_qc(trial_df):
     """Per-(session × mood) cell QC metrics + per-metric usability flags.
@@ -370,6 +597,20 @@ def compute_cell_qc(trial_df):
     * ``usable_sdt`` — >= QC_MIN_GO go AND >= QC_MIN_CATCH catch trials (d′/criterion/fa).
     * ``usable_rtcv`` — >= QC_MIN_RTCV_CS change-sizes each with >= QC_MIN_RT_PER_CS hit-RTs.
     * ``usable_timing`` — >= QC_MIN_TIMING_TRIALS trials (hazard/peak support).
+
+    GENERATIVE-SUFFICIENCY (fix e, part 1): also returns four counts and the
+    boolean ``usable_generative`` that gate cells the Phase-2 generative model
+    can identify its dials on (see the ``QC_GEN_*`` constants for the rationale):
+
+    * ``n_lick_events`` — observed licks (``lick == 1``); the hazard's events.
+    * ``n_censored`` — right-censored (no-lick / Miss) trials; needed to identify
+      the hazard SLOPE (an all-lick cell has a flat survival curve).
+    * ``n_trials_spanning_anchor`` — trials whose ``decision_time >= μ``, where
+      ``μ = change_time_anchor(trial_df)``; the urgency-bump region is observed.
+      0 when μ is NaN (no change ever reached).
+    * ``n_evidence_excursions`` — go-trials with a real change excursion
+      (``change_size > 1.0`` AND ``change_reached``); sharpness support.
+    * ``usable_generative`` — all four counts at/above their ``QC_GEN_*`` floors.
     """
     go = trial_df[trial_df["change_size"] > 1.0]
     catch = trial_df[np.isclose(trial_df["change_size"], 1.0)]
@@ -383,6 +624,20 @@ def compute_cell_qc(trial_df):
                       >= QC_MIN_RT_PER_CS for cs in CHANGE_SIZES)
     else:
         n_cs_rt = 0
+    # ── generative-sufficiency counts (fix e, part 1) ──────────────────────
+    n_lick_events = int((trial_df["lick"] == 1).sum())
+    n_censored = int(trial_df["censored"].astype(bool).sum())
+    mu = change_time_anchor(trial_df)        # Task 0.4 change-time anchor μ
+    if np.isfinite(mu):
+        n_span = int((trial_df["decision_time"].astype(float) >= mu).sum())
+    else:
+        n_span = 0                           # no change ever reached → bump region unobserved
+    n_excursions = int(((trial_df["change_size"] > 1.0) & trial_df["change_reached"]).sum())
+    usable_generative = bool(
+        n_lick_events >= QC_GEN_MIN_LICK_EVENTS
+        and n_censored >= QC_GEN_MIN_CENSORED
+        and n_span >= QC_GEN_MIN_SPAN
+        and n_excursions >= QC_GEN_MIN_EXCURSION)
     return {
         "n_trials": n_trials, "n_go": n_go, "n_catch": n_catch,
         "n_distinct_cs": n_distinct, "n_cs_rt_support": n_cs_rt,
@@ -390,6 +645,9 @@ def compute_cell_qc(trial_df):
         "usable_sdt": bool(n_go >= QC_MIN_GO and n_catch >= QC_MIN_CATCH),
         "usable_rtcv": bool(n_cs_rt >= QC_MIN_RTCV_CS),
         "usable_timing": bool(n_trials >= QC_MIN_TIMING_TRIALS),
+        "n_lick_events": n_lick_events, "n_censored": n_censored,
+        "n_trials_spanning_anchor": n_span, "n_evidence_excursions": n_excursions,
+        "usable_generative": usable_generative,
     }
 
 
@@ -428,6 +686,10 @@ def descriptive_cell_table(all_trials_df, min_cell_trials=1, dt=0.05):
             s = sharpness_scores(cell)
             rec["psy_slope"] = s["psy_slope"]
             rec["psy_threshold"] = s["psy_threshold"]
+            # 3-param lapse-aware fit (Phase-2 F8 construct validity), carried
+            # alongside the 2-param keys on the same psychometric-support gate.
+            rec["psy_lapse"] = s["psy_lapse"]
+            rec["psy_threshold_lapse"] = s["psy_threshold_lapse"]
             for cs in CHANGE_SIZES:
                 rec[f"rt_mean_cs{cs}"] = s.get(f"rt_mean_cs{cs}", float("nan"))
                 rec[f"rt_cv_cs{cs}"] = s.get(f"rt_cv_cs{cs}", float("nan"))

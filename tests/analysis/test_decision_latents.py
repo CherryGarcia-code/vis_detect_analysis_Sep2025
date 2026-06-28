@@ -30,6 +30,51 @@ def test_assign_comprehension_flags_marks_boundary():
     assert flags["02072025"] == "post" and flags["03072025"] == "post"
 
 
+def test_assign_comprehension_flags_back_compat_default_rule_unchanged():
+    """fix(f): the default (no ``rule``) call must behave EXACTLY like the legacy
+    d′ rule — existing callers pass no ``rule`` and must be unaffected."""
+    dprime = {"30062025": 0.1, "01072025": 0.2, "02072025": 0.7, "03072025": 0.9}
+    default = dl.assign_comprehension_flags(dprime, threshold=0.5)
+    explicit = dl.assign_comprehension_flags(dprime, threshold=0.5, rule="dprime")
+    assert default == explicit
+    assert default == {"30062025": "pre", "01072025": "pre",
+                       "02072025": "post", "03072025": "post"}
+
+
+def test_assign_comprehension_flags_rule_changes_boundary():
+    """fix(f): both rules mark the EXPECTED pre→post boundary on a synthetic
+    chronology, and switching ``rule`` moves the boundary as designed.
+
+    Construction (4 chronological sessions): d′ first clears 0.5 on the 3rd
+    session (02072025), but the easy-change hit-rate already clears 0.5 on the
+    2nd session (01072025). So the d′ rule's boundary is one session LATER than
+    the easy-hitrate rule's — a ground-truth difference, not a coincidence."""
+    dprime = {"30062025": 0.1, "01072025": 0.2, "02072025": 0.7, "03072025": 0.9}
+    easy_hr = {"30062025": 0.2, "01072025": 0.6, "02072025": 0.7, "03072025": 0.95}
+
+    # d′ rule: boundary at 02072025 (first d′ ≥ 0.5)
+    by_dprime = dl.assign_comprehension_flags(dprime, threshold=0.5, rule="dprime")
+    assert by_dprime == {"30062025": "pre", "01072025": "pre",
+                         "02072025": "post", "03072025": "post"}
+
+    # easy-hitrate rule: boundary one session EARLIER, at 01072025 (first HR ≥ 0.5)
+    by_hr = dl.assign_comprehension_flags(
+        dprime, threshold=0.5, rule="easy_hitrate", hitrate_by_session=easy_hr)
+    assert by_hr == {"30062025": "pre", "01072025": "post",
+                     "02072025": "post", "03072025": "post"}
+
+    # switching the rule genuinely moved the boundary (01072025 flips pre→post)
+    assert by_dprime["01072025"] == "pre" and by_hr["01072025"] == "post"
+
+
+def test_assign_comprehension_flags_easy_hitrate_requires_hitrate_dict():
+    """fix(f): ``rule='easy_hitrate'`` with no ``hitrate_by_session`` must raise a
+    clear ValueError (not silently fall back to d′)."""
+    dprime = {"30062025": 0.1, "01072025": 0.7}
+    with pytest.raises(ValueError):
+        dl.assign_comprehension_flags(dprime, threshold=0.5, rule="easy_hitrate")
+
+
 def test_build_trial_table_filters_and_columns(synth_session, synth_state_labels):
     from visdetect.analysis import decision_latents as dl
     tab = dl.build_trial_table(synth_session, synth_state_labels, "07072025", dt=0.05)
@@ -70,6 +115,22 @@ def test_censored_hazard_bins_mid_bin_duration_correctly():
     assert np.isclose(hz[1], 1.0)  # the event lands in bin1
 
 
+def test_build_trial_evidence_corrected_reads_every_third_frame():
+    import numpy as np
+    from types import SimpleNamespace
+    from visdetect.analysis import decision_latents as dl
+    # bv: 60 Hz, each TF held 3 frames. Pre-change TF doubles every 3 frames: 1,1,1,2,2,2,4,4,4,...
+    bv = np.repeat([1.0, 2.0, 4.0, 8.0], 3)            # 12 frames = 0.2 s at 60 Hz
+    t = SimpleNamespace(trialoutcome="hit", change_size=4.0, change_time=10.0,
+                        reactiontimes={"RT": 0.10}, baseline_values=bv, n_seen=None)
+    sess = SimpleNamespace(trials=[t])
+    df = dl.build_trial_evidence_corrected(sess, dt=0.05, tf_base=1.0)
+    ev = df.iloc[0]["evidence"]
+    # bin k reads frame 3k: bv[0]=1->log2(1)=0, bv[3]=2->1, bv[6]=4->2 (pre-change, ct=10 s)
+    assert ev[0] == 0.0 and abs(ev[1] - 1.0) < 1e-9 and abs(ev[2] - 2.0) < 1e-9
+    assert df.iloc[0]["n_bins"] == int(round((10.0 + 0.10) / 0.05)) or df.iloc[0]["n_bins"] == 202
+
+
 def test_sharpness_scores_keys_and_dprime_direction():
     import numpy as np, pandas as pd
     from visdetect.analysis import decision_latents as dl
@@ -108,6 +169,63 @@ def test_itchiness_scores_more_fa_higher_criterion_shift():
     assert "criterion_c" in hi and "baseline_hazard" in hi
 
 
+def test_itchiness_baseline_hazard_restricted_to_pre_change_window():
+    """fix(c): ``baseline_hazard`` must be computed over the PRE-CHANGE window
+    only — non-FA trials censored at ``change_time_planned`` (mirroring
+    ``fa_lick_hazard``) — so it is comparable across cells with different max
+    decision times and is INSENSITIVE to post-change lick density.
+
+    Construction: two cells identical except the post-change lick density of
+    their non-FA (hit) trials. Both share the same FA trials (early licks at
+    4.5 s) and the same change time (7.0 s). Cell A's hits resolve at 7.3 s,
+    Cell B's hits resolve much later at 12.0 s — purely post-change differences.
+
+      * NEW (pre-change window): non-FA trials censor at the change (7.0 s), so
+        no post-change bin ever contributes ⇒ ``baseline_hazard`` is EQUAL for A
+        and B and lower than the full-timeline value.
+      * OLD (full timeline): non-FA trials stay at risk to their decision_time,
+        so B's later, sparser timeline dilutes the mean differently ⇒ A != B,
+        and both differ from the new pre-change value.
+    """
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+
+    def make(hit_decision_time):
+        rows = []
+        for _ in range(4):
+            rows.append({"change_size": 2.0, "outcome": "fa", "lick": 1,
+                         "decision_time": 4.5, "change_time_planned": 7.0})
+        for _ in range(6):
+            rows.append({"change_size": 2.0, "outcome": "hit", "lick": 1,
+                         "decision_time": hit_decision_time, "change_time_planned": 7.0})
+        return pd.DataFrame(rows)
+
+    cell_a = make(7.3)   # hits resolve just after the change
+    cell_b = make(12.0)  # hits resolve much later (sparser post-change tail)
+    ba = dl.itchiness_scores(cell_a)["baseline_hazard"]
+    bb = dl.itchiness_scores(cell_b)["baseline_hazard"]
+
+    # NEW behaviour: insensitive to post-change lick density ⇒ A == B.
+    assert np.isclose(ba, bb)
+
+    # And it genuinely differs from the OLD full-timeline value (which censored
+    # non-FA trials at decision_time, letting the post-change tail leak in).
+    df = cell_a
+    is_fa = (df["outcome"] == "fa").values
+    _, old_h, _ = dl.censored_hazard(
+        df["decision_time"].values.astype(float), is_fa, dt=0.05)
+    old_baseline = float(np.nanmean(old_h))
+    assert not np.isclose(ba, old_baseline)
+
+    # Equivalence with the pre-change-censored hazard (the fa_lick_hazard pattern):
+    dtime = df["decision_time"].values.astype(float)
+    ctime = df["change_time_planned"].values.astype(float)
+    change_censor = np.where(np.isnan(ctime), dtime, np.minimum(ctime, dtime))
+    censor_t = np.where(is_fa, dtime, change_censor)
+    _, new_h, _ = dl.censored_hazard(censor_t, is_fa, dt=0.05)
+    assert np.isclose(ba, float(np.nanmean(new_h)))
+
+
 def test_timing_scores_peak_and_offset():
     import numpy as np, pandas as pd
     from visdetect.analysis import decision_latents as dl
@@ -122,6 +240,74 @@ def test_timing_scores_peak_and_offset():
     assert 4.0 < sc["change_hazard_peak_time"] < 6.0
     assert sc["lick_hazard_peak_time"] >= sc["change_hazard_peak_time"]  # licks after change
     assert "peak_offset" in sc and "lick_hazard_spread" in sc
+
+
+def test_change_time_anchor_recovers_median_not_late_hazard_peak():
+    """fix(d): the empirical change-time anchor must be the MEDIAN of the planned
+    change times over trials where the change was actually reached — NOT the
+    change-onset hazard peak, which is biased LATE by at-risk depletion.
+
+    Ground-truth construction: change times are drawn around 7 s (so the true
+    central tendency is ~7 s), but the change-onset hazard, being events / (#still
+    at risk), keeps rising into the right tail as the at-risk denominator shrinks —
+    so its argmax lands well AFTER 7 s. The anchor (a plain median over reached
+    changes) is robust to this and recovers ~7 s, and must be strictly EARLIER than
+    the hazard peak.
+
+    Also asserts ``timing_scores`` gains a ``change_time_anchor_median`` key while
+    KEEPING the existing ``change_hazard_peak_time`` / ``peak_offset`` keys (the
+    late-biased peak is retained for comparison)."""
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    rng = np.random.default_rng(0)
+    rows = []
+    # Reached changes drawn around 7 s (broad, slightly right-skewed) so the
+    # at-risk set depletes across the spread and the hazard argmax biases late.
+    for _ in range(400):
+        ct = 7.0 + rng.normal(0.0, 1.2) + rng.exponential(0.6) - 0.6
+        ct = max(ct, 1.0)
+        rows.append({"change_reached": True, "change_time_planned": ct,
+                     "lick": 1, "outcome": "hit", "decision_time": ct + 0.3})
+    df = pd.DataFrame(rows)
+
+    anchor = dl.change_time_anchor(df)
+    assert np.isfinite(anchor)
+    assert abs(anchor - 7.0) < 0.6                 # median recovers the ~7 s draw centre
+
+    # The change-onset hazard peaks LATE (at-risk depletion) → strictly after the anchor.
+    cc, ch, _ = dl.change_onset_hazard(df, dt=0.05)
+    peak = cc[int(np.argmax(ch))]
+    assert anchor < peak                           # anchor is earlier than the hazard peak
+
+    # timing_scores exposes the anchor AND keeps the existing peak keys.
+    sc = dl.timing_scores(df, dt=0.05)
+    assert "change_time_anchor_median" in sc
+    assert "change_hazard_peak_time" in sc and "peak_offset" in sc
+    assert np.isclose(sc["change_time_anchor_median"], anchor)
+    assert sc["change_time_anchor_median"] < sc["change_hazard_peak_time"]
+
+
+def test_change_time_anchor_uses_only_reached_changes_and_nan_when_none():
+    """The anchor is the median of ``change_time_planned`` over ``change_reached``
+    trials only — planned-but-never-reached (FA-censored) changes are excluded —
+    and is NaN when no change was ever reached."""
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    rows = [
+        {"change_reached": True, "change_time_planned": 6.0, "outcome": "hit"},
+        {"change_reached": True, "change_time_planned": 8.0, "outcome": "miss"},
+        # a planned-but-unreached change at 20 s must NOT drag the median up
+        {"change_reached": False, "change_time_planned": 20.0, "outcome": "fa"},
+    ]
+    anchor = dl.change_time_anchor(pd.DataFrame(rows))
+    assert np.isclose(anchor, 7.0)                 # median(6, 8), ignoring the unreached 20 s
+
+    # no reached change → NaN
+    none_reached = pd.DataFrame([
+        {"change_reached": False, "change_time_planned": 5.0, "outcome": "fa"},
+        {"change_reached": False, "change_time_planned": 9.0, "outcome": "abort"},
+    ])
+    assert np.isnan(dl.change_time_anchor(none_reached))
 
 
 def test_fa_lick_hazard_nonzero_in_fa_bins_and_reuses_censored_hazard():
@@ -229,6 +415,53 @@ def test_sharpness_threshold_nan_for_negative_slope():
     assert np.isnan(sc["psy_threshold"])  # ...so no threshold is reported
 
 
+def _make_lapse_go_rows(lapse, a, b, rng, n_per_cs=300):
+    """Generate GO-trial rows from a KNOWN lapse-aware psychometric.
+
+    P(lick | cs) = lapse + (1 - 2*lapse) * logistic(a + b*log2(cs)), sampled as
+    Bernoulli draws. With a steep ``b`` the asymptotes sit at ``lapse`` (lowest cs)
+    and ``1 - lapse`` (highest cs), so the lapse rate is identifiable from the
+    plateaus rather than from any single intercept. Only go trials (cs > 1.0)."""
+    rows = []
+    for cs in [1.25, 1.35, 1.5, 2.0, 4.0]:
+        x = np.log2(cs)
+        p = lapse + (1.0 - 2.0 * lapse) / (1.0 + np.exp(-(a + b * x)))
+        for _ in range(n_per_cs):
+            lick = int(rng.random() < p)
+            outcome = "hit" if lick else "miss"
+            ct = 7.0
+            rows.append({"change_size": cs, "lick": lick, "outcome": outcome,
+                         "change_time_planned": ct,
+                         "decision_time": ct + rng.uniform(0.2, 0.6) if lick else ct + 2.0})
+    return rows
+
+
+def test_sharpness_lapse_recovers_known_lapse_rate():
+    """Ground-truth: data generated with a KNOWN lapse=0.15 (steep slope) must be
+    recovered by the 3-param fit within +/-0.07, and lapse-free data must give
+    psy_lapse ~ 0. The 2-param keys stay present for back-compat."""
+    import pandas as pd
+    from visdetect.analysis import decision_latents as dl
+    # steep, well-centred psychometric so the plateaus (lapse / 1-lapse) are sampled
+    a, b = -3.0, 6.0
+    rng = np.random.default_rng(20260621)
+    df_lapse = pd.DataFrame(_make_lapse_go_rows(0.15, a, b, rng, n_per_cs=400))
+    sc = dl.sharpness_scores(df_lapse)
+    # added keys present alongside the legacy 2-param ones
+    assert "psy_lapse" in sc and "psy_threshold_lapse" in sc
+    assert "psy_slope" in sc and "psy_threshold" in sc   # back-compat preserved
+    assert np.isfinite(sc["psy_lapse"])
+    assert abs(sc["psy_lapse"] - 0.15) <= 0.07           # recovers the planted lapse
+    assert 1.0 <= sc["psy_threshold_lapse"] <= 8.0       # threshold clamped, b>0
+
+    # lapse-FREE data → psy_lapse ~ 0 (well inside the +/-0.07 band of 0)
+    rng2 = np.random.default_rng(11)
+    df_nolapse = pd.DataFrame(_make_lapse_go_rows(0.0, a, b, rng2, n_per_cs=400))
+    sc0 = dl.sharpness_scores(df_nolapse)
+    assert np.isfinite(sc0["psy_lapse"])
+    assert sc0["psy_lapse"] <= 0.07                      # ~0, definitely below planted 0.15
+
+
 def test_cell_and_latent_tables(synth_session, synth_state_labels):
     from visdetect.analysis import decision_latents as dl
     tab = dl.build_trial_table(synth_session, synth_state_labels, "07072025")
@@ -238,7 +471,7 @@ def test_cell_and_latent_tables(synth_session, synth_state_labels):
     # QC columns always travel with every cell; psy_slope present (synth cells have
     # go-trials). The synth has NO catch trials and < 20-trial cells, so SDT/timing
     # scores legitimately DON'T fire — that's the per-metric gate working, not a bug.
-    assert {"psy_slope", "n_trials", "n_go",
+    assert {"psy_slope", "psy_lapse", "psy_threshold_lapse", "n_trials", "n_go",
             "usable_psychometric", "usable_sdt", "usable_rtcv", "usable_timing"}.issubset(cells.columns)
     assert not cells["usable_sdt"].any()   # no catch → SDT never usable on synth
     lat = dl.descriptive_latent_table(tab, cells)
@@ -249,7 +482,10 @@ def test_cell_and_latent_tables(synth_session, synth_state_labels):
 
 def _mk_cell_rows(mood, go_specs, n_catch_lick=0, n_catch_nolick=0, n_fa=0):
     """Build realistic trial rows for one (session×mood) cell.
-    go_specs: list of (change_size, n_hits, n_miss). Hits lick after the change."""
+    go_specs: list of (change_size, n_hits, n_miss). Hits lick after the change.
+    ``censored`` follows the real-data rule: lick trials (hit/fa) are observed
+    (censored=False); no-lick trials (miss / withheld catch) are right-censored
+    (censored=True)."""
     import numpy as np
     rng = np.random.default_rng(7)
     rows, ti = [], 0
@@ -257,24 +493,73 @@ def _mk_cell_rows(mood, go_specs, n_catch_lick=0, n_catch_nolick=0, n_fa=0):
         for _ in range(n_hit):
             rows.append({"change_size": cs, "lick": 1, "outcome": "hit", "change_reached": True,
                          "change_time_planned": 7.0, "decision_time": 7.0 + rng.uniform(0.2, 0.6),
-                         "state_label": mood, "trial_in_session": ti}); ti += 1
+                         "censored": False, "state_label": mood, "trial_in_session": ti}); ti += 1
         for _ in range(n_miss):
             rows.append({"change_size": cs, "lick": 0, "outcome": "miss", "change_reached": True,
                          "change_time_planned": 7.0, "decision_time": 9.0,
-                         "state_label": mood, "trial_in_session": ti}); ti += 1
+                         "censored": True, "state_label": mood, "trial_in_session": ti}); ti += 1
     for k in range(n_catch_lick):     # catch trial, licked → SDT false alarm
         rows.append({"change_size": 1.0, "lick": 1, "outcome": "hit", "change_reached": True,
                      "change_time_planned": 7.0, "decision_time": 7.3,
-                     "state_label": mood, "trial_in_session": ti}); ti += 1
+                     "censored": False, "state_label": mood, "trial_in_session": ti}); ti += 1
     for k in range(n_catch_nolick):   # catch trial, correctly withheld
         rows.append({"change_size": 1.0, "lick": 0, "outcome": "miss", "change_reached": True,
                      "change_time_planned": 7.0, "decision_time": 9.0,
-                     "state_label": mood, "trial_in_session": ti}); ti += 1
+                     "censored": True, "state_label": mood, "trial_in_session": ti}); ti += 1
     for k in range(n_fa):             # anticipatory early lick before the change
         rows.append({"change_size": 2.0, "lick": 1, "outcome": "fa", "change_reached": False,
                      "change_time_planned": 7.0, "decision_time": 4.5,
-                     "state_label": mood, "trial_in_session": ti}); ti += 1
+                     "censored": False, "state_label": mood, "trial_in_session": ti}); ti += 1
     return rows
+
+
+def test_compute_cell_qc_usable_generative_needs_balanced_support():
+    """fix(e) part 1: ``usable_generative`` gates cells that the Phase-2 generative
+    model (Engine A) can actually identify its dials on. It needs FOUR things in
+    sufficient supply, each derived from the Phase-1 per-(session×mood) cell table
+    (which has NO per-trial evidence arrays):
+
+      * ``n_lick_events``           — observed licks (lick == 1): the events
+      * ``n_censored``              — right-censored (no-lick / Miss) trials: needed
+                                      to identify the hazard SLOPE (all-lick → flat)
+      * ``n_trials_spanning_anchor``— trials whose decision_time >= the change-time
+                                      anchor μ: the urgency-bump region is observed
+      * ``n_evidence_excursions``   — go-trials with a real change excursion
+                                      ((change_size > 1.0) & change_reached): sharpness
+
+    A cell with PLENTY of licks but ZERO censored trials cannot identify the hazard
+    slope → ``usable_generative == False``. A balanced cell (licks AND censored AND
+    spanning trials AND excursions all above threshold) → True."""
+    import numpy as np, pandas as pd
+    from visdetect.analysis import decision_latents as dl
+
+    # ── all-lick cell: every go-trial is a hit, no misses, no withheld catch ──
+    # plenty of lick events + excursions + spanning trials, but ZERO censored.
+    all_lick = pd.DataFrame(_mk_cell_rows(
+        "StimSens",
+        [(1.25, 12, 0), (1.35, 12, 0), (1.5, 12, 0), (2.0, 12, 0), (4.0, 12, 0)],
+        n_catch_lick=8))               # catch licks too — still NOTHING censored
+    qc_nolapse = dl.compute_cell_qc(all_lick)
+    assert qc_nolapse["n_lick_events"] >= dl.QC_GEN_MIN_LICK_EVENTS  # plenty of licks
+    assert qc_nolapse["n_censored"] == 0                              # but zero censored
+    assert qc_nolapse["usable_generative"] is False                  # → not identifiable
+
+    # ── balanced cell: hits AND misses AND withheld catch (censored) AND FAs ──
+    balanced = pd.DataFrame(_mk_cell_rows(
+        "StimSens",
+        [(1.25, 8, 8), (1.35, 8, 8), (1.5, 10, 6), (2.0, 12, 4), (4.0, 14, 2)],
+        n_catch_lick=4, n_catch_nolick=16, n_fa=10))
+    qcb = dl.compute_cell_qc(balanced)
+    assert qcb["n_lick_events"] >= dl.QC_GEN_MIN_LICK_EVENTS
+    assert qcb["n_censored"] >= dl.QC_GEN_MIN_CENSORED
+    assert qcb["n_trials_spanning_anchor"] >= dl.QC_GEN_MIN_SPAN
+    assert qcb["n_evidence_excursions"] >= dl.QC_GEN_MIN_EXCURSION
+    assert qcb["usable_generative"] is True
+
+    # the four counts are exposed as ints on every cell
+    for k in ("n_lick_events", "n_censored", "n_trials_spanning_anchor",
+              "n_evidence_excursions"):
+        assert isinstance(qcb[k], int)
 
 
 def test_compute_cell_qc_flags():

@@ -265,9 +265,58 @@ DEFAULT_ANALYSIS_WINDOW: Tuple[float, float] = (-1.0, 1.5)
 # Date parsing utilities
 # =====================================================================
 
+def canonical_session_id(session) -> str:
+    """Return the canonical 8-digit ``DDMMYYYY`` session-id STRING.
+
+    THE single source of truth for session-id keys project-wide. Use this anywhere
+    a session id is compared, joined, dict-keyed, or written/read across a CSV
+    boundary -- never raw ``int(...)``, ``str(...)``, or an ad-hoc ``.zfill(8)``.
+
+    Why this exists (a recurring, cross-project bug): session ids are ``DDMMYYYY``
+    (e.g. ``01072025`` = 1 Jul 2025). Stored as int64 (the default when a CSV column
+    is all-numeric) or cast via ``int()``, the leading-zero DAY of days 1-9 drops ->
+    ``1072025`` (7 digits). There is NO ``1072025`` session; it is just
+    ``int('01072025')``. Mixing the two forms silently breaks key lookups/joins
+    (day-1-9 sessions miss) and ordering (``'1072025'`` sorts before ``'23062025'``
+    lexically though 1 Jul is AFTER 23 Jun). This helper collapses every
+    representation -- int64, numeric string, int-valued float (``1072025.0`` from a
+    NaN-bearing column), and the float-as-string ``'1072025.0'`` (CSV float
+    round-trip) -- to the same zfill8 string. Non-numeric ids (test mocks,
+    subject-prefixed names) pass through unchanged. For chronological ordering use
+    :func:`chronological_sort` / :func:`parse_session_date` (NOT a raw sort).
+
+    Examples
+    --------
+    >>> canonical_session_id(1072025)        # int64
+    '01072025'
+    >>> canonical_session_id('1072025')      # int-form string
+    '01072025'
+    >>> canonical_session_id('01072025')     # already canonical
+    '01072025'
+    >>> canonical_session_id(1072025.0)      # int-valued float
+    '01072025'
+    >>> canonical_session_id('1072025.0')    # float-as-string (CSV round-trip)
+    '01072025'
+    """
+    try:
+        return str(int(session)).zfill(8)
+    except (TypeError, ValueError):
+        pass
+    try:
+        f = float(session)
+        if f.is_integer():
+            return str(int(f)).zfill(8)
+    except (TypeError, ValueError):
+        pass
+    return str(session).strip()
+
+
 def parse_session_date(session_int) -> Tuple[int, int, int]:
-    """Convert DDMMYYYY int to sortable (year, month, day) tuple."""
-    s = str(int(session_int)).zfill(8)
+    """Convert a DDMMYYYY session id to a sortable (year, month, day) tuple.
+
+    Robust to the int64 / leading-zero forms via :func:`canonical_session_id`.
+    """
+    s = canonical_session_id(session_int)
     dd, mm, yyyy = int(s[:2]), int(s[2:4]), int(s[4:])
     return (yyyy, mm, dd)
 
@@ -296,8 +345,8 @@ def session_date_key(session) -> Tuple[int, int, int]:
 
 
 def session_int_to_iso(session_int) -> str:
-    """Convert DDMMYYYY int to 'YYYY-MM-DD' string."""
-    s = str(int(session_int)).zfill(8)
+    """Convert a DDMMYYYY session id to a 'YYYY-MM-DD' string."""
+    s = canonical_session_id(session_int)
     return f"{s[4:]}-{s[2:4]}-{s[:2]}"
 
 
