@@ -27,6 +27,24 @@ logger = logging.getLogger(__name__)
 
 # ── Behavioral data ──────────────────────────────────────────────────
 
+def extract_stim_timeseries(raw_trial: dict) -> dict:
+    """Pull the per-frame stimulus log (phase, displayed TF, vbl flip times)
+    from a raw trials.json trial dict. Returns None for any absent key."""
+    def _arr(key, ncol=None):
+        v = raw_trial.get(key)
+        if v is None:
+            return None
+        a = np.asarray(v, dtype=np.float64)
+        if ncol is not None and (a.ndim != 2 or a.shape[1] != ncol):
+            a = a.reshape(-1, ncol)
+        return a
+    return {
+        "stim_phase": _arr("phase", ncol=2),
+        "stim_tf_disp": _arr("TF"),
+        "stim_vbl": _arr("vbl"),
+    }
+
+
 def load_behavioral_trials(
     raw_session_dir: Path,
 ) -> Tuple[List[Trial], Optional[dict], Optional[dict]]:
@@ -94,6 +112,9 @@ def load_behavioral_trials(
         bv_raw = t.get("St1TrialVector")
         baseline_values = np.array(bv_raw, dtype=np.float64) if bv_raw is not None else None
 
+        # Extract per-frame stimulus log (phase, TF, vbl)
+        stim = extract_stim_timeseries(t)
+
         trials.append(Trial(
             trialoutcome=outcome,
             reactiontimes=rt,
@@ -102,6 +123,9 @@ def load_behavioral_trials(
             ITI=t.get("stimD"),
             change_time=t.get("stimT"),
             baseline_values=baseline_values,
+            stim_phase=stim["stim_phase"],
+            stim_tf_disp=stim["stim_tf_disp"],
+            stim_vbl=stim["stim_vbl"],
         ))
 
     logger.info(
