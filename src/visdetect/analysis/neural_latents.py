@@ -187,3 +187,34 @@ def decode_cohort(sessions, *, n_null=200, seed=42):
     return {"per_session": per, "mean_r": float(np.nanmean(rs)),
             "median_r": float(np.nanmedian(rs)), "ci": (float(ci_lo), float(ci_hi)),
             "null_mean": float(null.mean()), "null_sd": float(null.std()), "within_type": wt}
+
+# ── Task 5: φ-vs-ramp discriminability on the readout window (NOTE A) ────────
+# NOTE A: over a PRE-μ window (μ≈6.7-7.5 s, readout ends before μ) a Gaussian
+# urgency bump φ (rising flank only) and a linear ramp are highly collinear, so
+# a φ-weighted vs ramp-weighted temporal collapse of the SAME readout window may
+# be statistically indistinguishable (underpowered). phi_specificity_session
+# returns the per-session ΔCV r so Task 7 can aggregate `delta` across sessions
+# with a bootstrap CI; an honest "not separable on the readout window" outcome
+# is acceptable and gates the urgency-vs-ramp interpretation in Task 7.
+
+def phi_ramp_bases(t, mu, sigma=0.8):
+    """Two temporal-weight bases over the readout window `t` (seconds):
+    `phi` = Gaussian urgency bump centred at the change time `mu`; `ramp` =
+    linear monotonic 0->1 ramp. For a pre-μ window only φ's RISING FLANK is
+    seen, so the two are strongly collinear (NOTE A)."""
+    t = np.asarray(t, float)
+    phi = np.exp(-0.5 * ((t - mu) / sigma) ** 2)
+    ramp = (t - t.min()) / (t.max() - t.min() + 1e-12)
+    return {"phi": phi, "ramp": ramp}
+
+def phi_specificity_session(Xt, y, t, mu, sigma=0.8, *, seed=42):
+    """Xt: (n_trials, n_bins, n_units) for ONE session. Compare within-session
+    decode (decode_session) using a phi-weighted vs ramp-weighted temporal collapse
+    of the readout window. Returns the per-session delta CV r."""
+    b = phi_ramp_bases(t, mu, sigma)
+    def _r(weight):
+        w = weight / (weight.sum() + 1e-12)
+        Xw = np.tensordot(Xt, w, axes=([1], [0]))    # (n_trials, n_units)
+        return decode_session(Xw, y, seed=seed)["r"]
+    r_phi, r_ramp = _r(b["phi"]), _r(b["ramp"])
+    return {"r_phi": r_phi, "r_ramp": r_ramp, "delta": r_phi - r_ramp}

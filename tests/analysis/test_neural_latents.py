@@ -139,3 +139,18 @@ def test_within_type_graded_separates_types():
     tt = np.array(["fa", "fa", "fa", "hit", "hit", "hit"])
     g = nl.within_type_graded(y_pred, y_true, tt)
     assert g["hit"] > 0.8 and g["fa"] > 0.8                   # graded WITHIN each type
+
+# ── Task 5: phi/ramp bases for the NOTE-A discriminability prerequisite ────
+def test_phi_ramp_bases_shapes():
+    # window = nl.WINDOWS["late"] = (4.0, 6.0): the latest pre-mu readout window
+    # (PRIMARY candidate per the §4 selection rule). NOTE-A collinearity is
+    # window-dependent: negligible far below mu (early/mid windows are near-flat
+    # phi tails) and strong only NEAR mu; over [0,6] the 7-sigma tail kills it.
+    t = np.linspace(4.0, 6.0, 120)
+    b = nl.phi_ramp_bases(t, mu=7.0, sigma=0.8)
+    assert b["phi"].argmax() == len(t) - 1          # rising flank: phi peaks toward mu>6
+    assert np.all(np.diff(b["ramp"]) > 0)           # ramp strictly monotonic
+    # over the latest pre-mu readout window ([4,6], the PRIMARY candidate), phi's
+    # rising flank is highly collinear with a monotonic ramp (NOTE A) ->
+    # phi-specificity is expected to be underpowered there.
+    assert np.corrcoef(b["phi"], b["ramp"])[0, 1] > 0.85   # true value ~0.89 over [4,6]
