@@ -63,3 +63,15 @@ def test_join_verification_catches_misalignment():
     with pytest.raises(AssertionError):
         nl.join_session(sess, bad, window=(-1.3, 6.0), bin_size=0.05,
                         baseline_window=(-1.3, -0.3), min_rate_hz=0.0, verify=True)
+
+def test_window_feature_matrix_means_over_fixed_window():
+    n_tr, n_units = 5, 3
+    bin_centers = np.arange(0.0, 6.0, 0.05)
+    z = np.zeros((n_tr, bin_centers.size, n_units))
+    early = (bin_centers >= 0.5) & (bin_centers < 2.5)
+    z[:, early, :] = 2.0                       # constant 2.0 inside the early window
+    X = nl.window_feature_matrix(z, bin_centers, nl.WINDOWS["early"])
+    assert X.shape == (n_tr, n_units)
+    assert np.allclose(X, 2.0)
+    with pytest.raises(ValueError):
+        nl.window_feature_matrix(z, bin_centers, (100.0, 200.0))  # no bins

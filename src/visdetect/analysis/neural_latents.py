@@ -71,3 +71,13 @@ def _verify_join(session, kept_trials, lut):
         if np.isfinite(float(lr.change_time_planned)):
             assert np.isclose(float(tr.change_time), float(lr.change_time_planned), atol=1e-6), \
                 f"change_time mismatch at trial_idx={ti}"
+
+WINDOWS = {"early": (0.5, 2.5), "mid": (2.0, 4.0), "late": (4.0, 6.0)}
+
+def window_feature_matrix(z, bin_centers, win):
+    lo, hi = win
+    mask = (bin_centers >= lo) & (bin_centers < hi)
+    if not mask.any():
+        raise ValueError(f"window {win} contains no bin centers "
+                         f"(range {bin_centers.min():.2f}..{bin_centers.max():.2f})")
+    return z[:, mask, :].mean(axis=1)
