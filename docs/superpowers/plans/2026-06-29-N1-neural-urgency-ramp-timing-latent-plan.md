@@ -42,7 +42,7 @@ Every task implicitly includes these (verbatim from the spec / project rules):
 
 | File | Responsibility |
 |---|---|
-| `src/visdetect/analysis/neural_latents.py` | Library: `load_latent_table`, `fitted_expert_sessions`, `join_session`, feature builder, `fit_lick_motor_cd`/`project_out_axis`, `decode_response_timing`, `within_type_graded`, `phi_ramp_bases`/`phi_specificity_delta`, `single_unit_timing_glm`, `u_graded_test`. No plotting, no `__main__`. |
+| `src/visdetect/analysis/neural_latents.py` | Library: `load_latent_table`, `fitted_expert_sessions`, `join_session`, `window_feature_matrix`, `fit_lick_motor_cd`/`project_out_axis`/`motor_axis_signal`, `decode_session`/`decode_cohort`/`within_type_graded`, `phi_ramp_bases`/`phi_specificity_session`, `single_unit_timing_glm`, `u_graded_test`. No plotting, no `__main__`. |
 | `tests/analysis/test_neural_latents.py` | Unit tests: join+verification, feature builder, motor-CD projection, decode null calibration, φ-discriminability on synthetic, within-type graded, u-graded. |
 | `scripts/neural_latents/_synthetic_recovery.py` | Synthetic φ-urgency vs pure-motor recovery + φ-vs-ramp discriminability-on-readout-window check (NOTE A prerequisite). Writes a validation figure + JSON. |
 | `scripts/neural_latents/n1_c1_gate.py` | C1: real-data response-time decode, window sweep, trial-shuffle null, motor-CD survival, NOTE-B within-hit graded; gate report + figure. |
@@ -281,9 +281,9 @@ def window_feature_matrix(z, bin_centers, win):
 **Files:** Modify `neural_latents.py`; Test `tests/analysis/test_neural_latents.py`.
 
 **Interfaces:**
-- Produces: `fit_lick_motor_cd(z_lick, bin_centers, *, lick_window=(-0.15,0.05), base_window=(-1.0,-0.5)) -> np.ndarray` (unit-norm motor axis over units, from peri-lick vs pre-lick mean z; uses `compute_lda_cd`-style sign so peri-lick > pre); `project_out_axis(X, axis) -> np.ndarray` (removes the component of each trial's feature vector along `axis`); `motor_axis_signal(X, axis) -> np.ndarray` (per-trial projection magnitude, for movement-matching + the "is this window movement-free?" check).
-- Consumes: `compute_lda_cd` (`visdetect.analysis.utils`).
-- *Note:* the motor CD is built **fresh** here from a **lick-aligned** tensor (Task 5 builds it per session via `build_population_tensor(event_name="FA"/"Hit")`); it does **not** reuse the Fig14c template. The plan audits Fig14c only as an optional cross-check (Task 8 risk note), never as a dependency.
+- Produces: `fit_lick_motor_cd(z_lick, bin_centers, *, base_window=_FA_BASE, premove_window=_FA_PRE) -> np.ndarray` (unit-norm **preparatory-motor** axis from the pre-movement ramp window vs a clean pre-trial baseline, both **lab-canonical** `EVENT_RESPONSIVENESS_WINDOWS["FA"]/["Hit"]`; `compute_lda_cd` sign so pre-movement > baseline); `project_out_axis(X, axis) -> np.ndarray` (removes each trial's component along `axis`); `motor_axis_signal(X, axis) -> np.ndarray` (per-trial projection magnitude, for movement-matching + the "is this window movement-free?" check).
+- Consumes: `compute_lda_cd`, `EVENT_RESPONSIVENESS_WINDOWS` (`visdetect.analysis.constants`).
+- *Note:* the motor CD is built **fresh** here from a **lick-aligned** tensor (Task 6 builds it per session via `build_population_tensor(event_name="FA"/"Hit")`, lick-aligned to the **200 ms-corrected** lick time, span `(-2.0, 0.75)`); it does **NOT** reuse the suspect Fig14c template. The windows are **imported, not invented** (review FIX): baseline `(-1.75, -1.25)`, pre-movement `(-0.3, -0.15)` rel. corrected lick — the ported MATLAB preparatory-motor definition shared with `lick.py`. Because it is the *preparatory* ramp (not peri-lick), prong-2 projection asks the stringent, correct question: is "urgency" collinear with the generic motor-prep ramp?
 
 - [ ] **Step 1: Write the failing test**
 
@@ -309,6 +309,9 @@ def test_motor_axis_signal_tracks_projection():
 
 ```python
 from visdetect.analysis.utils import compute_lda_cd
+from visdetect.analysis.constants import EVENT_RESPONSIVENESS_WINDOWS
+# lab-canonical preparatory-motor windows (rel. corrected lick), shared with lick.py:
+_FA_BASE, _FA_PRE = EVENT_RESPONSIVENESS_WINDOWS["FA"]   # ((-1.75,-1.25), (-0.3,-0.15))
 
 def project_out_axis(X, axis):
     a = np.asarray(axis, float)
@@ -320,16 +323,18 @@ def motor_axis_signal(X, axis):
     a = a / (np.linalg.norm(a) + 1e-12)
     return X @ a
 
-def fit_lick_motor_cd(z_lick, bin_centers, *, lick_window=(-0.15, 0.05),
-                      base_window=(-1.0, -0.5)):
-    """Unit-norm motor axis: LDA between peri-lick and pre-lick population states
-    on a LICK-aligned tensor (t=0 = lick). Class 1 = peri-lick."""
+def fit_lick_motor_cd(z_lick, bin_centers, *, base_window=_FA_BASE, premove_window=_FA_PRE):
+    """Unit-norm PREPARATORY-motor axis: LDA between the pre-movement ramp window
+    (default (-0.3,-0.15) s before the corrected lick) and a clean pre-trial baseline
+    (default (-1.75,-1.25) s) on a LICK-aligned tensor (t=0 = 200 ms-corrected lick).
+    Class 1 = pre-movement. Windows are the lab-canonical EVENT_RESPONSIVENESS_WINDOWS
+    (ported MATLAB def; matches lick.py) — imported, not invented."""
     def _feat(win):
         m = (bin_centers >= win[0]) & (bin_centers < win[1])
         return z_lick[:, m, :].mean(axis=1)
-    peri, pre = _feat(lick_window), _feat(base_window)
-    X = np.vstack([pre, peri])
-    y = np.r_[np.zeros(len(pre)), np.ones(len(peri))]
+    pre, premove = _feat(base_window), _feat(premove_window)
+    X = np.vstack([pre, premove])
+    y = np.r_[np.zeros(len(pre)), np.ones(len(premove))]
     return compute_lda_cd(X, y, method="sklearn", reg=1.0, reg_style="flat")
 ```
 
@@ -338,91 +343,141 @@ def fit_lick_motor_cd(z_lick, bin_centers, *, lick_window=(-0.15, 0.05),
 
 ---
 
-### Task 4: Response-time decoder + within-type graded + trial-shuffle null
+### Task 4: Per-session response-time decoder + cohort aggregation + nulls
 
 **Files:** Modify `neural_latents.py`; Test `tests/analysis/test_neural_latents.py`.
 
+> **Decode scheme (LOCKED by adversarial review — do not deviate):** units are **NOT cross-session tracked** (`good_and_stable_ids` are *within-session* QC — the `get_good_cluster_ids` "UnitMatch-tracked" docstring is documented-wrong; see `memory/good_and_stable_ids_definition.md`). So column *u* in session A ≠ column *u* in session B. Therefore: **decode WITHIN each session** (`StratifiedKFold` over that session's trials on quantile-binned `decision_time`), producing ONE out-of-fold Spearman `r_s` per session; the cohort statistic is the **mean/median of {r_s} with a bootstrap CI OVER SESSIONS** (session = unit of replication). **REJECTED: `GroupKFold`-across-sessions** (held-out session's columns are different neurons → meaningless) **and the concatenated block-diagonal variant** (held-out columns all-zero in training) **and any single global Spearman on pooled OOF** (Simpson's-paradox inflation from between-session offsets). Precedent to mirror: `analysis_suite/04_decoding/c_state_decoding.py::decode_state_session` (`StratifiedKFold(n_splits=5, shuffle=True, random_state=42)` within session).
+
 **Interfaces:**
 - Produces:
-  - `decode_response_timing(X, y, groups, *, n_splits=5, seed=42) -> dict(r=..., r2=..., y_pred=...)` — ridge regression (`sklearn.linear_model.RidgeCV`), `GroupKFold` by session `groups`, returns out-of-fold Spearman `r`, `r2`, and `y_pred`.
-  - `shuffle_null(X, y, groups, *, n=200, seed=42) -> np.ndarray` — distribution of out-of-fold Spearman r under trial-shuffled `y` (shuffle within session group); chance = `mean ± 2 SD`.
-  - `within_type_graded(y_pred, y_true, trial_type) -> dict[type]->spearman` — Spearman of pred-vs-true computed **within each trial type** (NOTE B; the headline requires graded prediction within `hit`).
-- Consumes: `scipy.stats.spearmanr`, `sklearn.linear_model.RidgeCV`, `sklearn.model_selection.GroupKFold`.
+  - `within_type_graded(y_pred, y_true, trial_type) -> dict[type]->spearman` — Spearman of pred-vs-true **within each trial type** for ONE session (NOTE B; the headline reads `["hit"]`). Min 5 trials/type.
+  - `decode_session(X, y, *, n_splits=5, seed=42) -> dict(r, r2, y_pred)` — within ONE session: quantile-binned `StratifiedKFold`, `RidgeCV` per fold, OOF Spearman `r` (0.0 if the prediction is constant/degenerate).
+  - `decode_cohort(sessions, *, n_null=200, seed=42) -> dict` — `sessions` = list of `(sess_id, X, y, trial_type)`. Returns `per_session` (list of `dict(sess_id, r, n, within)`), `mean_r`, `median_r`, `ci` (bootstrap over the `r_s`), `null_mean`, `null_sd` (within-session-shuffle null, aggregated identically over sessions), `within_type` (per-type mean `r_s` across sessions). **No `groups` arg, no pooled global Spearman anywhere.**
+- Consumes: `scipy.stats.spearmanr`, `sklearn.linear_model.RidgeCV`, `sklearn.model_selection.StratifiedKFold`, `pandas.qcut`, `bootstrap_ci` (`visdetect.analysis.utils`).
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
-def test_decode_recovers_planted_signal_and_null_is_chance():
-    rng = np.random.default_rng(1)
-    n, p = 300, 8
-    groups = rng.integers(0, 5, n)                 # 5 "sessions"
-    w = rng.normal(size=p)
-    y = rng.normal(size=n)
-    X = y[:, None] * w[None, :] + rng.normal(scale=0.5, size=(n, p))  # X encodes y
-    out = nl.decode_response_timing(X, y, groups, n_splits=5, seed=42)
-    assert out["r"] > 0.5                            # real signal decodes
-    null = nl.shuffle_null(X, y, groups, n=100, seed=42)
-    assert out["r"] > null.mean() + 2 * null.std()   # beats trial-shuffle null
-    assert abs(null.mean()) < 0.15                    # null centered near chance
+def _sessions_with_within_signal(K=6, n=80, p=6, seed=1):
+    rng = np.random.default_rng(seed); out = []
+    for s in range(K):
+        w = rng.normal(size=p); y = rng.normal(size=n)
+        X = y[:, None] * w[None, :] + rng.normal(scale=0.5, size=(n, p))  # within-session signal
+        tt = np.where(rng.random(n) < 0.5, "hit", "fa")
+        out.append((s, X, y, tt))
+    return out
+
+def _sessions_simpson_only(K=6, n=80, p=6, seed=2):
+    """NO within-session signal; only between-session y-offsets + disjoint feature
+    blocks encoding the offset. A pooled global Spearman is spuriously high; the
+    correct per-session aggregate is near chance."""
+    rng = np.random.default_rng(seed); out = []
+    for s in range(K):
+        offset = 5.0 * s
+        y = offset + rng.normal(scale=0.3, size=n)                 # ~constant within session
+        X = np.zeros((n, p * K))
+        X[:, s*p:(s+1)*p] = offset + rng.normal(scale=0.3, size=(n, p))  # disjoint block ~ offset
+        tt = np.where(rng.random(n) < 0.5, "hit", "fa")
+        out.append((s, X, y, tt))
+    return out
+
+def test_decode_cohort_recovers_within_session_signal():
+    res = nl.decode_cohort(_sessions_with_within_signal(), n_null=100, seed=42)
+    assert len(res["per_session"]) == 6                       # ONE r per session
+    assert res["mean_r"] > 0.5                                # within-session signal recovered
+    assert res["mean_r"] > res["null_mean"] + 2 * res["null_sd"]
+    assert res["within_type"]["hit"] > 0.3                    # NOTE B: graded within hits
+
+def test_per_session_scheme_defeats_simpson_inflation():
+    sessions = _sessions_simpson_only()
+    res = nl.decode_cohort(sessions, n_null=50, seed=42)
+    assert len(res["per_session"]) == 6
+    assert abs(res["mean_r"]) < 0.2                           # CORRECT aggregate ~ chance
+    # REGRESSION GUARD: the REJECTED pooled-global-Spearman scheme is spuriously high
+    from scipy.stats import spearmanr
+    yp = [nl.decode_session(X, y, seed=42)["y_pred"] for _, X, y, _ in sessions]
+    yt = [y for _, _, y, _ in sessions]
+    r_global = spearmanr(np.concatenate(yp), np.concatenate(yt)).correlation
+    assert r_global > 0.5                                     # between-session inflation, as feared
 
 def test_within_type_graded_separates_types():
     y_true = np.array([1., 2., 3., 10., 11., 12.])
     y_pred = np.array([1.1, 2.0, 2.9, 10.2, 10.9, 12.1])
     tt = np.array(["fa", "fa", "fa", "hit", "hit", "hit"])
     g = nl.within_type_graded(y_pred, y_true, tt)
-    assert g["hit"] > 0.8 and g["fa"] > 0.8          # graded WITHIN each type
+    assert g["hit"] > 0.8 and g["fa"] > 0.8                   # graded WITHIN each type
 ```
 
-- [ ] **Step 2: Run** `... -k "decode or within_type" -v` → FAIL.
+- [ ] **Step 2: Run** `... -k "decode_cohort or simpson or within_type" -v` → FAIL.
 
 - [ ] **Step 3: Implement**
 
 ```python
+import pandas as pd
 from scipy.stats import spearmanr
 from sklearn.linear_model import RidgeCV
-from sklearn.model_selection import GroupKFold
-
-def _oof_predict(X, y, groups, n_splits, seed):
-    y_pred = np.full_like(y, np.nan, dtype=float)
-    gkf = GroupKFold(n_splits=min(n_splits, len(np.unique(groups))))
-    for tr, te in gkf.split(X, y, groups):
-        model = RidgeCV(alphas=np.logspace(-3, 3, 13))
-        model.fit(X[tr], y[tr])
-        y_pred[te] = model.predict(X[te])
-    return y_pred
-
-def decode_response_timing(X, y, groups, *, n_splits=5, seed=42):
-    X, y, groups = np.asarray(X, float), np.asarray(y, float), np.asarray(groups)
-    y_pred = _oof_predict(X, y, groups, n_splits, seed)
-    r = spearmanr(y_pred, y).correlation
-    ss_res = np.sum((y - y_pred) ** 2); ss_tot = np.sum((y - y.mean()) ** 2)
-    return {"r": float(r), "r2": float(1 - ss_res / ss_tot), "y_pred": y_pred}
-
-def shuffle_null(X, y, groups, *, n=200, seed=42):
-    rng = np.random.default_rng(seed)
-    X, y, groups = np.asarray(X, float), np.asarray(y, float), np.asarray(groups)
-    out = np.empty(n)
-    for i in range(n):
-        ys = y.copy()
-        for g in np.unique(groups):                 # shuffle WITHIN session
-            idx = np.where(groups == g)[0]
-            ys[idx] = rng.permutation(ys[idx])
-        yp = _oof_predict(X, ys, groups, 5, seed)
-        out[i] = spearmanr(yp, ys).correlation
-    return out
+from sklearn.model_selection import StratifiedKFold
+from visdetect.analysis.utils import bootstrap_ci
 
 def within_type_graded(y_pred, y_true, trial_type):
     y_pred, y_true, tt = map(np.asarray, (y_pred, y_true, trial_type))
     res = {}
     for t in np.unique(tt):
         m = tt == t
-        if m.sum() >= 5:
-            res[str(t)] = float(spearmanr(y_pred[m], y_true[m]).correlation)
+        if m.sum() >= 5 and np.std(y_pred[m]) > 1e-9:
+            r = spearmanr(y_pred[m], y_true[m]).correlation
+            res[str(t)] = float(r) if np.isfinite(r) else 0.0
     return res
+
+def decode_session(X, y, *, n_splits=5, seed=42):
+    """Within ONE session: quantile-binned StratifiedKFold over trials, RidgeCV."""
+    X, y = np.asarray(X, float), np.asarray(y, float)
+    n = len(y); k = max(2, min(n_splits, n // 2))
+    nb = max(2, min(k, n // 10))
+    ybin = pd.qcut(y, nb, labels=False, duplicates="drop")
+    if len(np.unique(ybin)) < 2:                 # y too degenerate to stratify
+        ybin = (y > np.median(y)).astype(int)
+    y_pred = np.full(n, np.nan)
+    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
+    for tr, te in skf.split(X, ybin):
+        y_pred[te] = RidgeCV(alphas=np.logspace(-3, 3, 13)).fit(X[tr], y[tr]).predict(X[te])
+    if np.std(y_pred) < 1e-9:
+        r = 0.0
+    else:
+        r = spearmanr(y_pred, y).correlation
+        r = 0.0 if not np.isfinite(r) else float(r)
+    ss_res = np.sum((y - y_pred) ** 2); ss_tot = np.sum((y - y.mean()) ** 2)
+    return {"r": r, "r2": float(1 - ss_res / ss_tot) if ss_tot > 0 else 0.0, "y_pred": y_pred}
+
+def _per_session_rs(sessions, seed):
+    return np.array([decode_session(X, y, seed=seed)["r"] for _, X, y, _ in sessions])
+
+def decode_cohort(sessions, *, n_null=200, seed=42):
+    per = []
+    for sid, X, y, tt in sessions:
+        d = decode_session(X, y, seed=seed)
+        per.append({"sess_id": sid, "r": d["r"], "n": int(len(y)),
+                    "within": within_type_graded(d["y_pred"], y, tt)})
+    rs = np.array([p["r"] for p in per])
+    ci_lo, ci_hi = bootstrap_ci(rs, n_bootstrap=1000, seed=seed)
+    wt = {}
+    for t in ("hit", "fa"):
+        vals = [p["within"][t] for p in per if t in p["within"]]
+        if vals:
+            wt[t] = float(np.mean(vals))
+    rng = np.random.default_rng(seed)
+    null = np.empty(n_null)
+    for i in range(n_null):                       # within-session shuffle of y, aggregate as mean r_s
+        shuff = [(sid, X, rng.permutation(y), tt) for sid, X, y, tt in sessions]
+        null[i] = float(np.nanmean(_per_session_rs(shuff, seed)))
+    return {"per_session": per, "mean_r": float(np.nanmean(rs)),
+            "median_r": float(np.nanmedian(rs)), "ci": (float(ci_lo), float(ci_hi)),
+            "null_mean": float(null.mean()), "null_sd": float(null.std()), "within_type": wt}
 ```
 
-- [ ] **Step 4: Run** `... -k "decode or within_type" -v` → PASS.
-- [ ] **Step 5: Commit** `feat(N1): grouped-CV response-time decoder + within-session shuffle null + within-type graded`.
+- [ ] **Step 4: Run** `... -k "decode_cohort or simpson or within_type" -v` → PASS (incl. the Simpson regression guard).
+- [ ] **Step 5: Commit** `feat(N1): per-session response-time decoder + cohort aggregation over sessions + within-session shuffle null (defeats Simpson inflation)`.
 
 ---
 
@@ -431,7 +486,7 @@ def within_type_graded(y_pred, y_true, trial_type):
 **Files:** Create `scripts/neural_latents/_synthetic_recovery.py`; Modify `neural_latents.py` (φ/ramp bases); Test `tests/analysis/test_neural_latents.py`.
 
 **Interfaces:**
-- Produces: `phi_ramp_bases(t, mu, sigma=0.8) -> dict("phi"=gaussian bump at mu, "ramp"=linear monotonic)`; `phi_specificity_delta(X, y, groups, t_window_center, mu_by_trial, sigma) -> dict` comparing CV decode using a φ-weighted vs ramp-weighted temporal readout (ΔCV r, bootstrap CI). `_synthetic_recovery.py` simulates (a) a φ-urgency ramp population and (b) a pure-motor ramp, over the REAL μ range and `decision_time` distribution restricted to the **pre-μ readout window**, and checks: decode recovers timing in both; motor-CD projection KILLS the pure-motor case but spares φ-urgency; φ-vs-ramp separable **on the readout window** (or reports "underpowered").
+- Produces: `phi_ramp_bases(t, mu, sigma=0.8) -> dict("phi"=gaussian bump at mu, "ramp"=linear monotonic)`; `phi_specificity_session(Xt, y, t, mu, sigma=0.8, *, seed=42) -> dict(r_phi, r_ramp, delta)` — within ONE session, compares `decode_session` on a φ-weighted vs ramp-weighted temporal collapse of the readout window (per-session ΔCV r; Task 7 aggregates `delta` across sessions with a bootstrap CI over sessions). `_synthetic_recovery.py` simulates (a) a φ-urgency ramp population and (b) a pure-motor ramp **per session**, over the REAL μ range and `decision_time` distribution restricted to the **pre-μ readout window**, and checks: per-session decode recovers timing in both; the **per-session** motor-CD projection KILLS the pure-motor case but spares φ-urgency; φ-vs-ramp separable **on the readout window** (or reports "underpowered").
 
 - [ ] **Step 1: Write the failing test** (discriminability behaves correctly on synthetic)
 
@@ -447,7 +502,7 @@ def test_phi_ramp_bases_shapes():
 
 - [ ] **Step 2: Run** `... -k phi_ramp_bases -v` → FAIL.
 
-- [ ] **Step 3: Implement** `phi_ramp_bases` + `phi_specificity_delta` in `neural_latents.py`
+- [ ] **Step 3: Implement** `phi_ramp_bases` + `phi_specificity_session` in `neural_latents.py`
 
 ```python
 def phi_ramp_bases(t, mu, sigma=0.8):
@@ -456,15 +511,16 @@ def phi_ramp_bases(t, mu, sigma=0.8):
     ramp = (t - t.min()) / (t.max() - t.min() + 1e-12)
     return {"phi": phi, "ramp": ramp}
 
-def phi_specificity_delta(Xt, y, groups, t, mu, sigma=0.8, *, seed=42):
-    """Xt: (n_trials, n_bins, n_units). Compare decode using a phi-weighted vs
-    ramp-weighted temporal collapse of the readout window. Returns delta CV r."""
+def phi_specificity_session(Xt, y, t, mu, sigma=0.8, *, seed=42):
+    """Xt: (n_trials, n_bins, n_units) for ONE session. Compare within-session
+    decode (decode_session) using a phi-weighted vs ramp-weighted temporal collapse
+    of the readout window. Returns the per-session delta CV r."""
     b = phi_ramp_bases(t, mu, sigma)
-    def _decode(weight):
+    def _r(weight):
         w = weight / (weight.sum() + 1e-12)
         Xw = np.tensordot(Xt, w, axes=([1], [0]))    # (n_trials, n_units)
-        return decode_response_timing(Xw, y, groups, seed=seed)["r"]
-    r_phi, r_ramp = _decode(b["phi"]), _decode(b["ramp"])
+        return decode_session(Xw, y, seed=seed)["r"]
+    r_phi, r_ramp = _r(b["phi"]), _r(b["ramp"])
     return {"r_phi": r_phi, "r_ramp": r_ramp, "delta": r_phi - r_ramp}
 ```
 
@@ -485,13 +541,14 @@ NO real data, NO X: compute. Run: PYTHONPATH=src py scripts/neural_latents/_synt
 import os, json, numpy as np
 from visdetect.analysis.config import ROOT
 from visdetect.analysis import neural_latents as nl
-# ... simulate per spec; reuse nl.decode_response_timing / project_out_axis /
-#     fit_lick_motor_cd / phi_specificity_delta; real mu range 6.7-7.5; readout
-#     windows from nl.WINDOWS; write verdict JSON {recovers, motor_killed,
-#     phi_separable_on_window} + figure. (Full body authored at execution.)
+# ... simulate K synthetic SESSIONS per spec; reuse nl.decode_cohort /
+#     decode_session / project_out_axis / fit_lick_motor_cd / phi_specificity_session;
+#     real mu range 6.7-7.5; readout windows from nl.WINDOWS; per-session motor-CD +
+#     projection; write verdict JSON {recovers, motor_killed, phi_separable_on_window}
+#     + figure. (Full body authored at execution.)
 ```
 
-*(The synthetic body is mechanical given the library functions above; it asserts the three conditions and writes the verdict. Execution agent fills the simulation loop using `nl.*` — no new science.)*
+*(The synthetic body is mechanical given the library functions above; it builds per-session simulations, asserts the three conditions via the per-session `nl.*` API, and writes the verdict. No new science.)*
 
 - [ ] **Step 6: Run the harness** `PYTHONPATH=src .venv/Scripts/python.exe scripts/neural_latents/_synthetic_recovery.py`
 Expected: prints `recovers=True motor_killed=True phi_separable_on_window=<bool>`; writes figure + `data/cache/neural_latents/n1_synthetic_verdict.json`.
@@ -500,57 +557,54 @@ Expected: prints `recovers=True motor_killed=True phi_separable_on_window=<bool>
 
 ---
 
-### Task 6: C1 real-data gate — window sweep, null, motor-CD survival, within-hit graded
+### Task 6: C1 real-data gate — per-session decode, window sweep, per-session motor-CD survival, within-hit graded
 
-**Files:** Create `scripts/neural_latents/n1_c1_gate.py`; Modify `neural_latents.py` if a shared per-session-build helper is factored.
+**Files:** Create `scripts/neural_latents/n1_c1_gate.py`.
 
 **Interfaces:**
-- Produces (script, no new public lib API required beyond Tasks 1–5): a per-session loop (sequential pkl load, `del sess; gc.collect()`) building, for each swept window, the pooled feature matrix `X` (trials × units, units stacked per session into a block-diagonal/within-session decode), target `y = decision_time` on **lick trials (hit+fa)**, `groups = session`. Runs `decode_response_timing`, `shuffle_null`, motor-CD `project_out_axis` survival, and `within_type_graded`. Selection rule: PRIMARY window = the **latest window whose `motor_axis_signal` in that window is not significantly above its pre-trial baseline** (movement-free check). Writes `n1_c1_gate.json` (per-window r, null mean±2SD, survives_projection, within-hit r) + `fig_n1_c1_gate.png` + `n1_c1_gate_stats.csv`.
+- Produces (script): for each swept window, builds per expert session (sequential pkl load, `del sess; gc.collect()`): the windowed feature matrix `X_s` (trials × that session's units, z-scored in `join_session`), target `y_s = decision_time` on **lick trials (hit+fa)** (relative to Baseline_ON), `trial_type_s`, and a **fresh per-session preparatory-motor axis** from a lick-aligned tensor (`build_population_tensor(event_name="FA")` and `"Hit"`, aligned to the **200 ms-corrected** lick via `compute_true_reaction_time`, span `(-2.0, 0.75)`, late-licks ≥3 s after Baseline_ON; `fit_lick_motor_cd`). Then the pure core `evaluate_window(sessions, motor_axes)` runs the **per-session** `decode_cohort` (prong 1 vs within-session-shuffle null), the **per-session** motor-CD projection (prong 2: aggregate per-session r on projected features beats the base null), and `within_type` (NOTE-B within-hit). Selection rule: PRIMARY = the **latest window in which the per-session `motor_axis_signal` is not significantly above its pre-trial baseline** (movement-free). Writes `n1_c1_gate.json` (per-window mean_r, CI, null mean±2SD, mean_r_after_projection, survives_projection, within_type["hit"]) + `fig_n1_c1_gate.png` + `n1_c1_gate_stats.csv`.
 
-- [ ] **Step 1: Write the failing test** (a thin integration smoke on synthetic sessions, in the test file)
-
-```python
-def test_c1_gate_pipeline_smoke(tmp_path, monkeypatch):
-    # Two fake sessions whose early-window activity encodes decision_time;
-    # assert the gate helper returns r>null and within-hit graded > 0.
-    from scripts.neural_latents import n1_c1_gate as gate   # importable module
-    res = gate.evaluate_window_on_features(  # pure function: features in, verdict out
-        X=_synthetic_encoding_X(), y=_synthetic_y(), groups=_synthetic_groups(),
-        trial_type=_synthetic_types(), motor_axis=_synthetic_motor_axis(),
-        n_null=50, seed=42)
-    assert res["r"] > res["null_mean"] + 2 * res["null_sd"]
-    assert res["within"]["hit"] > 0.0
-    assert "survives_projection" in res
-```
-
-*(Helpers `_synthetic_*` are added to the test file; they reuse the Task-4 planted-signal generator. `evaluate_window_on_features` is the pure, testable core of the gate script — the per-session pkl loop calls it.)*
-
-- [ ] **Step 2: Run** `... -k c1_gate_pipeline -v` → FAIL (module/func missing).
-
-- [ ] **Step 3: Implement `n1_c1_gate.py`** with a pure `evaluate_window_on_features(...)` core + a `main()` that does the sequential per-session build and writes outputs. Core:
+- [ ] **Step 1: Write the failing test**
 
 ```python
-def evaluate_window_on_features(X, y, groups, trial_type, motor_axis, *,
-                                n_null=200, seed=42):
-    from visdetect.analysis import neural_latents as nl
-    base = nl.decode_response_timing(X, y, groups, seed=seed)
-    null = nl.shuffle_null(X, y, groups, n=n_null, seed=seed)
-    Xp = nl.project_out_axis(X, motor_axis)
-    proj = nl.decode_response_timing(Xp, y, groups, seed=seed)
-    within = nl.within_type_graded(base["y_pred"], y, trial_type)
-    survives = proj["r"] > null.mean() + 2 * null.std()
-    return {"r": base["r"], "r2": base["r2"], "null_mean": float(null.mean()),
-            "null_sd": float(null.std()), "r_after_projection": proj["r"],
-            "survives_projection": bool(survives), "within": within}
+def test_evaluate_window_per_session_gate():
+    from scripts.neural_latents import n1_c1_gate as gate
+    sessions = _sessions_with_within_signal()         # Task-4 generator: per-session signal
+    motor_axes = {s: np.eye(X.shape[1])[0] for s, X, y, tt in sessions}  # remove 1 dim only
+    res = gate.evaluate_window(sessions, motor_axes, n_null=50, seed=42)
+    assert res["mean_r"] > res["null_mean"] + 2 * res["null_sd"]         # prong 1
+    assert isinstance(res["survives_projection"], bool)                 # prong 2 computed
+    assert res["mean_r_after_projection"] > 0.3                         # signal spread > 1 dim survives
+    assert res["within_type"]["hit"] > 0.0                              # NOTE B
 ```
 
-`main()`: load `load_latent_table()`, `fitted_expert_sessions()`, then per session `load_session(int(sess))`, `join_session(..., window=(-1.3, 6.0))`, build a lick-aligned tensor for `fit_lick_motor_cd`, restrict `y` to `outcome ∈ {hit, fa}`, accumulate features per window, call `evaluate_window_on_features`, pick PRIMARY by the latest movement-free window, dump JSON + figure (per-window r vs null bar plot; within-hit scatter). Plain-language title.
+- [ ] **Step 2: Run** `... -k evaluate_window_per_session -v` → FAIL (module missing).
 
-- [ ] **Step 4: Run** `... -k c1_gate_pipeline -v` → PASS; then run `main()` on real data:
-`PYTHONPATH=src .venv/Scripts/python.exe scripts/neural_latents/n1_c1_gate.py`
-Expected: writes `data/cache/neural_latents/n1_c1_gate.json`, `FIGURES/neural_latents/BG_046/fig_n1_c1_gate.png`, stats CSV; prints the gate verdict per window + the PRIMARY selection.
+- [ ] **Step 3: Implement `n1_c1_gate.py`** — pure core + `main()`. Core:
 
-- [ ] **Step 5: Commit** `feat(N1): C1 response-time gate — window sweep, null, motor-CD survival, within-hit graded`.
+```python
+import numpy as np
+from visdetect.analysis import neural_latents as nl
+
+def evaluate_window(sessions, motor_axes, *, n_null=200, seed=42):
+    """sessions: list of (sess_id, X, y, trial_type); motor_axes: {sess_id: axis}.
+    Per-session decode + within-session-shuffle null (prong 1) + per-session motor-CD
+    projection survival (prong 2). NO cross-session pooling, NO global Spearman."""
+    base = nl.decode_cohort(sessions, n_null=n_null, seed=seed)
+    proj = [(sid, nl.project_out_axis(X, motor_axes[sid]), y, tt) for sid, X, y, tt in sessions]
+    proj_mean = float(np.nanmean(nl._per_session_rs(proj, seed)))   # reuse, no extra null
+    survives = proj_mean > base["null_mean"] + 2 * base["null_sd"]
+    return {"mean_r": base["mean_r"], "median_r": base["median_r"], "ci": base["ci"],
+            "null_mean": base["null_mean"], "null_sd": base["null_sd"],
+            "mean_r_after_projection": proj_mean, "survives_projection": bool(survives),
+            "within_type": base["within_type"], "per_session": base["per_session"]}
+```
+
+`main()`: `df = nl.load_latent_table(); sess_ids = nl.fitted_expert_sessions(df)`. Per window in `nl.WINDOWS`, per session (sequential): `s = load_session(int(sid))`; `jr = nl.join_session(s, df[df.sess_canon == sid], window=(-1.3, 6.0))`; mask `jr.y.outcome.isin({"hit","fa"})`; `X_s = nl.window_feature_matrix(jr.z[mask], jr.bin_centers, win)`, `y_s = jr.y.decision_time[mask].values`, `tt_s = jr.y.outcome[mask].values`. Build the lick-aligned z tensor (`event_name` FA then Hit, span `(-2.0,0.75)`, corrected-lick) → `axis_s = nl.fit_lick_motor_cd(z_lick, lick_bin_centers)`; also record per-session `motor_axis_signal(X_s, axis_s)` vs the pre-trial-baseline projection for the movement-free check. `del s; gc.collect()`. Then `res = evaluate_window(sessions, motor_axes)`; pick PRIMARY = latest movement-free window. Dump JSON + figure (per-window mean_r ± CI with the null band; within-hit panel). Plain-language title + stats CSV.
+
+- [ ] **Step 4: Run** `... -k evaluate_window_per_session -v` → PASS; then `PYTHONPATH=src .venv/Scripts/python.exe scripts/neural_latents/n1_c1_gate.py` → JSON + figure + stats CSV; prints per-window verdict + PRIMARY.
+
+- [ ] **Step 5: Commit** `feat(N1): C1 gate — per-session decode, window sweep, per-session motor-CD survival, within-hit graded`.
 
 ---
 
@@ -558,11 +612,11 @@ Expected: writes `data/cache/neural_latents/n1_c1_gate.json`, `FIGURES/neural_la
 
 **Files:** Create `scripts/neural_latents/n1_phi_specificity.py`.
 
-**Interfaces:** Reuses `nl.phi_specificity_delta` over the PRIMARY window's `(trials × bins × units)` block with per-session `mu = expected_change_time`. **Runs only after the §5 synthetic prerequisite reports `phi_separable_on_window=True`; otherwise the script writes a "tested, underpowered" verdict and exits 0** (per NOTE A / FIX 1 — never blocks anything). Writes `n1_phi_specificity.json` (ΔCV r + bootstrap CI) + `fig_n1_phi_specificity.png`.
+**Interfaces:** Reuses `nl.phi_specificity_session` over the PRIMARY window's `(trials × bins × units)` block with per-session `mu = expected_change_time`. **Runs only after the §5 synthetic prerequisite reports `phi_separable_on_window=True`; otherwise the script writes a "tested, underpowered" verdict and exits 0** (per NOTE A / FIX 1 — never blocks anything). Writes `n1_phi_specificity.json` (ΔCV r + bootstrap CI) + `fig_n1_phi_specificity.png`.
 
 - [ ] **Step 1:** Test: `test_phi_specificity_reports_underpowered_when_not_separable` — feed a synthetic case where φ≈ramp; assert verdict `"underpowered"` and no exception.
 - [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Implement: read `n1_synthetic_verdict.json`; if not separable → `{"verdict": "underpowered"}`; else compute `phi_specificity_delta` per session, bootstrap the cross-session mean Δ, write JSON+figure.
+- [ ] **Step 3:** Implement: read `n1_synthetic_verdict.json`; if not separable → `{"verdict": "underpowered"}`; else compute `phi_specificity_session` per session, bootstrap the cross-session mean Δ, write JSON+figure.
 - [ ] **Step 4:** Run test → PASS; run on real data.
 - [ ] **Step 5:** Commit `feat(N1): phi-specificity (exploratory, gated on synthetic discriminability)`.
 
@@ -607,7 +661,7 @@ def test_single_unit_glm_detects_encoding_and_fdr():
 
 - [ ] **Step 1:** Test `test_u_graded_controls_for_mood` — synthetic cells where the raw u↔ramp correlation is driven entirely by mood; assert the mood-controlled partial drops toward 0 (proving the control works).
 - [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Implement `u_graded_test` (residualize on a mood dummy via `numpy.linalg.lstsq`, Spearman of residuals, bootstrap). Implement `n1_c3_u_graded.py` (build per-cell ramp amplitude = mean PRIMARY-window decode projection per session×mood) and the C4 descriptive evidence-axis strand (`evidence_integral_at_decision` single-trial decode, captioned descriptive). Implement `run_n1.py` orchestration with the gate guard + d′ gradient.
+- [ ] **Step 3:** Implement `u_graded_test` (residualize on a mood dummy via `numpy.linalg.lstsq`, Spearman of residuals, bootstrap). Implement `n1_c3_u_graded.py` (build per-cell ramp amplitude = mean PRIMARY-window decode projection per session×mood) and the C4 descriptive evidence-axis strand (per-session `decode_cohort` of `evidence_integral_at_decision`, captioned descriptive — sharpness/evidence is non-load-bearing). Implement `run_n1.py` orchestration with the gate guard + the secondary d′ gradient (`spearmanr` of each session's `per_session` `r` vs its manifest `d_prime`).
 - [ ] **Step 4:** Run tests → PASS; run `run_n1.py` end-to-end → all figures + `n1_results.json`.
 - [ ] **Step 5:** Commit `feat(N1): C3 u-graded (mood-controlled) + C4 descriptive evidence axis + run_n1 orchestrator`.
 
@@ -617,13 +671,20 @@ def test_single_unit_glm_detects_encoding_and_fdr():
 
 **Spec coverage:** §2 gate → T6 (prongs 1+2); §6 φ-specificity + NOTE-A prerequisite → T5 (synthetic) + T7 (exploratory, gated); §4 window sweep + Latimer-Huk fixed window → T2 + T6 selection rule; §5 movement controls → T3 + T6 (projection survival, motor-free selection, never partial RT); NOTE B within-hit graded → T4 + T6; §7-C1 → T6; C2 SPN/FSI (D1/D2 deferred) → T8; C3 u-graded mood-controlled → T9; C4 descriptive evidence → T9; secondary d′ gradient → T9; §8 synthetic recovery → T5; join/canonicalization → T1; §9 join-integrity test → T1; determinism/no-X:/n_workers → Global Constraints + sequential pkl loop. caution-z is correctly ABSENT (moved to sibling). **No gaps.**
 
-**Placeholder scan:** the `_synthetic_recovery.py` body and the figure-drawing inside scripts are described as "authored at execution" but every step names the exact `nl.*` functions to call and the exact verdict/outputs — no "TBD/add error handling." The pure cores (`evaluate_window_on_features`, `phi_specificity_delta`, `single_unit_timing_glm`, `u_graded_test`, the join, decoder, null) are fully coded and tested.
+**Placeholder scan:** the `_synthetic_recovery.py` body and the figure-drawing inside scripts are described as "authored at execution" but every step names the exact `nl.*` functions to call and the exact verdict/outputs — no "TBD/add error handling." The pure cores (`evaluate_window`, `decode_session`/`decode_cohort`, `phi_specificity_session`, `single_unit_timing_glm`, `u_graded_test`, the join, the null) are fully coded and tested.
 
-**Type consistency:** `decode_response_timing` returns `dict(r,r2,y_pred)` — consumed identically in T5/T6/T7/T9. `join_session` returns `JoinResult(z,bin_centers,y,unit_ids,kept_trials)` — `y` columns are the single `_Y_COLS` list, consumed by T6/T8/T9. `WINDOWS` keys `early/mid/late` consistent T2→T6→T7. `celltype` values `{SPN,FSI}` consistent T8.
+**Type consistency:** `decode_session` → `dict(r,r2,y_pred)`; `decode_cohort(sessions)` → `dict(per_session, mean_r, median_r, ci, null_mean, null_sd, within_type)` — consumed identically in T5/T6/T7/T9; `phi_specificity_session` → `dict(r_phi,r_ramp,delta)`. No `decode_response_timing`/`shuffle_null`/`groups` survive (removed in the per-session rework). `join_session` returns `JoinResult(z,bin_centers,y,unit_ids,kept_trials)` — `y` columns are the single `_Y_COLS` list, consumed by T6/T8/T9. `WINDOWS` keys `early/mid/late` consistent T2→T6→T7. `fit_lick_motor_cd(base_window,premove_window)` uses imported `EVENT_RESPONSIVENESS_WINDOWS` (T3→T6). `celltype` values `{SPN,FSI}` consistent T8.
 
 ---
 
-## Open choices surfaced for review (do not block the plan)
+## Choices (RESOLVED in adversarial review)
 
-1. **Pooling units across sessions for the decode (T6).** Units differ per session, so the population decode is naturally **within-session, results pooled** (GroupKFold by session). An alternative is a session-concatenated block-diagonal feature space. The plan uses within-session decode + cross-session pooling of the per-session r (cleaner, no cross-session unit-identity assumption). Flag if you prefer the concatenated variant.
-2. **Lick-aligned tensor for the motor CD (T3/T6).** Built via `build_population_tensor(event_name="FA")` and `"Hit"` (the motor events), `window=(-0.5, 0.3)` around the lick. Confirm FA/Hit are the right motor-onset events given no video.
+1. **Decode scheme (was Choice 1):** **per-session decode, aggregate `r_s` over sessions, bootstrap CI over sessions** (Task 4). `GroupKFold`-across-sessions and the concatenated block-diagonal are both **REJECTED** — units are within-session QC, not cross-session tracked, so cross-session columns are different neurons. The within-session-shuffle null + the Simpson regression-guard test enforce this. Locked.
+2. **Motor events / windows (was Choice 2):** motor CD from **FA + Hit** lick-aligned tensors with the **canonical** `EVENT_RESPONSIVENESS_WINDOWS` (baseline `(-1.75,-1.25)`, pre-movement `(-0.3,-0.15)`), span **`(-2.0, 0.75)`**, **200 ms-corrected** lick (`compute_true_reaction_time`), late-licks **≥3 s** after Baseline_ON. Locked. Optional refinement (note in code): drop very-early FAs whose `-1.75 s` baseline would precede Baseline_ON.
+
+## Minor notes (non-blocking; carried from review)
+
+- **Deliverable is a strict subset** of non-abort/ref trials (B8 applies an extra usability filter; ~16 more trials dropped on `15092025`). The join keeps the intersection of `valid_trials` and the latent `trial_idx` set — correct; just documented.
+- **Triple-check uniqueness** leans on `change_time` (`atol=1e-6`). If `change_time_planned` is ever NaN it falls back to `outcome`+`change_size` (~25% porous); all finite in the current data. Add a `warnings.warn` if a NaN-`change_time` row coincides with a non-unique `(outcome,change_size)` so the guard never silently weakens.
+- **`load_staging_manifest` missing-manifest fallback** advertises `dprime` not `d_prime`; irrelevant for BG_046 (has a real manifest with `d_prime`) — read `d_prime`, don't hardcode the fallback name.
+- **`load_session(int(sid))` is safe** — `_session_pkl_candidates` zfill(8)s the id back, so the leading-zero-day bug does not bite the loader (verified in review). The canonicalization rule still applies to the *latent-table join* keys.
