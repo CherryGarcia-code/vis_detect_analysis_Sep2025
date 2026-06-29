@@ -120,6 +120,8 @@ def test_decode_cohort_recovers_within_session_signal():
     assert res["mean_r"] > 0.5                                # within-session signal recovered
     assert res["mean_r"] > res["null_mean"] + 2 * res["null_sd"]
     assert res["within_type"]["hit"] > 0.3                    # NOTE B: graded within hits
+    # pin reported mean_r to the per-session aggregate by construction
+    assert res["mean_r"] == pytest.approx(np.mean([p["r"] for p in res["per_session"]]))
 
 def test_per_session_scheme_defeats_simpson_inflation():
     sessions = _sessions_simpson_only()
@@ -139,6 +141,16 @@ def test_within_type_graded_separates_types():
     tt = np.array(["fa", "fa", "fa", "hit", "hit", "hit"])
     g = nl.within_type_graded(y_pred, y_true, tt)
     assert g["hit"] > 0.8 and g["fa"] > 0.8                   # graded WITHIN each type
+
+def test_decode_cohort_null_byte_identical_across_workers():
+    # The parallel null must be BYTE-IDENTICAL to the serial null regardless of
+    # worker count (CI lock, mirrors the B8 ladder-determinism guarantee). Seeds
+    # are pre-generated parent-side, one per shuffle, so null[i] never depends on
+    # how the work is sharded across the ProcessPoolExecutor.
+    sessions = _sessions_with_within_signal()
+    null_1 = nl._cohort_null(sessions, n_null=24, seed=42, n_workers=1)
+    null_2 = nl._cohort_null(sessions, n_null=24, seed=42, n_workers=2)
+    assert np.array_equal(null_1, null_2)                     # byte-identical
 
 # ── Task 5: phi/ramp bases for the NOTE-A discriminability prerequisite ────
 def test_phi_ramp_bases_shapes():

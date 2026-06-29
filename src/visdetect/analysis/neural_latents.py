@@ -2,7 +2,9 @@
 per-trial striatal tensors and test the urgency-ramp hypothesis. Library only
 (no plotting / no __main__). See spec 2026-06-29-N1-...-design.md."""
 import os
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+import multiprocessing as mp
 import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
@@ -163,10 +165,69 @@ def decode_session(X, y, *, n_splits=5, seed=42):
 def _per_session_rs(sessions, seed):
     return np.array([decode_session(X, y, seed=seed)["r"] for _, X, y, _ in sessions])
 
-def decode_cohort(sessions, *, n_null=200, seed=42):
+# ── parallel within-session-shuffle null (determinism-safe) ─────────────────
+# The null is embarrassingly parallel (the dominant runtime on the real cohort),
+# so it runs across a spawn-based ProcessPoolExecutor with `n_workers` workers.
+# DETERMINISM CONTRACT: one RNG seed is pre-generated PARENT-SIDE per shuffle
+# (`shuffle_seeds`), so shuffle i is fully determined by `shuffle_seeds[i]` and is
+# INDEPENDENT of how the work is sharded. ProcessPoolExecutor.map preserves input
+# order, so null[i] is byte-identical across any worker count (and vs the serial
+# loop, which uses the SAME pre-generated seeds). Workers never draw from a shared
+# /global RNG; BLAS is pinned to 1 thread per worker for both no-oversubscription
+# and bit-stability. `sessions` + `decode seed` are shipped to workers ONCE via the
+# initializer (module-level globals, spawn-safe), so only the integer seed is
+# pickled per task. The worker callable + initializer are module-level (picklable).
+_NULL_SESSIONS = None   # per-worker stash: the (sid, X, y, tt) cohort
+_NULL_SEED = None       # per-worker stash: the decode_session seed
+
+def _pin_blas_single_thread():
+    """Pin BLAS/OpenMP to 1 thread in this worker (no oversubscription + bit
+    stability). Prefer threadpoolctl; fall back to env vars if unavailable."""
+    try:
+        import threadpoolctl
+        threadpoolctl.threadpool_limits(1)
+    except ImportError:
+        for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                   "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+            os.environ[_v] = "1"
+
+def _null_init(sessions, seed):
+    """ProcessPoolExecutor initializer: stash the cohort + decode seed in module
+    globals (shipped ONCE, not re-pickled per task) and pin BLAS."""
+    global _NULL_SESSIONS, _NULL_SEED
+    _NULL_SESSIONS, _NULL_SEED = sessions, seed
+    _pin_blas_single_thread()
+
+def _null_one_shuffle(shuffle_seed):
+    """ONE null replicate: build a fresh RNG from `shuffle_seed`, permute each
+    session's y in the fixed `sessions` order, recompute _per_session_rs, return
+    the mean-over-sessions aggregate. Reads the cohort from the worker globals."""
+    rng = np.random.default_rng(int(shuffle_seed))
+    shuff = [(sid, X, rng.permutation(y), tt) for sid, X, y, tt in _NULL_SESSIONS]
+    return float(np.nanmean(_per_session_rs(shuff, _NULL_SEED)))
+
+def _cohort_null(sessions, *, n_null, seed, n_workers):
+    """Raw within-session-shuffle null array (length n_null). Byte-identical for
+    any `n_workers` because each shuffle's RNG seed is pre-generated parent-side.
+    `n_workers <= 1` runs the serial loop with the SAME seeds (so serial == parallel)."""
+    shuffle_seeds = np.random.default_rng(seed).integers(0, 2**31 - 1, size=n_null)
+    if n_workers <= 1:
+        # in-process: stash globals so _null_one_shuffle reads the SAME cohort
+        _null_init(sessions, seed)
+        return np.array([_null_one_shuffle(s) for s in shuffle_seeds])
+    ctx = mp.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=int(n_workers), mp_context=ctx,
+                             initializer=_null_init,
+                             initargs=(sessions, seed)) as ex:
+        # .map preserves input order -> null[i] determined solely by shuffle_seeds[i]
+        return np.array(list(ex.map(_null_one_shuffle, shuffle_seeds)))
+
+def decode_cohort(sessions, *, n_null=200, seed=42, n_workers=1):
     """`sessions` = list of (sess_id, X, y, trial_type). Decode within each
     session, then aggregate {r_s} OVER SESSIONS (mean/median + bootstrap CI).
-    Null = within-session shuffle of y, aggregated identically (mean over sessions)."""
+    Null = within-session shuffle of y, aggregated identically (mean over sessions).
+    The null is computed by `_cohort_null` and is BYTE-IDENTICAL across `n_workers`
+    (default 1 = serial); `n_workers>1` parallelizes it over a spawn ProcessPool."""
     per = []
     for sid, X, y, tt in sessions:
         d = decode_session(X, y, seed=seed)
@@ -179,11 +240,7 @@ def decode_cohort(sessions, *, n_null=200, seed=42):
         vals = [p["within"][t] for p in per if t in p["within"]]
         if vals:
             wt[t] = float(np.mean(vals))
-    rng = np.random.default_rng(seed)
-    null = np.empty(n_null)
-    for i in range(n_null):                       # within-session shuffle of y, aggregate as mean r_s
-        shuff = [(sid, X, rng.permutation(y), tt) for sid, X, y, tt in sessions]
-        null[i] = float(np.nanmean(_per_session_rs(shuff, seed)))
+    null = _cohort_null(sessions, n_null=n_null, seed=seed, n_workers=n_workers)
     return {"per_session": per, "mean_r": float(np.nanmean(rs)),
             "median_r": float(np.nanmedian(rs)), "ci": (float(ci_lo), float(ci_hi)),
             "null_mean": float(null.mean()), "null_sd": float(null.std()), "within_type": wt}
