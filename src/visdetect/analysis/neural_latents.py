@@ -275,3 +275,126 @@ def phi_specificity_session(Xt, y, t, mu, sigma=0.8, *, seed=42):
         return decode_session(Xw, y, seed=seed)["r"]
     r_phi, r_ramp = _r(b["phi"]), _r(b["ramp"])
     return {"r_phi": r_phi, "r_ramp": r_ramp, "delta": r_phi - r_ramp}
+
+# ── Task 6b: within-FA timing — leakage filter FIRST, then movement-MATCHING ──
+# The decisive prong-2 test. The raw within-FA decode (r ~ 0.34-0.56) is PARTLY
+# CIRCULAR: 15-28% of FA trials lick INSIDE the readout window, so the decoder
+# reads decision_time off peri/post-lick activity. ORDER IS MANDATORY: leakage
+# filter FIRST (drop trials whose lick falls in / just after the readout window),
+# THEN movement-MATCHING (hold the motor-axis signal ~constant). We NEVER partial
+# out / match on decision_time itself (it is the target); we control for the
+# per-trial motor-axis projection magnitude only. Matching uses the continuous
+# `partial_spearman` AND the stratified `within_strata_spearman`; the high-dim
+# subspace projection is a SECONDARY check (it can remove genuine signal).
+
+
+def leakage_free_mask(decision_time, window, guard=0.25):
+    """Boolean mask of FA trials whose lick falls comfortably AFTER the readout
+    window, so the decoder cannot read `decision_time` off peri/post-lick activity.
+
+    True where ``decision_time >= window[1] + guard`` (the lick happens at least
+    `guard` seconds after the readout window closes). `window` is the (lo, hi)
+    readout window in seconds rel. Baseline_ON; `guard` (default 0.25 s) is a
+    buffer past `hi` to exclude licks that begin just outside the window but whose
+    motor ramp already contaminates it."""
+    dt = np.asarray(decision_time, float)
+    return dt >= (float(window[1]) + float(guard))
+
+
+def _rankdata(x):
+    """Average-rank transform (ties shared), the rank basis for Spearman."""
+    x = np.asarray(x, float)
+    order = np.argsort(x, kind="mergesort")
+    ranks = np.empty(len(x), float)
+    ranks[order] = np.arange(1, len(x) + 1, dtype=float)
+    # average ties so the rank transform matches scipy's Spearman convention
+    _, inv, counts = np.unique(x, return_inverse=True, return_counts=True)
+    csum = np.cumsum(counts)
+    start = csum - counts
+    avg = (start + csum + 1) / 2.0          # mean rank within each tie group
+    return avg[inv]
+
+
+def _residualize_on_rank(target_rank, control_rank):
+    """Residuals of an OLS fit of `target_rank` on `control_rank` (with intercept).
+    The continuous analog of holding `control` fixed (the matching operation)."""
+    A = np.column_stack([np.ones_like(control_rank), control_rank])
+    beta, *_ = np.linalg.lstsq(A, target_rank, rcond=None)
+    return target_rank - A @ beta
+
+
+def partial_spearman(a, b, control):
+    """Rank-partial correlation: Spearman of `a` and `b` after rank-regressing
+    BOTH on `control`. Operationalizes movement-matching as a continuous control —
+    it removes the component of the a<->b relationship that is mediated by
+    `control` (here the per-trial motor-axis signal). Returns 0.0 if either
+    residual is constant (undefined correlation)."""
+    ar, br, cr = map(_rankdata, (a, b, control))
+    ra = _residualize_on_rank(ar, cr)
+    rb = _residualize_on_rank(br, cr)
+    if np.std(ra) < 1e-12 or np.std(rb) < 1e-12:
+        return 0.0
+    r = np.corrcoef(ra, rb)[0, 1]            # Pearson on rank residuals = partial Spearman
+    return float(r) if np.isfinite(r) else 0.0
+
+
+def within_strata_spearman(y_pred, y, control, *, n_strata=4):
+    """Movement-MATCHED association: quantile-bin trials into `n_strata` bins of
+    `control` (the motor-axis signal), compute Spearman(`y_pred`, `y`) WITHIN each
+    stratum (movement held ~constant there), and return the trial-count-weighted
+    mean across strata. A genuine timing signal survives; a relationship that is
+    only a control-driven artifact collapses (no within-stratum structure)."""
+    y_pred, y, control = map(lambda v: np.asarray(v, float), (y_pred, y, control))
+    n = len(y)
+    if n < n_strata * 3:                     # too few trials to stratify meaningfully
+        n_strata = max(1, n // 3)
+    if n_strata <= 1:
+        r = spearmanr(y_pred, y).correlation
+        return float(r) if np.isfinite(r) else 0.0
+    bins = pd.qcut(control, n_strata, labels=False, duplicates="drop")
+    rs, ws = [], []
+    for b in np.unique(bins[~pd.isna(bins)]):
+        m = bins == b
+        if m.sum() >= 3 and np.std(y_pred[m]) > 1e-12 and np.std(y[m]) > 1e-12:
+            r = spearmanr(y_pred[m], y[m]).correlation
+            if np.isfinite(r):
+                rs.append(r)
+                ws.append(int(m.sum()))
+    if not rs:
+        return 0.0
+    return float(np.average(rs, weights=ws))
+
+
+def motor_subspace(z_lick, bin_centers, *, k=5, premove_window=_FA_PRE,
+                   base_window=_FA_BASE):
+    """Orthonormal top-`k` motor directions: PCA of the per-trial peri-vs-pre-lick
+    difference vectors on a LICK-aligned tensor (t=0 = 200 ms-corrected lick).
+
+    For each trial we take (mean z over the pre-movement window) minus (mean z over
+    the pre-trial baseline window) — a per-trial peri-lick difference vector in unit
+    space — and return the top-`k` right singular vectors (unit-norm, mutually
+    orthonormal) as a ``(n_units, k)`` basis spanning the dominant motor subspace.
+    `project_out_subspace` removes all k dims. SECONDARY control for Task 6b: a
+    high-dim projection can remove genuine timing signal, so it is reported as a
+    secondary, non-decisive leg."""
+    def _feat(win):
+        m = (bin_centers >= win[0]) & (bin_centers < win[1])
+        if not m.any():
+            raise ValueError(f"motor_subspace: window {win} has no bins")
+        return z_lick[:, m, :].mean(axis=1)
+    diff = _feat(premove_window) - _feat(base_window)   # (n_trials, n_units)
+    diff = diff - diff.mean(axis=0, keepdims=True)      # center before PCA
+    n_units = diff.shape[1]
+    k_eff = int(min(k, n_units, max(1, diff.shape[0] - 1)))
+    # right singular vectors of the centered difference matrix = unit-space PCs
+    _, _, vt = np.linalg.svd(diff, full_matrices=False)
+    return vt[:k_eff].T                                  # (n_units, k_eff), orthonormal
+
+
+def project_out_subspace(X, basis):
+    """Remove ALL columns of an orthonormal `basis` ((n_units, k)) from each row of
+    `X` ((n_trials, n_units)): ``X - (X @ basis) @ basis.T``. With an orthonormal
+    basis the result has zero component along every basis direction."""
+    B = np.asarray(basis, float)
+    X = np.asarray(X, float)
+    return X - (X @ B) @ B.T

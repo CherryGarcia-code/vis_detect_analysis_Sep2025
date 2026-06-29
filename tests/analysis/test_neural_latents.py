@@ -1,4 +1,5 @@
 import types, numpy as np, pandas as pd, pytest
+from scipy.stats import spearmanr
 from visdetect.analysis import neural_latents as nl
 
 def _fake_session(outcomes, change_times, change_sizes, baseline_on, n_clusters=4, seed=0):
@@ -180,3 +181,79 @@ def test_evaluate_window_per_session_gate():
     assert np.isfinite(res["mean_r_after_projection"])                  # finite (real test)
     assert res["mean_r_after_projection"] > 0.3                         # signal spread > 1 dim survives
     assert res["within_type"]["hit"] > 0.0                              # NOTE B
+
+# ── Task 6b: within-FA leakage filter + movement-matching (decisive prong-2) ──
+def test_leakage_free_mask():
+    # window readout ends at hi=2.5; guard 0.25 -> keep only licks >= 2.75 s.
+    decision_time = np.array([1.0, 2.5, 2.74, 2.75, 3.0, 6.0])
+    window = (0.5, 2.5)
+    mask = nl.leakage_free_mask(decision_time, window, guard=0.25)
+    assert mask.dtype == bool
+    # licks comfortably AFTER the readout window survive; peri/inside-window dropped
+    assert list(mask) == [False, False, False, True, True, True]
+    # boundary: exactly hi+guard is kept (>=); 0 guard keeps lick at hi exactly
+    assert bool(nl.leakage_free_mask(np.array([2.5]), window, guard=0.0)[0])
+
+def test_partial_spearman_controls():
+    rng = np.random.default_rng(0)
+    n = 400
+    control = rng.normal(size=n)
+    # CASE 1: a and b are correlated ONLY because both are driven by `control`.
+    a = control + rng.normal(scale=0.3, size=n)
+    b = control + rng.normal(scale=0.3, size=n)
+    raw = spearmanr(a, b).correlation
+    pr = nl.partial_spearman(a, b, control)
+    assert raw > 0.6                                  # strong raw correlation...
+    assert abs(pr) < 0.2                              # ...vanishes once control removed
+    # CASE 2: a and b share an INDEPENDENT component not in control -> survives.
+    shared = rng.normal(size=n)
+    a2 = shared + 0.5 * control + rng.normal(scale=0.3, size=n)
+    b2 = shared + 0.5 * control + rng.normal(scale=0.3, size=n)
+    assert nl.partial_spearman(a2, b2, control) > 0.4
+
+def test_within_strata_spearman():
+    rng = np.random.default_rng(1)
+    n = 600
+    control = rng.normal(size=n)
+    # CASE 1: genuine y_pred<->y signal present WITHIN each control stratum.
+    y = rng.normal(size=n)
+    y_pred = y + 0.2 * control + rng.normal(scale=0.3, size=n)
+    s_signal = nl.within_strata_spearman(y_pred, y, control, n_strata=4)
+    assert s_signal > 0.6                              # signal survives matching
+    # CASE 2: y_pred and y correlate ONLY via control; within a stratum (control
+    # held ~constant) the residual is dominated by independent noise, so the
+    # strata-weighted mean collapses toward 0. NOTE the matching is only as good as
+    # the stratification is fine: the per-trial noise must exceed the WITHIN-stratum
+    # spread of `control` for a purely control-driven artifact to be fully matched
+    # out at n_strata=4 (within-quartile SD of a unit normal ~0.34); we use noise
+    # 0.8 (the control-dominated regime where 4-strata matching genuinely works).
+    ya = control + rng.normal(scale=0.8, size=n)
+    yb = control + rng.normal(scale=0.8, size=n)
+    assert spearmanr(ya, yb).correlation > 0.4        # raw still inflated by control
+    assert abs(nl.within_strata_spearman(ya, yb, control, n_strata=4)) < 0.2
+    # the continuous matcher (full rank-residualization) kills it regardless of noise
+    assert abs(nl.partial_spearman(ya, yb, control)) < 0.2
+
+def test_motor_subspace_projection():
+    rng = np.random.default_rng(2)
+    n_trials, n_units, k = 60, 8, 3
+    n_bins = 40
+    bin_centers = np.linspace(-1.75, 0.0, n_bins)
+    # plant k motor directions: peri-lick (pre-move window) loads these dims.
+    motor_dirs = np.linalg.qr(rng.normal(size=(n_units, k)))[0][:, :k]
+    z_lick = rng.normal(scale=0.2, size=(n_trials, n_bins, n_units))
+    premove = (bin_centers >= nl._FA_PRE[0]) & (bin_centers < nl._FA_PRE[1])
+    amps = rng.normal(size=(n_trials, k))
+    z_lick[:, premove, :] += (amps @ motor_dirs.T)[:, None, :]
+    basis = nl.motor_subspace(z_lick, bin_centers, k=k)
+    assert basis.shape == (n_units, k)
+    # orthonormal basis
+    assert np.allclose(basis.T @ basis, np.eye(k), atol=1e-8)
+    # projecting X out of the subspace leaves NO component along any basis dim
+    X = rng.normal(size=(50, n_units))
+    Xp = nl.project_out_subspace(X, basis)
+    assert np.allclose(Xp @ basis, 0.0, atol=1e-8)    # all k dims removed
+    # variance ORTHOGONAL to the subspace is preserved: re-projecting changes nothing
+    assert np.allclose(nl.project_out_subspace(Xp, basis), Xp, atol=1e-8)
+    # the removed part is exactly the subspace component
+    assert np.allclose(X - Xp, (X @ basis) @ basis.T, atol=1e-8)
