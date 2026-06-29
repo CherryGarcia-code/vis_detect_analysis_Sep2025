@@ -166,3 +166,17 @@ def test_phi_ramp_bases_shapes():
     # rising flank is highly collinear with a monotonic ramp (NOTE A) ->
     # phi-specificity is expected to be underpowered there.
     assert np.corrcoef(b["phi"], b["ramp"])[0, 1] > 0.85   # true value ~0.89 over [4,6]
+
+# ── Task 6: C1 real-data gate pure core (per-session decode + motor-CD survival) ──
+def test_evaluate_window_per_session_gate():
+    from scripts.neural_latents import n1_c1_gate as gate
+    sessions = _sessions_with_within_signal()         # Task-4 generator: per-session signal
+    # benign per-session motor axis: remove only 1 of the p=6 signal dims, so the
+    # within-session decode survives projection (signal is spread across all dims).
+    motor_axes = {s: np.eye(X.shape[1])[0] for s, X, y, tt in sessions}
+    res = gate.evaluate_window(sessions, motor_axes, n_null=50, seed=42)
+    assert res["mean_r"] > res["null_mean"] + 2 * res["null_sd"]         # prong 1
+    assert isinstance(res["survives_projection"], bool)                 # prong 2 computed
+    assert np.isfinite(res["mean_r_after_projection"])                  # finite (real test)
+    assert res["mean_r_after_projection"] > 0.3                         # signal spread > 1 dim survives
+    assert res["within_type"]["hit"] > 0.0                              # NOTE B
