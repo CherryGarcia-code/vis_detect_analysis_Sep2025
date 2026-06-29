@@ -615,6 +615,40 @@ def evaluate_window(sessions, motor_axes, *, n_null=200, seed=42):
 
 ---
 
+### Task 6b: Within-FA timing — leakage filter FIRST, then movement-MATCHING (decisive prong-2)
+
+**Files:** Create `scripts/neural_latents/n1_c1b_within_fa.py`; add pure cores to `neural_latents.py`; append tests. Gates Tasks 7–9 (do not proceed until this answer is in).
+
+**Why (from the C1 real run + review):** the real urgency signal is **self-timed (FA) timing**, NOT hit timing — within-hit≈0.05 is a **clean, leakage-free NEGATIVE CONTROL** (hits always lick >6 s, after every readout window) that *validates* the decode, not a failure. But the raw within-FA r (0.34–0.56) is **partly circular**: 15–28% of FA trials lick INSIDE the readout window (early 26.8%, mid 15.0%, late 28.0%; up to ~74% leak-prone), so the decoder reads `decision_time` off peri/post-lick activity. Prong 2 is decided by whether the **leakage-filtered** within-FA decode **survives MOVEMENT-MATCHING**. **Headline reframe (locked): "pre-change striatal ramp predicts self-timed (anticipatory FA) lick timing."**
+
+**Order is mandatory: leakage filter FIRST, then matching.**
+
+**Pure cores (in `neural_latents.py`):**
+- `leakage_free_mask(decision_time, window, guard=0.25) -> np.ndarray[bool]` — True where `decision_time >= window[1] + guard` (lick comfortably AFTER the readout window).
+- `partial_spearman(a, b, control) -> float` — rank-partial: Spearman of the residuals of `rank(a)~rank(control)` and `rank(b)~rank(control)` (the continuous analog of movement-matching).
+- `within_strata_spearman(y_pred, y, control, *, n_strata=4) -> float` — bin trials into `n_strata` quantiles of `control` (motor signal), Spearman(`y_pred`,`y`) within each stratum, return the trial-count-weighted mean (movement held ~constant within stratum). 
+- `motor_subspace(z_lick, bin_centers, *, k=5, premove_window=_FA_PRE, base_window=_FA_BASE) -> np.ndarray[n_units,k]` — orthonormal top-k motor directions (PCA of the per-trial peri-vs-pre-lick difference vectors); `project_out_subspace(X, basis) -> X` removes all k dims.
+
+**Script `n1_c1b_within_fa.py` — the cascade, per swept window, FA trials only, per session aggregated over sessions (decode_cohort-style), with within-session-shuffle nulls + bootstrap CIs over sessions, `n_workers>1`:**
+1. **raw** within-FA r (all FA trials).
+2. **leakage-filtered** within-FA r (`leakage_free_mask`, guard 0.25 s) — *expect a drop*; report how many FA trials/session survive.
+3. **MATCHED (primary)** on the leakage-filtered set: decode once per session (OOF `y_pred` from `decode_session`), then `within_strata_spearman(y_pred, y, motor_signal)` (movement matched) AND `partial_spearman(y_pred, y, motor_signal)` (complement); aggregate over sessions vs null.
+4. **subspace-projected (secondary)**: `project_out_subspace` (top-k motor PCs) then re-decode within-FA; report r (caveat: high-dim projection can remove genuine signal — secondary, not decisive).
+- **Lead with the EARLY window** (best raw signal 0.56, least movement 68%, most clean trials ~64%; early activity predicting a lick seconds later is itself evidence against pure peri-movement motor-prep, which peaks near the lick). Report all three.
+- Outputs: `data/cache/neural_latents/n1_c1b_within_fa.json` (the full cascade r raw→filtered→matched→subspace per window, n_clean per session, nulls, CIs) + `fig_n1_c1b_within_fa.png` (plain-language: the cascade as a descending bar chart per window, lead-early) + stats CSV.
+
+**Honest framing of the outcome (state in the JSON `verdict` + figure caption):**
+- survives leakage-filter + matching → **"self-timed urgency predicts FA timing beyond generic motor prep."**
+- collapses → **"for self-timed licks the urgency/commitment ramp and motor preparation are not separable"** — a REAL, meaningful basal-ganglia action-commitment conclusion, NOT a control failure (this earns the Option-2 reframe).
+
+- [ ] **Step 1:** Tests (pure cores, synthetic): `test_leakage_free_mask` (only trials with `decision_time >= hi+guard` kept); `test_partial_spearman_controls` (a planted a–b correlation that is entirely mediated by `control` → partial≈0; an independent one survives); `test_within_strata_spearman` (signal present within strata where `control` is held constant → high; a control-driven-only signal → ~0); `test_motor_subspace_projection` (`project_out_subspace(X, basis) @ basis ≈ 0`, orthogonal variance preserved).
+- [ ] **Step 2:** Run `... -k "leakage or partial_spearman or within_strata or motor_subspace" -v` → FAIL.
+- [ ] **Step 3:** Implement the pure cores + `n1_c1b_within_fa.py` main() (FA-only per-session build reusing Task-6 wiring; `n_workers=max(1,cpu-2)`). Whole test file still passes.
+- [ ] **Step 4:** Run tests → PASS. **The controller runs the real-data script in the background** (avoids the long-run abandonment that hit Task 6); inspect the cascade JSON.
+- [ ] **Step 5:** Commit `feat(N1): within-FA timing — leakage-filtered + movement-matched (decisive prong-2)`.
+
+---
+
 ### Task 7: φ-specificity on the near-μ window (MINIMAL, expect-null, reported as a test-limitation; decoupled, non-gating)
 
 **Files:** Create `scripts/neural_latents/n1_phi_specificity.py`.
