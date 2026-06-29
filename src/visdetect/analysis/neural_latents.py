@@ -5,11 +5,14 @@ import os
 from dataclasses import dataclass
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
+from sklearn.linear_model import RidgeCV
+from sklearn.model_selection import StratifiedKFold
 
 from visdetect.analysis.config import ROOT, canonical_session_id, parse_session_date
 from visdetect.analysis.utils import (
     build_population_tensor, compute_zscore_normalized, get_good_cluster_ids,
-    compute_lda_cd)
+    compute_lda_cd, bootstrap_ci)
 from visdetect.analysis.constants import EVENT_RESPONSIVENESS_WINDOWS
 
 # lab-canonical preparatory-motor windows (rel. corrected lick), shared with lick.py:
@@ -110,3 +113,77 @@ def fit_lick_motor_cd(z_lick, bin_centers, *, base_window=_FA_BASE, premove_wind
     X = np.vstack([pre, premove])
     y = np.r_[np.zeros(len(pre)), np.ones(len(premove))]
     return compute_lda_cd(X, y, method="sklearn", reg=1.0, reg_style="flat")
+
+# ── Task 4: per-session response-time decoder + cohort aggregation + nulls ──
+# Decode WITHIN each session (units are NOT cross-session tracked — column u in
+# session A != column u in session B; good_and_stable_ids is within-session QC).
+# Cohort statistic = mean/median of {r_s} with bootstrap CI OVER SESSIONS
+# (session = unit of replication). REJECTED: GroupKFold-across-sessions, a
+# concatenated block-diagonal feature space, and any single global Spearman on
+# pooled OOF predictions (Simpson's-paradox inflation from between-session offsets).
+
+_MIN_TRIALS_PER_TYPE = 3  # brief's interface text says 5, but its own verbatim
+# test_within_type_graded_separates_types supplies 3/type and asserts a populated
+# result; the executable test is authoritative. 3 is the min for a defined Spearman.
+
+def within_type_graded(y_pred, y_true, trial_type):
+    """Spearman of pred-vs-true WITHIN each trial type for ONE session
+    (>= _MIN_TRIALS_PER_TYPE trials/type, non-constant prediction).
+    Returns {type -> spearman}."""
+    y_pred, y_true, tt = map(np.asarray, (y_pred, y_true, trial_type))
+    res = {}
+    for t in np.unique(tt):
+        m = tt == t
+        if m.sum() >= _MIN_TRIALS_PER_TYPE and np.std(y_pred[m]) > 1e-9:
+            r = spearmanr(y_pred[m], y_true[m]).correlation
+            res[str(t)] = float(r) if np.isfinite(r) else 0.0
+    return res
+
+def decode_session(X, y, *, n_splits=5, seed=42):
+    """Within ONE session: quantile-binned StratifiedKFold over trials, RidgeCV
+    per fold, out-of-fold Spearman r (0.0 if the prediction is constant/degenerate)."""
+    X, y = np.asarray(X, float), np.asarray(y, float)
+    n = len(y); k = max(2, min(n_splits, n // 2))
+    nb = max(2, min(k, n // 10))
+    ybin = pd.qcut(y, nb, labels=False, duplicates="drop")
+    if len(np.unique(ybin)) < 2:                 # y too degenerate to stratify
+        ybin = (y > np.median(y)).astype(int)
+    y_pred = np.full(n, np.nan)
+    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
+    for tr, te in skf.split(X, ybin):
+        y_pred[te] = RidgeCV(alphas=np.logspace(-3, 3, 13)).fit(X[tr], y[tr]).predict(X[te])
+    if np.std(y_pred) < 1e-9:
+        r = 0.0
+    else:
+        r = spearmanr(y_pred, y).correlation
+        r = 0.0 if not np.isfinite(r) else float(r)
+    ss_res = np.sum((y - y_pred) ** 2); ss_tot = np.sum((y - y.mean()) ** 2)
+    return {"r": r, "r2": float(1 - ss_res / ss_tot) if ss_tot > 0 else 0.0, "y_pred": y_pred}
+
+def _per_session_rs(sessions, seed):
+    return np.array([decode_session(X, y, seed=seed)["r"] for _, X, y, _ in sessions])
+
+def decode_cohort(sessions, *, n_null=200, seed=42):
+    """`sessions` = list of (sess_id, X, y, trial_type). Decode within each
+    session, then aggregate {r_s} OVER SESSIONS (mean/median + bootstrap CI).
+    Null = within-session shuffle of y, aggregated identically (mean over sessions)."""
+    per = []
+    for sid, X, y, tt in sessions:
+        d = decode_session(X, y, seed=seed)
+        per.append({"sess_id": sid, "r": d["r"], "n": int(len(y)),
+                    "within": within_type_graded(d["y_pred"], y, tt)})
+    rs = np.array([p["r"] for p in per])
+    ci_lo, ci_hi = bootstrap_ci(rs, n_bootstrap=1000, seed=seed)
+    wt = {}
+    for t in ("hit", "fa"):
+        vals = [p["within"][t] for p in per if t in p["within"]]
+        if vals:
+            wt[t] = float(np.mean(vals))
+    rng = np.random.default_rng(seed)
+    null = np.empty(n_null)
+    for i in range(n_null):                       # within-session shuffle of y, aggregate as mean r_s
+        shuff = [(sid, X, rng.permutation(y), tt) for sid, X, y, tt in sessions]
+        null[i] = float(np.nanmean(_per_session_rs(shuff, seed)))
+    return {"per_session": per, "mean_r": float(np.nanmean(rs)),
+            "median_r": float(np.nanmedian(rs)), "ci": (float(ci_lo), float(ci_hi)),
+            "null_mean": float(null.mean()), "null_sd": float(null.std()), "within_type": wt}

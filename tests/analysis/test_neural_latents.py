@@ -89,3 +89,53 @@ def test_motor_axis_signal_tracks_projection():
     axis = np.array([0.0, 1.0, 0.0])
     X = np.array([[0, 3.0, 0], [0, -1.0, 0]])
     assert np.allclose(nl.motor_axis_signal(X, axis), [3.0, -1.0])
+
+# ── Task 4: per-session decoder + cohort aggregation + nulls ───────────────
+def _sessions_with_within_signal(K=6, n=80, p=6, seed=1):
+    rng = np.random.default_rng(seed); out = []
+    for s in range(K):
+        w = rng.normal(size=p); y = rng.normal(size=n)
+        X = y[:, None] * w[None, :] + rng.normal(scale=0.5, size=(n, p))  # within-session signal
+        tt = np.where(rng.random(n) < 0.5, "hit", "fa")
+        out.append((s, X, y, tt))
+    return out
+
+def _sessions_simpson_only(K=6, n=80, p=6, seed=2):
+    """NO within-session signal; only between-session y-offsets + disjoint feature
+    blocks encoding the offset. A pooled global Spearman is spuriously high; the
+    correct per-session aggregate is near chance."""
+    rng = np.random.default_rng(seed); out = []
+    for s in range(K):
+        offset = 5.0 * s
+        y = offset + rng.normal(scale=0.3, size=n)                 # ~constant within session
+        X = np.zeros((n, p * K))
+        X[:, s*p:(s+1)*p] = offset + rng.normal(scale=0.3, size=(n, p))  # disjoint block ~ offset
+        tt = np.where(rng.random(n) < 0.5, "hit", "fa")
+        out.append((s, X, y, tt))
+    return out
+
+def test_decode_cohort_recovers_within_session_signal():
+    res = nl.decode_cohort(_sessions_with_within_signal(), n_null=100, seed=42)
+    assert len(res["per_session"]) == 6                       # ONE r per session
+    assert res["mean_r"] > 0.5                                # within-session signal recovered
+    assert res["mean_r"] > res["null_mean"] + 2 * res["null_sd"]
+    assert res["within_type"]["hit"] > 0.3                    # NOTE B: graded within hits
+
+def test_per_session_scheme_defeats_simpson_inflation():
+    sessions = _sessions_simpson_only()
+    res = nl.decode_cohort(sessions, n_null=50, seed=42)
+    assert len(res["per_session"]) == 6
+    assert abs(res["mean_r"]) < 0.2                           # CORRECT aggregate ~ chance
+    # REGRESSION GUARD: the REJECTED pooled-global-Spearman scheme is spuriously high
+    from scipy.stats import spearmanr
+    yp = [nl.decode_session(X, y, seed=42)["y_pred"] for _, X, y, _ in sessions]
+    yt = [y for _, _, y, _ in sessions]
+    r_global = spearmanr(np.concatenate(yp), np.concatenate(yt)).correlation
+    assert r_global > 0.5                                     # between-session inflation, as feared
+
+def test_within_type_graded_separates_types():
+    y_true = np.array([1., 2., 3., 10., 11., 12.])
+    y_pred = np.array([1.1, 2.0, 2.9, 10.2, 10.9, 12.1])
+    tt = np.array(["fa", "fa", "fa", "hit", "hit", "hit"])
+    g = nl.within_type_graded(y_pred, y_true, tt)
+    assert g["hit"] > 0.8 and g["fa"] > 0.8                   # graded WITHIN each type
