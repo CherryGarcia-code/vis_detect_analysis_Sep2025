@@ -75,3 +75,17 @@ def test_window_feature_matrix_means_over_fixed_window():
     assert np.allclose(X, 2.0)
     with pytest.raises(ValueError):
         nl.window_feature_matrix(z, bin_centers, (100.0, 200.0))  # no bins
+
+def test_project_out_axis_removes_component():
+    rng = np.random.default_rng(0)
+    axis = np.array([1.0, 0.0, 0.0])
+    X = rng.normal(size=(20, 3))
+    Xp = nl.project_out_axis(X, axis)
+    assert np.allclose(Xp @ axis, 0.0, atol=1e-10)          # component along axis removed
+    # variance orthogonal to axis preserved
+    assert np.allclose(Xp[:, 1:], X[:, 1:], atol=1e-10)
+
+def test_motor_axis_signal_tracks_projection():
+    axis = np.array([0.0, 1.0, 0.0])
+    X = np.array([[0, 3.0, 0], [0, -1.0, 0]])
+    assert np.allclose(nl.motor_axis_signal(X, axis), [3.0, -1.0])

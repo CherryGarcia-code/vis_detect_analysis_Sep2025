@@ -8,7 +8,12 @@ import pandas as pd
 
 from visdetect.analysis.config import ROOT, canonical_session_id, parse_session_date
 from visdetect.analysis.utils import (
-    build_population_tensor, compute_zscore_normalized, get_good_cluster_ids)
+    build_population_tensor, compute_zscore_normalized, get_good_cluster_ids,
+    compute_lda_cd)
+from visdetect.analysis.constants import EVENT_RESPONSIVENESS_WINDOWS
+
+# lab-canonical preparatory-motor windows (rel. corrected lick), shared with lick.py:
+_FA_BASE, _FA_PRE = EVENT_RESPONSIVENESS_WINDOWS["FA"]   # ((-1.75,-1.25), (-0.3,-0.15))
 
 DEFAULT_LATENT_CSV = os.path.join(
     ROOT, "data", "cache", "decision_latents", "decision_latents_by_state.csv")
@@ -81,3 +86,27 @@ def window_feature_matrix(z, bin_centers, win):
         raise ValueError(f"window {win} contains no bin centers "
                          f"(range {bin_centers.min():.2f}..{bin_centers.max():.2f})")
     return z[:, mask, :].mean(axis=1)
+
+def project_out_axis(X, axis):
+    a = np.asarray(axis, float)
+    a = a / (np.linalg.norm(a) + 1e-12)
+    return X - np.outer(X @ a, a)
+
+def motor_axis_signal(X, axis):
+    a = np.asarray(axis, float)
+    a = a / (np.linalg.norm(a) + 1e-12)
+    return X @ a
+
+def fit_lick_motor_cd(z_lick, bin_centers, *, base_window=_FA_BASE, premove_window=_FA_PRE):
+    """Unit-norm PREPARATORY-motor axis: LDA between the pre-movement ramp window
+    (default (-0.3,-0.15) s before the corrected lick) and a clean pre-trial baseline
+    (default (-1.75,-1.25) s) on a LICK-aligned tensor (t=0 = 200 ms-corrected lick).
+    Class 1 = pre-movement. Windows are the lab-canonical EVENT_RESPONSIVENESS_WINDOWS
+    (ported MATLAB def; matches lick.py) — imported, not invented."""
+    def _feat(win):
+        m = (bin_centers >= win[0]) & (bin_centers < win[1])
+        return z_lick[:, m, :].mean(axis=1)
+    pre, premove = _feat(base_window), _feat(premove_window)
+    X = np.vstack([pre, premove])
+    y = np.r_[np.zeros(len(pre)), np.ones(len(premove))]
+    return compute_lda_cd(X, y, method="sklearn", reg=1.0, reg_style="flat")
