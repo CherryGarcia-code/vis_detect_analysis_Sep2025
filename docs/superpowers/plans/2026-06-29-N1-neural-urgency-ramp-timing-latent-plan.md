@@ -492,12 +492,17 @@ def decode_cohort(sessions, *, n_null=200, seed=42):
 
 ```python
 def test_phi_ramp_bases_shapes():
-    t = np.linspace(0, 6, 120)
+    # Use the REAL late readout window (nl.WINDOWS["late"] = (4,6), the latest pre-μ
+    # window / PRIMARY candidate). NOTE-A collinearity is window-dependent: negligible
+    # far below μ (early/mid are near-flat φ tails) and strong only near μ. Over [0,6]
+    # (a 7σ tail at σ=0.8) corr is only ~0.60; over [4,6] it is ~0.89.
+    t = np.linspace(4.0, 6.0, 120)
     b = nl.phi_ramp_bases(t, mu=7.0, sigma=0.8)
     assert b["phi"].argmax() == len(t) - 1          # rising flank: phi peaks toward mu>6
     assert np.all(np.diff(b["ramp"]) > 0)           # ramp strictly monotonic
-    # over a pre-mu window phi and ramp are highly collinear (NOTE A) -> documents the tension
-    assert np.corrcoef(b["phi"], b["ramp"])[0, 1] > 0.95
+    # over the latest pre-μ readout window φ's rising flank is highly collinear with a
+    # monotonic ramp (NOTE A) -> φ-specificity is expected underpowered there
+    assert np.corrcoef(b["phi"], b["ramp"])[0, 1] > 0.85
 ```
 
 - [ ] **Step 2: Run** `... -k phi_ramp_bases -v` → FAIL.
@@ -608,17 +613,24 @@ def evaluate_window(sessions, motor_axes, *, n_null=200, seed=42):
 
 ---
 
-### Task 7: φ-specificity on the PRIMARY window (exploratory, non-gating)
+### Task 7: φ-specificity on a near-μ well-conditioned window (decoupled from C1; exploratory, non-gating)
 
 **Files:** Create `scripts/neural_latents/n1_phi_specificity.py`.
 
-**Interfaces:** Reuses `nl.phi_specificity_session` over the PRIMARY window's `(trials × bins × units)` block with per-session `mu = expected_change_time`. **Runs only after the §5 synthetic prerequisite reports `phi_separable_on_window=True`; otherwise the script writes a "tested, underpowered" verdict and exits 0** (per NOTE A / FIX 1 — never blocks anything). Writes `n1_phi_specificity.json` (ΔCV r + bootstrap CI) + `fig_n1_phi_specificity.png`.
+**Why window-conditioned + decoupled (real φ geometry, μ≈7, σ=0.8 — verified):** φ-vs-ramp separability is strongly window-dependent. Over the **early** window [0.5,2.5], φ_max ≈ 1e-7 (a deep 8-orders-down tail; corr 0.59) → φ-weighting is **ILL-CONDITIONED** and a φ-vs-ramp ΔCV would test weighting geometry, NOT temporal expectation. Over the **late** window [4,6], φ_max ≈ 0.46 (corr 0.89) → φ-specificity is genuinely (if modestly) **TESTABLE** (corr 0.89 ⇒ ~21% non-shared variance ⇒ a nonzero ΔCV is meaningful). Therefore φ-specificity is evaluated **only on a near-μ, well-conditioned window** (where `φ.max()` is O(0.1–1)), **decoupled from C1's PRIMARY** (C1 may select an early movement-free window). Non-gating (FIX 1): never blocks C2. This **revises** the earlier blanket "expect underpowered/decorative" — report by case instead.
 
-- [ ] **Step 1:** Test: `test_phi_specificity_reports_underpowered_when_not_separable` — feed a synthetic case where φ≈ramp; assert verdict `"underpowered"` and no exception.
-- [ ] **Step 2:** Run → FAIL.
-- [ ] **Step 3:** Implement: read `n1_synthetic_verdict.json`; if not separable → `{"verdict": "underpowered"}`; else compute `phi_specificity_session` per session, bootstrap the cross-session mean Δ, write JSON+figure.
-- [ ] **Step 4:** Run test → PASS; run on real data.
-- [ ] **Step 5:** Commit `feat(N1): phi-specificity (exploratory, gated on synthetic discriminability)`.
+**Interfaces:** Pure core `phi_specificity_verdict(sessions, bin_centers, mu_by_session, *, window, window_is_motor_free, phi_min_max=0.05, sigma=0.8, seed=42) -> dict`, where `sessions` = list of `(sess_id, Xt_window, y)` (`Xt_window` = the near-μ window's `(trials × bins × units)` block). Logic:
+1. φ conditioning: compute `phi_max = max over sessions of phi_ramp_bases(bin_centers_in_window, mu_s, sigma)["phi"].max()`. If `phi_max < phi_min_max` → `{"verdict": "not_testable_ill_conditioned", "phi_max": phi_max}` (φ is the deep tail — report honestly, NOT "underpowered").
+2. Else if `not window_is_motor_free` → `{"verdict": "not_testable_on_movement_free_window", "phi_max": phi_max}` (the only φ-conditioned window is movement-contaminated; φ-specificity can't be cleanly separated from movement).
+3. Else → per-session `delta_s = phi_specificity_session(Xt_window_s, y_s, bin_centers_in_window, mu_s, sigma)["delta"]`; bootstrap the cross-session mean Δ + CI; `{"verdict": "testable", "delta_mean": ..., "ci": [...], "phi_max": phi_max, "per_session": [...]}` (a nonzero Δ is a real, modest temporal-expectation-specificity result).
+
+`main()` selects the near-μ window (the late `nl.WINDOWS["late"]`), reads `n1_c1_gate.json` to learn whether that window is motor-CD-free (`window_is_motor_free`), builds the per-session near-μ blocks via `join_session` + slicing, calls `phi_specificity_verdict`, writes `n1_phi_specificity.json` + `fig_n1_phi_specificity.png` (plain-language title stating the case). **Optional alternative (note in the docstring; implement only if trivial):** μ-anchoring — does the neural ramp's peak/inflection track each session's μ ACROSS sessions? Power-limited (μ range ≈ 0.8 s over 29 experts) — note, don't bank on it.
+
+- [ ] **Step 1:** Test `test_phi_specificity_window_conditioning` (pure-core, synthetic): (a) a deep-tail window (build `bin_centers` far below μ so `phi_max ~1e-7`) → verdict `"not_testable_ill_conditioned"`, no exception; (b) a near-μ window (`bin_centers` in [4,6], μ=7) with `window_is_motor_free=True` and a planted φ-vs-ramp difference → verdict `"testable"` with a finite `delta_mean`; (c) same near-μ window but `window_is_motor_free=False` → `"not_testable_on_movement_free_window"`.
+- [ ] **Step 2:** Run `... -k phi_specificity_window_conditioning -v` → FAIL.
+- [ ] **Step 3:** Implement `phi_specificity_verdict` (pure) + `main()` wiring (reads C1 gate JSON for `window_is_motor_free`; uses `phi_ramp_bases`/`phi_specificity_session` from Task 5). Whole test file still passes.
+- [ ] **Step 4:** Run test → PASS; run on real data (`PYTHONPATH=src .venv/Scripts/python.exe scripts/neural_latents/n1_phi_specificity.py`).
+- [ ] **Step 5:** Commit `feat(N1): phi-specificity on near-μ well-conditioned window (window-conditioned cases, decoupled from C1)`.
 
 ---
 
