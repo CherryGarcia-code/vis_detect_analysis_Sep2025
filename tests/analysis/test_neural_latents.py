@@ -286,3 +286,111 @@ def test_ramp_slope_feature_matrix():
         nl.ramp_slope_feature_matrix(z, bin_centers, one_bin)
     with pytest.raises(ValueError):
         nl.ramp_slope_feature_matrix(z, bin_centers, (100.0, 200.0))  # no bins
+
+
+# ── Task 9: write-up orchestrator — assemble the controlled-negative summary ──
+def _mini_gate():
+    """A minimal n1_c1_gate.json stand-in: per-window within-HIT (~0, the clean
+    leakage-free negative control) vs within-FA-raw (the leakage-inflated signal)."""
+    return {
+        "subject": "BG_046",
+        "n_fitted_expert_sessions": 29,
+        "n_contributing_sessions": 28,
+        "join_failures": [{"sess_id": "11092025",
+                           "reason": "Baseline_ON (537) shorter than trials (538)"}],
+        "windows": {
+            "early": {"window": [0.5, 2.5],
+                      "within_type": {"hit": 0.061, "fa": 0.563}},
+            "mid": {"window": [2.0, 4.0],
+                    "within_type": {"hit": 0.046, "fa": 0.515}},
+            "late": {"window": [4.0, 6.0],
+                     "within_type": {"hit": 0.054, "fa": 0.337}},
+        },
+        "primary_window": "late",
+        "gate_pass": True,
+    }
+
+
+def _mini_within_fa(raw=0.5593, filtered=0.0270, partial=0.0102):
+    """A minimal within-FA cascade JSON (works for both 6b MEAN and 6c SLOPE):
+    raw -> leakage-filtered -> matched-partial collapse, early window leads."""
+    return {
+        "subject": "BG_046",
+        "n_fitted_expert_sessions": 29,
+        "n_contributing_sessions": 28,
+        "join_failures": [{"sess_id": "11092025", "reason": "mismatch"}],
+        "windows": {
+            "early": {
+                "window": [0.5, 2.5],
+                "median_clean_fa_per_session": 104.0,
+                "raw_mean_r": raw,
+                "filtered_mean_r": filtered,
+                "filtered_ci": [-0.027, 0.080],
+                "matched_strata_mean": 0.0239,
+                "matched_strata_ci": [-0.021, 0.067],
+                "matched_partial_mean": partial,
+                "matched_partial_ci": [-0.041, 0.061],
+                "matched_null_mean": -0.0434,
+                "matched_null_sd": 0.0215,
+                "subspace_mean_r": 0.0217,
+            },
+        },
+        "verdict": "irrelevant — orchestrator reframes to controlled-negative",
+    }
+
+
+def _mini_synthetic():
+    return {"recovers": True, "motor_killed": True, "phi_separable_on_window": False}
+
+
+def test_assemble_n1_summary():
+    from scripts.neural_latents.run_n1 import assemble_n1_summary
+    paths = {
+        "gate": _mini_gate(),
+        "within_fa": _mini_within_fa(raw=0.5593, filtered=0.0270, partial=0.0102),
+        "ramp_slope": _mini_within_fa(raw=0.3319, filtered=0.0230, partial=0.0190),
+        "synthetic": _mini_synthetic(),
+    }
+    s = assemble_n1_summary(paths)
+
+    # verdict + provenance
+    assert s["question_id"] == "N1"
+    assert s["verdict"] == "controlled negative"
+    assert s["subject"] == "BG_046"
+    assert s["n_fitted_expert_sessions"] == 29
+    assert s["n_contributing_sessions"] == 28
+    assert len(s["join_failures"]) == 1 and s["join_failures"][0]["sess_id"] == "11092025"
+
+    # within-HIT clean negative control (~0) vs within-FA raw (leakage-inflated)
+    wh = s["within_hit_negative_control"]
+    assert wh["by_window"]["early"] == pytest.approx(0.061)
+    assert wh["within_fa_raw_by_window"]["early"] == pytest.approx(0.563)
+    assert wh["by_window"]["early"] < 0.1            # negative control near zero
+    assert wh["within_fa_raw_by_window"]["early"] > 0.3  # raw FA inflated
+
+    # MEAN cascade (early): raw -> filtered -> matched-partial descending to ~0
+    mc = s["mean_cascade_early"]
+    assert mc["window"] == [0.5, 2.5]
+    assert mc["raw_mean_r"] == pytest.approx(0.5593)
+    assert mc["filtered_mean_r"] == pytest.approx(0.0270)
+    assert mc["matched_partial_mean"] == pytest.approx(0.0102)
+    assert mc["matched_partial_ci"] == [-0.041, 0.061]
+    # matched null upper = mean + 2*sd
+    assert mc["matched_null_upper"] == pytest.approx(-0.0434 + 2 * 0.0215)
+    assert mc["raw_mean_r"] > mc["filtered_mean_r"] > 0  # collapse, leakage drops it
+    assert abs(mc["matched_partial_mean"]) < 0.05        # ~0 after matching
+
+    # SLOPE cascade (early): the ONE ramp-appropriate readout, also collapses
+    sc = s["slope_cascade_early"]
+    assert sc["raw_mean_r"] == pytest.approx(0.3319)
+    assert sc["filtered_mean_r"] == pytest.approx(0.0230)
+    assert sc["matched_partial_mean"] == pytest.approx(0.0190)
+    assert abs(sc["matched_partial_mean"]) < 0.05
+
+    # synthetic method-validation booleans surfaced
+    assert s["method_validation"] == {"recovers": True, "motor_killed": True,
+                                      "phi_separable_on_window": False}
+
+    # one-line plain-language conclusion mentions the controlled negative + leakage
+    assert "controlled negative" in s["conclusion"].lower()
+    assert "leakage" in s["conclusion"].lower()
