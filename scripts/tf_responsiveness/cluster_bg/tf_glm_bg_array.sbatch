@@ -35,6 +35,14 @@ set -uo pipefail
 STAGE=/ceph/mrsic_flogel/public/projects/BeJG_20230130_VisDetect/wEPhys/tf_glm_cluster
 BG=$STAGE/bg_mice
 DATA_ROOT=$BG/bg_pkls
+# Per-subject sub-jobs so each runs/aggregates/resumes independently (and the
+# priority mouse can go first). Override at submit:
+#   sbatch --export=ALL,SUBJ=046 --array=1-368%80 ...   # BG_046 (46 sess) FIRST
+#   sbatch --export=ALL,SUBJ=031 --array=1-344%80 ...   # BG_031 (43 sess, resumes 64 done)
+#   sbatch --export=ALL,SUBJ=039 --array=1-256%80 ...   # BG_039 (32 sess)
+SUBJ=${SUBJ:-046}
+TARGETS=$BG/targets_bg_${SUBJ}.csv
+RESULTS=$BG/results_bg_${SUBJ}
 # The shared tfglm conda env lives under wEPhys/ (one level ABOVE tf_glm_cluster/),
 # same path the MoHa sbatch used -- NOT under tf_glm_cluster/.
 ENV=/ceph/mrsic_flogel/public/projects/BeJG_20230130_VisDetect/wEPhys/conda_envs/tfglm
@@ -57,7 +65,8 @@ if ! python -c "import numpy" 2>/dev/null; then
     exit 1
 fi
 
-mkdir -p "$BG/logs" "$BG/results_bg"
+mkdir -p "$BG/logs" "$RESULTS"
+echo "SUBJ=$SUBJ | targets=$TARGETS | results=$RESULTS"
 
 # Pin BLAS/OpenMP to the task's CPU allocation.
 export PYTHONPATH="$BG/code/src"
@@ -75,10 +84,10 @@ python -c "import visdetect.core.session, visdetect.analysis.tf_glm, visdetect.a
 }
 
 python "$BG/code/scripts/tf_responsiveness/cluster_bg/tf_glm_bg_task.py" \
-    --targets "$BG/targets_bg.csv" \
+    --targets "$TARGETS" \
     --task-id "$SLURM_ARRAY_TASK_ID" \
     --data-root "$DATA_ROOT" \
-    --out-dir "$BG/results_bg"
+    --out-dir "$RESULTS"
 rc=$?
 echo "task ${SLURM_ARRAY_TASK_ID} finished rc=$rc | $(date)"
 exit $rc
