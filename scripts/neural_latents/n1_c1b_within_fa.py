@@ -175,22 +175,30 @@ def evaluate_window_within_fa(sessions, motor_signals, motor_subspaces,
 
 
 def _verdict_string(early):
-    """Both-ways honest verdict from the EARLY-window cascade result `early`."""
-    if early["survives_matching"]:
+    """Both-ways honest verdict from the EARLY-window cascade result `early`, using
+    the CONSERVATIVE rule (identical to 6c's `_ramp_slope_verdict`): the MATCHED
+    partial-Spearman must beat its within-session-shuffle null AND the
+    bootstrap-over-sessions CI must exclude 0. within-strata is the lenient companion
+    (reported, NOT decisive) — keying on it alone would call a CI-spans-0 effect a
+    "pass" merely because the matched null sits slightly negative."""
+    partial = early["matched_partial_mean"]
+    lo, hi = early["matched_partial_ci"]
+    null_upper = early["matched_null_mean"] + 2 * early["matched_null_sd"]
+    ci_excludes_0 = (lo > 0) or (hi < 0)
+    survives = bool(partial > null_upper and ci_excludes_0)
+    if survives:
         return ("PASSES (early window): self-timed urgency predicts FA lick timing "
                 "BEYOND generic motor prep — the leakage-filtered within-FA decode "
-                f"(r={early['mean_r']:.3f}) survives movement-matching "
-                f"(within-strata r={early['matched_strata_mean']:.3f} > null+2SD="
-                f"{early['matched_null_mean'] + 2 * early['matched_null_sd']:.3f}; "
-                f"partial r={early['matched_partial_mean']:.3f}).")
-    return ("COLLAPSES (early window): for self-timed (FA) licks the urgency/"
-            "commitment ramp and motor preparation are NOT separable — movement-"
-            f"matching reduces the leakage-filtered within-FA decode "
-            f"(r={early['mean_r']:.3f}) to within-strata r="
-            f"{early['matched_strata_mean']:.3f} (null+2SD="
-            f"{early['matched_null_mean'] + 2 * early['matched_null_sd']:.3f}). "
-            "This is a REAL basal-ganglia action-commitment conclusion, not a "
-            "control failure.")
+                f"survives movement-matching (matched partial-Spearman r={partial:.3f}, "
+                f"CI [{lo:.3f},{hi:.3f}] excludes 0; null+2SD={null_upper:.3f}; "
+                f"within-strata r={early['matched_strata_mean']:.3f}).")
+    return ("CONTROLLED NEGATIVE (early window): the leakage-filtered within-FA decode "
+            f"does NOT survive movement-matching — matched partial-Spearman r={partial:.3f}, "
+            f"CI [{lo:.3f},{hi:.3f}] spans 0 (within-strata r="
+            f"{early['matched_strata_mean']:.3f} is the lenient companion; null+2SD="
+            f"{null_upper:.3f}). For self-timed (FA) licks the urgency/commitment ramp and "
+            "motor preparation are not separable (a real basal-ganglia action-commitment "
+            "conclusion), or there is no leakage-free urgency signal — not a control failure.")
 
 
 # ── Real-data wiring (main) ──────────────────────────────────────────────────
