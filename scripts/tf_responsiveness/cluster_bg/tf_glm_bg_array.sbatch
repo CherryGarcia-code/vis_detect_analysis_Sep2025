@@ -18,14 +18,16 @@
 #SBATCH -N 1
 #SBATCH -p cpu
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=2
-# Lean reservations so tasks BACKFILL into scheduling gaps under contention
-# (pending reason 'Priority'). A chunk fits ~25-35 units (~46-70 min, peak
-# ~6 GB on the 853-trial sessions); 2h/12G is a safe margin while staying small
-# enough to slot in ahead of reserved big jobs. Tasks are resumable, so a rare
-# slow-node kill just re-runs and skips the units already in its CSV.
-#SBATCH --mem=12G
-#SBATCH -t 0-02:00
+# MINIMAL footprint to BACKFILL into idle CPUs while pending on 'Priority'
+# (idle nodes reserved for higher-priority jobs; we only get in via short small
+# gaps). 1 core doubles the idle slots we fit (the Poisson solver is ~single-
+# threaded, so 1 vs 2 cores barely changes fit time); 8G covers peak (~6G on the
+# 853-trial sessions); 1.5h covers the largest chunk (~35 units, ~80 min at 1
+# core) with margin. Tasks are resumable, so a rare slow-node kill just re-runs
+# and skips units already in its CSV.
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=8G
+#SBATCH -t 0-01:30
 #SBATCH --array=1-20%80
 
 set -uo pipefail
