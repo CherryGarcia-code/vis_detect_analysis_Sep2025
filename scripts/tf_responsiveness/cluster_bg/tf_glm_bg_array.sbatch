@@ -28,7 +28,9 @@ set -uo pipefail
 STAGE=/ceph/mrsic_flogel/public/projects/BeJG_20230130_VisDetect/wEPhys/tf_glm_cluster
 BG=$STAGE/bg_mice
 DATA_ROOT=$BG/bg_pkls
-ENV=$STAGE/conda_envs/tfglm
+# The shared tfglm conda env lives under wEPhys/ (one level ABOVE tf_glm_cluster/),
+# same path the MoHa sbatch used -- NOT under tf_glm_cluster/.
+ENV=/ceph/mrsic_flogel/public/projects/BeJG_20230130_VisDetect/wEPhys/conda_envs/tfglm
 
 # ---- conda ----
 module load miniconda/23.10.0
