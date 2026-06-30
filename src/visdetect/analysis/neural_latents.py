@@ -238,9 +238,19 @@ def _cohort_null(sessions, *, n_null, seed, n_workers):
     `n_workers <= 1` runs the serial loop with the SAME seeds (so serial == parallel)."""
     shuffle_seeds = np.random.default_rng(seed).integers(0, 2**31 - 1, size=n_null)
     if n_workers <= 1:
-        # in-process: stash globals so _null_one_shuffle reads the SAME cohort
-        _null_init(sessions, seed)
-        return np.array([_null_one_shuffle(s) for s in shuffle_seeds])
+        # serial, in-process: stash the cohort globals so _null_one_shuffle reads the
+        # SAME cohort, and pin BLAS only for the DURATION of the loop (scoped) so a
+        # decode_cohort(n_workers=1) call does NOT permanently pin the parent process.
+        global _NULL_SESSIONS, _NULL_SEED
+        _NULL_SESSIONS, _NULL_SEED = sessions, seed
+        try:
+            import threadpoolctl
+            _cm = threadpoolctl.threadpool_limits(1)
+        except ImportError:
+            import contextlib
+            _cm = contextlib.nullcontext()
+        with _cm:
+            return np.array([_null_one_shuffle(s) for s in shuffle_seeds])
     ctx = mp.get_context("spawn")
     with ProcessPoolExecutor(max_workers=int(n_workers), mp_context=ctx,
                              initializer=_null_init,
