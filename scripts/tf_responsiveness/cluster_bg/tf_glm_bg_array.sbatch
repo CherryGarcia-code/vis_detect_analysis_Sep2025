@@ -19,8 +19,13 @@
 #SBATCH -p cpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=24G
-#SBATCH -t 0-06:00
+# Lean reservations so tasks BACKFILL into scheduling gaps under contention
+# (pending reason 'Priority'). A chunk fits ~25-35 units (~46-70 min, peak
+# ~6 GB on the 853-trial sessions); 2h/12G is a safe margin while staying small
+# enough to slot in ahead of reserved big jobs. Tasks are resumable, so a rare
+# slow-node kill just re-runs and skips the units already in its CSV.
+#SBATCH --mem=12G
+#SBATCH -t 0-02:00
 #SBATCH --array=1-20%80
 
 set -uo pipefail
