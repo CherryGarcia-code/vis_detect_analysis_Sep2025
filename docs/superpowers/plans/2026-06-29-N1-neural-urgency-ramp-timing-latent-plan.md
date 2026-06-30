@@ -649,6 +649,22 @@ def evaluate_window(sessions, motor_axes, *, n_null=200, seed=42):
 
 ---
 
+### Task 6c: Ramp-SLOPE readout — the ONE pre-specified ramp-appropriate check (LAST readout)
+
+**Why (user, post-6b null):** Task-6b tested the MEAN-window feature — a weak proxy for the ramp-to-threshold hypothesis, whose decision-relevant content is the **SLOPE** (rate of rise → time-to-threshold). A null on the mean is NOT a null on the slope; concluding "no urgency ramp" without a ramp readout is a reviewer-obvious validity gap. **This is ONE pre-specified additional readout** (the last). **Discipline: if it is also null → finalize the controlled negative (NO further readouts — that is fishing); if it revives → treat with suspicion (scrutiny/replication, not a headline).**
+
+**Pure core (`neural_latents.py`):** `ramp_slope_feature_matrix(z, bin_centers, win) -> (n_trials, n_units)` — per (trial, unit), the OLS **slope** of `z` vs time over the window's bin centers (vectorized: `cov(t, z)/var(t)` across the in-window bins); raises `ValueError` if < 2 bins in the window.
+
+**Script `scripts/neural_latents/n1_c1c_ramp_slope.py`:** the SAME cascade as Task-6b (raw → leakage-filtered [`decision_time ≥ window_hi+0.25`] → MATCHED [`partial_spearman` primary + `within_strata_spearman`; multi-dim subspace secondary] → per-session aggregate → bootstrap-over-sessions; lead EARLY; FA-only), but the decode FEATURE is the per-unit **ramp slope** (`ramp_slope_feature_matrix`) instead of the mean. **Reuse Task-6b's cascade core** (`evaluate_window_within_fa` / the per-session build in `n1_c1b_within_fa.py`) — only the feature builder changes; the movement-matching control stays `motor_axis_signal` (movement magnitude). Optional SNR variant noted in the docstring (slope of the projection onto a TRAIN-FOLD timing CD) — do NOT implement (would add a circularity surface; the per-unit slope is the clean check). Outputs `n1_c1c_ramp_slope.json` + `fig_n1_c1c_ramp_slope.png` + stats CSV; `verdict` states null-or-revive per the same partial-Spearman-beats-its-null + bootstrap-CI rule.
+
+- [ ] **Step 1:** Test `test_ramp_slope_feature_matrix`: a planted linear ramp `z = a + b·t` → recovered slope ≈ `b` per unit; a flat trial → ≈0; `ValueError` on < 2 in-window bins.
+- [ ] **Step 2:** Run `... -k ramp_slope -v` → FAIL.
+- [ ] **Step 3:** Implement the core + `n1_c1c_ramp_slope.py` (reuse 6b cascade). Whole test file still passes. **Do NOT run the heavy real-data job** (controller runs it).
+- [ ] **Step 4:** Controller runs the real-data script in background; read the cascade.
+- [ ] **Step 5:** Commit `feat(N1): ramp-slope readout — the one pre-specified ramp-appropriate within-FA check`.
+
+---
+
 ### Task 7: φ-specificity on the near-μ window (MINIMAL, expect-null, reported as a test-limitation; decoupled, non-gating)
 
 **Files:** Create `scripts/neural_latents/n1_phi_specificity.py`.
