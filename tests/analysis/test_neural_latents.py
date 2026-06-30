@@ -257,3 +257,32 @@ def test_motor_subspace_projection():
     assert np.allclose(nl.project_out_subspace(Xp, basis), Xp, atol=1e-8)
     # the removed part is exactly the subspace component
     assert np.allclose(X - Xp, (X @ basis) @ basis.T, atol=1e-8)
+
+# ── Task 6c: per-unit ramp-SLOPE feature (the one ramp-appropriate readout) ──
+def test_ramp_slope_feature_matrix():
+    n_tr, n_units = 7, 4
+    bin_centers = np.arange(0.0, 6.0, 0.05)
+    win = nl.WINDOWS["early"]                       # (0.5, 2.5), half-open
+    mask = (bin_centers >= win[0]) & (bin_centers < win[1])
+    t = bin_centers[mask]                            # in-window bin centers
+    rng = np.random.default_rng(3)
+    # plant a per-unit linear ramp z[trial, bin, unit] = a_u + b_u * t[bin]
+    a_u = rng.normal(size=n_units)
+    b_u = rng.normal(size=n_units)
+    z = np.zeros((n_tr, bin_centers.size, n_units))
+    z[:, mask, :] = a_u[None, None, :] + b_u[None, None, :] * t[None, :, None]
+    X = nl.ramp_slope_feature_matrix(z, bin_centers, win)
+    assert X.shape == (n_tr, n_units)
+    # recovered OLS slope ~ planted slope b_u (identical across trials)
+    for tr in range(n_tr):
+        assert np.allclose(X[tr], b_u, atol=1e-6)
+    # a flat trial (constant over bins) -> slope ~ 0
+    z[0, mask, :] = 5.0
+    X2 = nl.ramp_slope_feature_matrix(z, bin_centers, win)
+    assert np.allclose(X2[0], 0.0, atol=1e-6)
+    # < 2 in-window bin centers -> ValueError
+    one_bin = (0.5, 0.5 + 0.5 * (bin_centers[1] - bin_centers[0]))  # captures exactly 1 center
+    with pytest.raises(ValueError):
+        nl.ramp_slope_feature_matrix(z, bin_centers, one_bin)
+    with pytest.raises(ValueError):
+        nl.ramp_slope_feature_matrix(z, bin_centers, (100.0, 200.0))  # no bins

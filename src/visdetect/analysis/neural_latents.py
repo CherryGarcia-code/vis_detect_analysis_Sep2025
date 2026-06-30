@@ -92,6 +92,32 @@ def window_feature_matrix(z, bin_centers, win):
                          f"(range {bin_centers.min():.2f}..{bin_centers.max():.2f})")
     return z[:, mask, :].mean(axis=1)
 
+def ramp_slope_feature_matrix(z, bin_centers, win):
+    """Per-(trial, unit) OLS SLOPE of z vs time over the half-open readout window
+    ``[win[0], win[1])`` (same masking convention as ``window_feature_matrix``).
+
+    The ramp-to-threshold hypothesis's decision-relevant content is the rate of rise
+    (slope -> time-to-threshold), not the mean level. For each trial and unit this is
+    the least-squares slope of z against the in-window bin centers:
+    ``slope = sum((t - t_bar) * z) / sum((t - t_bar)^2)`` along the bin axis, with the
+    denominator shared across trials/units (it depends only on the bin centers).
+    Returns shape ``(n_trials, n_units)``. Raises ``ValueError`` if the window contains
+    fewer than 2 bin centers (slope undefined)."""
+    lo, hi = win
+    mask = (bin_centers >= lo) & (bin_centers < hi)
+    if int(mask.sum()) < 2:
+        raise ValueError(
+            f"window {win} contains fewer than 2 bin centers "
+            f"({int(mask.sum())} found; range "
+            f"{bin_centers.min():.2f}..{bin_centers.max():.2f}) — slope undefined")
+    t = np.asarray(bin_centers, float)[mask]        # (n_in,)
+    tc = t - t.mean()                               # centered time
+    denom = float(np.sum(tc * tc))                  # scalar, shared across trials/units
+    zin = np.asarray(z, float)[:, mask, :]          # (n_trials, n_in, n_units)
+    # sum_b (t_b - t_bar) * z[trial, b, unit] over the bin axis
+    num = np.tensordot(zin, tc, axes=([1], [0]))    # (n_trials, n_units)
+    return num / denom
+
 def project_out_axis(X, axis):
     a = np.asarray(axis, float)
     a = a / (np.linalg.norm(a) + 1e-12)
