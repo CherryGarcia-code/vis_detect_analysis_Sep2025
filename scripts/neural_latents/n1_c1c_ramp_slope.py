@@ -65,7 +65,13 @@ import numpy as np
 from visdetect.analysis import neural_latents as nl
 
 # Reuse Task-6b's cascade core + motor wiring + verdict (DO NOT duplicate).
-# scripts/neural_latents/ has an __init__.py, so this is a clean package import.
+# scripts/neural_latents/ has an __init__.py; ensure the REPO ROOT is on sys.path so
+# `scripts.*` resolves whether this file is RUN DIRECTLY (python scripts/.../x.py —
+# which puts only the script's own dir on sys.path[0]) or imported as a module.
+import sys
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 from scripts.neural_latents.n1_c1b_within_fa import (
     LEAKAGE_GUARD,
     MOTOR_K,
