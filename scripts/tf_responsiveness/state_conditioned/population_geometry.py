@@ -195,21 +195,17 @@ def session_geometry(args):
 
 
 def _dprime(session):
-    from scipy.stats import norm
-    go = go_h = cat = cat_h = 0
-    for t in session.trials:
-        cs = getattr(t, "change_size", None)
-        oc = str(getattr(t, "trialoutcome", "") or "").lower()
-        if cs is None:
-            continue
-        if cs > 1.0:
-            go += 1; go_h += (oc == "hit")
-        elif abs(cs - 1.0) < 1e-6:
-            cat += 1; cat_h += (oc == "hit")
-    if go < 5 or cat < 5:
+    """Canonical SDT d' = z(hit_rate) - z(fa_rate) with hit_rate = SDT-hits /
+    (SDT-hits + SDT-misses) — go trials with fa/ref/abort outcomes are EXCLUDED
+    from the denominator (they are not valid SDT trials). Uses the project's
+    canonical compute_session_performance so it matches the rest of the codebase
+    (a naive hits/all-go denominator deflates d' ~2x)."""
+    try:
+        from visdetect.analysis.behavior import compute_session_performance
+        d = compute_session_performance(session).get("d_prime")
+        return float(d) if d is not None and np.isfinite(d) else np.nan
+    except Exception:
         return np.nan
-    hr, fr = np.clip(go_h / go, 0.01, 0.99), np.clip(cat_h / cat, 0.01, 0.99)
-    return float(norm.ppf(hr) - norm.ppf(fr))
 
 
 def _date_key(session):
