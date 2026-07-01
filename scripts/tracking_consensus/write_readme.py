@@ -74,6 +74,22 @@ def main():
     behav_md = ""
     if behav_cohort is not None and len(behav_cohort):
         n_neu = len(behav_cohort)
+        # real GLM TF-encoding cross-ref for the behaviour cohort
+        tf_reg = ROOT / "data/cache/tf_responsive/bg046_tf_responsive.csv"
+        tf_enc = "n/a"
+        if tf_reg.exists() and (CACHE / "consensus_members.csv").exists():
+            from visdetect.analysis.config import session_date_key as _sdk
+            _tf = pd.read_csv(tf_reg)
+            _resp = {(_sdk(sd), int(u)) for sd, u, r in
+                     zip(_tf["session_date"], _tf["unit"], _tf["resp_log2"]) if r}
+            _mem = pd.read_csv(CACHE / "consensus_members.csv", dtype={"session_key": str})
+            _n = 0
+            for _u in behav_cohort["um_uid"].astype(int):
+                _m = _mem[_mem["um_uid"].astype(int) == _u]
+                if any((_sdk(str(s)), int(k)) in _resp for s, k in
+                       zip(_m["session_key"], _m["ks_unit_id"])):
+                    _n += 1
+            tf_enc = f"{_n}/{n_neu}"
         behav_md = f"""
 ## Behavioural profiles across learning (`behavior/`)
 
@@ -97,15 +113,18 @@ four signal families, every panel overlaid by learning stage:
 A `behavior_cohort_summary.png` distills the population (per-neuron Learning→Expert
 choice-coding and change-response trajectories).
 
-### TF-encoding status — PENDING (not asserted here)
+### TF-encoding (Khilkevich–Lohse GLM registry)
 
-The valid per-unit TF registry is the **Khilkevich–Lohse GLM replication**
-(`data/cache/tf_responsive/<subject>_tf_responsive.csv`, `resp_log2`; requires
-`c1_r_log2 > 0.2` AND `c2_p_log2 < 0.01`). **BG_046's GLM run is not complete yet**
-(the registry currently covers BG_031 at 5.3% and BG_039 at 3.1%), so **no TF-encoding
-call is made for these neurons.** Cross-reference `bg046_tf_responsive.csv` when it
-lands. The earlier single-pulse z-screen was **stale/superseded** (flagged ~64% of all
-units — uninformative) and has been retired from these figures.
+Cross-referenced against the **valid** per-unit GLM registry
+(`data/cache/tf_responsive/bg046_tf_responsive.csv`, `resp_log2` = `c1_r_log2 > 0.2`
+AND `c2_p_log2 < 0.01`; BG_046 base rate **195/7047 = 2.8%**). **{tf_enc} of these
+consensus neurons are TF-encoding in ≥ 1 session** — i.e. essentially none, about what
+the 2.8% base rate predicts across {n_neu} cells. So these well-tracked consensus
+neurons are **not** TF-encoders (unlike BG_031's DANT trusted set, where 24/142 tracks
+are TF-responsive in ≥1 session). ⚠️ This **corrects an earlier mistake**: the first
+version cross-referenced the *stale* single-pulse z-screen (which flags ~64% of all
+units) and wrongly reported "9/9 TF-responsive" — that metric is retired; the GLM call
+above is the honest one.
 
 ⚠️ Caveats for the behavioural panels: behavioural-state labels are partly circular
 (defined from lick behaviour), so read state panels descriptively. Choice AUROC uses

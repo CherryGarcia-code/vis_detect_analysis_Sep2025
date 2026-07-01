@@ -8,10 +8,11 @@ CHANGE as the mouse learns? Four signal families, all along the Naive→Learning
   Row 2  decision selectivity  : Change_ON Hit-vs-Miss, big/small-change tuning,
                                  choice AUROC, RT coding
   Row 3  behavioural state     : baseline firing by state, change-response by state,
-                                 + an identity + TF-encoding-status text badge
+                                 + an identity + GLM TF-encoding text badge
 
-TF-encoding cross-reference is RETIRED here (pending BG_046's Khilkevich-Lohse GLM
-run; the old single-pulse z-screen was stale/superseded). See TF_PENDING below.
+TF-encoding uses the Khilkevich-Lohse GLM registry (data/cache/tf_responsive/
+bg046_tf_responsive.csv, `resp_log2`; 2.8% base rate) — the valid per-unit call.
+The old single-pulse z-screen was stale/superseded and is NOT used.
 
 Reads data/cache/tracking_consensus/BG_046/behavior_cache.pkl (built by
 compute_behavior_cache.py).
@@ -34,7 +35,7 @@ from matplotlib import gridspec
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
-from visdetect.analysis.config import canonical_session_id  # noqa: E402
+from visdetect.analysis.config import canonical_session_id, session_date_key  # noqa: E402
 
 CACHE = ROOT / "data/cache/tracking_consensus/BG_046"
 OUT_DIR = ROOT / "FIGURES/tracking_consensus/BG_046/behavior"
@@ -109,24 +110,43 @@ def _plot_event(ax, entries, stages, cond, title, xline0="event"):
     return any_data
 
 
-# TF-encoding status: the VALID per-unit registry is the Khilkevich-Lohse GLM
-# replication (data/cache/tf_responsive/<subject>_tf_responsive.csv, `resp_log2`).
-# BG_046's GLM run is NOT complete yet, so we make NO TF call here. The old
-# single-pulse z-screen (analysis_suite/cache/tf_responsiveness.csv) is
-# stale/superseded (flags ~64% of all units) and has been retired from these figures.
-TF_PENDING = ("TF-encoding: PENDING (BG_046 GLM run not yet complete). Cross-reference "
-              "data/cache/tf_responsive/bg046_tf_responsive.csv when it lands; the old "
-              "single-pulse z-screen is stale/superseded and has been retired.")
+# TF-encoding: the VALID per-unit registry is the Khilkevich-Lohse GLM replication
+# (resp_log2 = c1_r_log2>0.2 AND c2_p_log2<0.01). BG_046 base rate 2.8% (195/7047) --
+# so a flagged session is genuinely notable, unlike the retired single-pulse z-screen.
+TF_REGISTRY = ROOT / "data/cache/tf_responsive/bg046_tf_responsive.csv"
+
+
+def _load_tf_lookup():
+    if not TF_REGISTRY.exists():
+        return None
+    tf = pd.read_csv(TF_REGISTRY)
+    return {(session_date_key(sd), int(u)): (bool(rp), float(c1))
+            for sd, u, rp, c1 in zip(tf["session_date"], tf["unit"],
+                                     tf["resp_log2"], tf["c1_r_log2"])}
+
+
+def _tf_glm(entries, tf_lookup):
+    """Per-session GLM TF-encoding call for this neuron's (session, ks_unit) nodes."""
+    rows = []
+    for sk, v in entries.items():
+        hit = tf_lookup.get((session_date_key(sk), int(v["ks_unit_id"])))
+        if hit is not None:
+            rows.append((sk, v["stage"], hit[0], hit[1]))
+    return len(rows), sum(r[2] for r in rows), rows
 
 
 # ----------------------------------------------------------------- per neuron
-def render_neuron(uid, cache, cohort):
+def render_neuron(uid, cache, cohort, tf_lookup):
     entries = _entries(cache, uid)
     if not entries:
         return None
     stages = _stage_of(entries)
     row = cohort[cohort["um_uid"] == uid].iloc[0]
     dant = int(row["dant_uid"])
+    n_tf, n_tf_resp, tf_rows = _tf_glm(entries, tf_lookup) if tf_lookup else (0, 0, [])
+    tf_flag = (f"TF-ENCODING (GLM): {n_tf_resp}/{n_tf} sessions" if n_tf_resp > 0
+               else (f"not TF-encoding ({n_tf} sessions in registry)" if n_tf
+                     else "TF: not in registry"))
 
     fig = plt.figure(figsize=(17, 11))
     gs = gridspec.GridSpec(3, 4, hspace=0.42, wspace=0.28,
@@ -138,11 +158,12 @@ def render_neuron(uid, cache, cohort):
              fontsize=15, fontweight="bold", ha="left")
     fig.text(0.05, 0.930,
              f"identity: Jaccard {row['jaccard']:.2f}, held-out ISI r {row['matched_isi_corr']:.2f} "
-             f"(>{row['matched_isi_pctile']*100:.0f}% of null), DANT biophysical: {row['dant_composite']}",
-             fontsize=10, color="#333333", ha="left")
+             f"(>{row['matched_isi_pctile']*100:.0f}% of null), DANT biophysical: {row['dant_composite']}"
+             f"     |     {tf_flag}",
+             fontsize=10, color=("#6a51a3" if n_tf_resp > 0 else "#333333"), ha="left")
     fig.text(0.05, 0.910,
              "each panel overlays the stage-averaged response (by learning stage); "
-             "row 1 = task events, row 2 = decision, row 3 = state + identity",
+             "row 1 = task events, row 2 = decision, row 3 = state + identity/TF",
              fontsize=9, color="#777777", style="italic", ha="left")
 
     # Row 1: task-event PSTHs
@@ -225,17 +246,17 @@ def render_neuron(uid, cache, cohort):
         f"  identity — Jaccard {row['jaccard']:.2f} | held-out ISI r {row['matched_isi_corr']:.2f}"
         f" (>{row['matched_isi_pctile']*100:.0f}% null) | DANT biophys {row['dant_composite']}",
         "",
-        "TF-encoding: PENDING",
-        "  The valid per-unit registry is the Khilkevich-Lohse GLM replication",
-        "  (data/cache/tf_responsive/<subj>_tf_responsive.csv, resp_log2). BG_046's",
-        "  GLM run is not complete yet -> no TF call is made for these neurons.",
-        "  Cross-reference bg046_tf_responsive.csv when it lands. The old single-",
-        "  pulse z-screen was stale/superseded (flagged ~64% of units) and is retired.",
+        "TF-encoding (Khilkevich-Lohse GLM resp_log2; BG_046 base rate 2.8%):",
+        f"  {n_tf_resp}/{n_tf} of this neuron's sessions are TF-responsive"
+        + ("  <- longitudinal TF-encoder" if n_tf_resp >= 2 else ""),
         "",
-        "sessions in this track:",
+        "sessions (stage | GLM TF | c1_r):",
     ]
-    for sk in sorted(entries, key=lambda s: s):
-        lines.append(f"   {sk}  {entries[sk]['stage']}")
+    tf_by_sk = {r[0]: (r[2], r[3]) for r in tf_rows}
+    for sk in sorted(entries, key=session_date_key):
+        rc = tf_by_sk.get(sk)
+        tfs = (f"TF={'Y' if rc[0] else 'n'} c1r={rc[1]:+.2f}" if rc else "TF=na")
+        lines.append(f"   {sk}  {entries[sk]['stage']:9s} {tfs}")
     ax.text(0.0, 1.0, "\n".join(lines), va="top", ha="left", fontsize=8.5,
             family="monospace", transform=ax.transAxes)
 
@@ -246,7 +267,7 @@ def render_neuron(uid, cache, cohort):
             "stages": "/".join(present), "out": out.name}
 
 
-def render_cohort_summary(cache, cohort, done):
+def render_cohort_summary(cache, cohort, done, tf_lookup):
     """Do the well-tracked neurons collectively change their behaviour across learning?"""
     uids = sorted({u for (u, _) in cache})
     rows = []
@@ -286,16 +307,26 @@ def render_cohort_summary(cache, cohort, done):
     ax.set_title("Change-evoked response per neuron", fontsize=10)
     ax.spines[["top", "right"]].set_visible(False)
 
-    ax = fig.add_subplot(gs[0, 2]); ax.axis("off")
-    ax.text(0.5, 0.5,
-            "TF-encoding: PENDING\n\nBG_046 GLM run not yet complete.\n"
-            "Valid registry = the Khilkevich-Lohse GLM\n"
-            "(data/cache/tf_responsive/, resp_log2);\n"
-            "cross-reference bg046_tf_responsive.csv\nwhen it lands.\n\n"
-            "The old single-pulse z-screen was\nstale/superseded and is retired.",
-            ha="center", va="center", fontsize=9.5, color="#555555",
-            bbox=dict(boxstyle="round,pad=0.6", fc="#f2f2f2", ec="#aaaaaa"))
-    ax.set_title("TF-encoding status", fontsize=10)
+    ax = fig.add_subplot(gs[0, 2])
+    if tf_lookup:
+        ge2 = one = none = 0
+        for u in uids:
+            n_tf, n_resp, _ = _tf_glm(_entries(cache, u), tf_lookup)
+            if n_resp >= 2: ge2 += 1
+            elif n_resp == 1: one += 1
+            elif n_tf: none += 1
+        vals = [ge2, one, none]
+        ax.bar(["TF-enc\n≥2 sess", "TF-enc\n1 sess", "not TF-enc"], vals,
+               color=["#6a51a3", "#9e9ac8", "#bdbdbd"])
+        for i, v in enumerate(vals):
+            ax.text(i, v, str(v), ha="center", va="bottom", fontsize=10)
+        ax.set_ylabel("# neurons")
+        ax.set_title("TF-encoding (GLM resp_log2, 2.8% base rate)", fontsize=10)
+        ax.spines[["top", "right"]].set_visible(False)
+    else:
+        ax.axis("off")
+        ax.text(0.5, 0.5, "TF registry\nnot found", ha="center", va="center", fontsize=10)
+        ax.set_title("TF-encoding status", fontsize=10)
 
     out = OUT_DIR / "behavior_cohort_summary.png"
     fig.savefig(out, dpi=140); plt.close(fig)
@@ -306,18 +337,19 @@ def main():
     with open(CACHE / "behavior_cache.pkl", "rb") as f:
         cache = pickle.load(f)
     cohort = pd.read_csv(CACHE / "consensus_cohort.csv")
+    tf_lookup = _load_tf_lookup()
+    print("TF registry:", "loaded" if tf_lookup else "NOT FOUND (TF panels blank)")
 
     uids = sorted({u for (u, _) in cache})
     print(f"rendering behaviour for {len(uids)} neurons: {uids}")
     done = []
     for u in uids:
-        r = render_neuron(u, cache, cohort)
+        r = render_neuron(u, cache, cohort, tf_lookup)
         if r:
-            done.append(r); print(f"  wrote {r['out']}")
-    render_cohort_summary(cache, cohort, done)
+            n_tf, n_resp, _ = _tf_glm(_entries(cache, u), tf_lookup) if tf_lookup else (0, 0, [])
+            done.append(r); print(f"  wrote {r['out']}  (GLM TF {n_resp}/{n_tf})")
+    render_cohort_summary(cache, cohort, done, tf_lookup)
     print(f"\nrendered {len(done)} behaviour figures + cohort summary")
-    print("Note: TF-encoding cross-reference retired (pending BG_046 GLM run; "
-          "old single-pulse z-screen was stale).")
 
 
 if __name__ == "__main__":
