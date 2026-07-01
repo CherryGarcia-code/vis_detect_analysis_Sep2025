@@ -1390,4 +1390,35 @@ git add -A && git commit -m "docs(B10): evidence_learning README + run order"
 
 ## Execution Handoff
 
-Plan complete. Recommended: **subagent-driven-development** (fresh Opus 4.8 subagent per task, two-stage review between tasks) given the TDD structure and correctness priority. Real-data figure runs (Tasks 10–13 Step 3) require the local `data/` junctioned into the worktree — handle at execution time per the worktree data-safety rule (never `git worktree remove` while junctions are live).
+Plan complete. Recommended: **subagent-driven-development** (fresh Opus 4.8 subagent per task, two-stage review between tasks) given the TDD structure and correctness priority. Real-data figure runs (Tasks 10–13 Step 3) run from the primary repo root with the worktree's `src` on `PYTHONPATH` (no junctions needed); never `git worktree remove` while any data junction is live.
+
+---
+
+## Execution notes (deviations applied during inline execution, 2026-07-01)
+
+The library (Tasks 1–8) was built as written; the script layer (Tasks 9–12) was
+revised for correctness after real-data verification. Changes, with rationale:
+
+1. **Shared loaders → library, not `scripts/_common.py`.** The repo convention
+   loads scripts BY PATH (`importlib.util.spec_from_file_location`), so a
+   cross-script `from scripts.evidence_learning._common import …` would not
+   resolve. Moved the multi-subject loaders into the library
+   `visdetect/analysis/evidence_learning_io.py` (also matches "reusable logic
+   lives in `src/visdetect`"). Smoke tests path-load the scripts.
+2. **Join on `config.session_date_key`, not `canonical_session_id`.** The
+   TF-responsive registry stores subject-prefixed / `_v2` session ids
+   (`BG_046_01072025`), the manifest stores zero-dropped ids (`1042025`), and
+   some pkls are `_v2`. `canonical_session_id` gave 0 overlap; `session_date_key`
+   (a `(yyyy,mm,dd)` tuple) reconciles all three (46/46, 31/31, 38/41). pkls are
+   glob-resolved; non-session files (`_tag_summary.csv`) are skipped via `_safe_key`.
+3. **`region_bank_confirmed` gate dropped.** It is `False` for every row in all
+   three registries → gating on it selects zero units. Pool by SUBJECT instead
+   (DMS 046+039 / VMS 031); per-unit region labels are provisional (stated
+   limitation). The registry `region` column is just the subject-level DMS/VMS.
+4. **`list.index(trial)` → `enumerate`** in the neural withhold matcher.
+   `Trial.__eq__` compares numpy fields → "truth value ambiguous"; would have
+   crashed on real data. Indices are now taken via `enumerate`.
+
+Integration-verified on real Expert sessions (BG_046 97 usable FAs/3 TF cells;
+BG_039 58/2; BG_031 263/19; state tags present). All 13 tests pass. The spec's
+§2/§4 `region_bank_confirmed` wording was corrected to match.

@@ -108,8 +108,10 @@ BG_039 and BG_031 pkls (the older "no ingested trials for new subjects" memory n
 - **Behavioral (Arm 1):** pool all 3 subjects; also report per-subject (n=3 replication is the
   point). Region is irrelevant for behavior.
 - **Neural (Arm 2):** **DMS pool = BG_046 + BG_039** (primary); **VMS = BG_031** reported
-  **separately** (chronic-probe drift / no cross-region pooling rule). Cross-session/cross-subject
-  aggregation of TF-responsive units is gated on `region_bank_confirmed` in the registry.
+  **separately** (chronic-probe drift / no cross-region pooling rule). Aggregation pools by SUBJECT.
+  NOTE (execution finding): `region_bank_confirmed` is `False` across the entire registry, so it is
+  NOT used as a gate — per-unit region labels are provisional (the `region` column is the
+  subject-level DMS/VMS target).
 - **Unit of replication = session.** Bootstrap over sessions (and over subjects for the pooled
   behavioral estimate). **Never pool raw units across sessions** (within-session QC only → Simpson
   inflation; the N1 lesson).
@@ -162,8 +164,8 @@ as codified in `src/visdetect/analysis/tf_glm_data.py:466-560` (`session_trial_r
    subtraction matters.
 
 ### Arm 2 — neural impulsivity kernel (N-B), signed-sum estimator
-1. **Cells.** TF-responsive units only (registry `resp_log2==True`, `region_bank_confirmed`),
-   DMS-pool and VMS separately.
+1. **Cells.** TF-responsive units only (registry `resp_log2==True`; sign = `sign(c1_r_log2)`).
+   DMS-pool and VMS separately. (`region_bank_confirmed` is not gated on — False registry-wide.)
 2. **Population TF signal (estimator (a), chosen).** Per unit, per-unit **shared-baseline z-score**
    (baseline window shared across FA/withhold; golden rule). Signed population sum
    **`S(t) = Σ_i sign_i · z_i(t)`**, where `sign_i ∈ {+1,−1}` is the unit's fast-/slow-TF preference
@@ -206,7 +208,7 @@ cells permit. Disengaged and Abort states excluded (few informative FAs; differe
 | No video → movement/whisking kernel | framed as "stimulus history preceding impulsive licks," not "pure sensory evidence"; stated as a hard limit |
 | Neural cross-session non-comparability | within-session z, per-session-then-aggregate, never pool raw units (Simpson) |
 | Neural sensory-vs-motor confusion | TF-responsive cells only; stimulus-referenced signed-sum; pre-movement window; **stimulus-matched control isolates gain** |
-| Sparse TF-responsive units | robust signed-sum estimator; DMS pool + region_bank_confirmed; per-session kernels averaged |
+| Sparse TF-responsive units | robust signed-sum estimator; DMS pool (subject-level); per-session kernels averaged |
 | State-label circularity | kernel *shape* is independent of the rate/outcome-based label definition (see §1 Q3) |
 | BG_039 `_v2` non-finite timestamps | port the non-finite guard into `tf_glm.py::trial_bin_edges` before reconstruction |
 
@@ -267,7 +269,9 @@ the key limitation printed on the panel. Presentation-ready (per project figure 
    not absolute FA rates or a temporal-expectation-gating result.
 7. **State circularity** — defended via the shape-vs-definition argument (§1 Q3); do not describe the
    behavioral state difference itself as the finding.
-8. **`region_bank_confirmed`** must gate any neural pooling; **`_v2` guard** must land first.
+8. **Provisional region labels** — `region_bank_confirmed` is False registry-wide, so neural pooling
+   is by SUBJECT (known probe target) with region treated as provisional; there is no per-unit region
+   gate. (The `_v2` non-finite guard is unneeded: `baseline_log2tf` does no timestamp arithmetic.)
 
 ---
 
