@@ -1,6 +1,6 @@
 # B9 fast-path results — does the striatal baseline TF code sharpen with learning at matched state?
 
-**Date:** 2026-07-01 · **Subjects:** BG_039 (DMS), BG_031 (VMS) · **Status:** fast-path done — strength hypothesis NULL in BOTH engaged & disengaged states (well-powered BG_031); recruitment NOT robust once QC-Excluded sessions are included; TF-encoding present-but-weaker when disengaged (not fully gated)
+**Date:** 2026-07-01 · **Subjects:** BG_031 (VMS), BG_039 + BG_046 (DMS) · **Status:** done — learning-sharpening NULL (engaged & disengaged); recruitment NOT robust; engagement-gating essentially ABSENT (paired matched-N Δ=0.017, p=0.21). Net: the striatal baseline-TF code is a **stable, ~engagement-independent bottom-up signal, unchanged by learning**.
 **Spec:** `docs/superpowers/specs/2026-07-01-B9-state-matched-baseline-tf-encoding-learning-design.md` · **Plan:** `.../plans/2026-07-01-B9-...-plan.md`
 **Code:** `src/visdetect/analysis/state_tf_learning.py`, `scripts/state_tf_learning/{b9_phase0_profile,b9_deliverable2,b9_recruitment}.py`
 **Figures:** `FIGURES/state_tf_learning/{BG_039,BG_031}/b9_preliminary_trend.png`, `.../{subj}/b9_deliverable2_state_conditioned*.png`, `FIGURES/state_tf_learning/b9_recruitment_fraction.png`
@@ -35,12 +35,17 @@ BG_031 Naive-vs-Learning+Expert MWU **p=0.086** (Naive n=3 → under-powered); B
 ## 3b. Engagement — TF cells encode when disengaged (partial, not gated)
 Registry-responsive units DO encode baseline TF in **Disengaged** trials (BG_031, trial-matched N=120): `c1_r ≈ 0.037` vs the ~0.000 non-responsive control. So encoding is **not fully engagement-gated** — answering "are TF cells responsive when disengaged?": **yes, partially**. It looks *weaker* than the engaged StimSens level (0.080), i.e. present-but-attenuated, but the two runs used different N (120 vs 140) and different sessions, so `c1_r`'s trial-count sensitivity confounds the magnitude — a clean engagement test needs a **matched StimSens-vs-Disengaged run (same N, same sessions)**. Consequence: the low whole-session responsiveness in Disengaged-heavy sessions is **at least partly statistical dilution**, not pure gating.
 
+**Resolved — engagement-INDEPENDENT (paired matched-N test; `scripts/state_tf_learning/b9_engagement.py`).** Running StimSens and Disengaged on the **same sessions at the same per-session N** (min of the two, ≤200), paired per unit (16 eligible sessions across BG_031/039/046 — BG_046 is highly engaged so contributes 1), the paired **Δ (StimSens − Disengaged) centres near zero: median 0.017, Wilcoxon p=0.21 (n=128 unit-sessions)**; per subject BG_031 Δ=0.024 p=0.075 (weak, non-sig engaged-gain trend), BG_039 Δ=−0.069, BG_046 n=5. At matched N the earlier apparent gap collapses → **baseline-TF encoding is largely engagement-independent** (cells encode the grating about as well disengaged as engaged). Confirms the whole-session dilution was statistical, and vindicates the "TF cells respond regardless of acting" intuition. Figure: `FIGURES/state_tf_learning/b9_engagement_paired.png`.
+
 ## 4. Scope & limits
 - **Fast-path, start-small:** hand-/auto-picked responsive-rich sessions, not the full cohort; StimSens only; responsive + a non-responsive sample (not all units); Learning→Expert well-powered, **Naive→Learning under-powered** (Naive is responsive-poor everywhere — itself the recruitment observation).
 - **BG_031 is VMS** (kept separate from the DMS pool {046,039}); BG_039 is DMS but naive-thin/compressed-learning. No cross-subject pooling (`region_bank_confirmed=False`).
 - **June engagement breakdown** in BG_039 is behavioral (StimSens→Disengaged), not an encoding change.
 
-## 5. Next
-- **Reframe B9 toward recruitment** (fraction TF-responsive vs learning), which is where both subjects hint — and state-condition + properly power the **Naive→Learning** step (the plateau after is confirmed flat).
-- **Cohort / BG_046** (its TF registry pending) to power the Naive end and give a hierarchical estimate.
-- If chasing strength further: a **Naive-vs-Expert** state-conditioned contrast (thin: ~8 Naive responsive units) to formally test the step, with the trial-matched runner.
+## 5. Bottom line & next
+**Bottom line (n=3 striatal subjects: VMS BG_031, DMS BG_039/046).** The striatal baseline-TF representation is a **stable, ~engagement-independent, bottom-up sensory signal**: its per-unit fidelity (`c1_r`) does **not** sharpen with learning (engaged *or* disengaged), the responsive-fraction "recruitment" is **not robust**, and behavioural engagement does **not** gate it. A well-controlled negative on "learning sharpens the baseline sensory code," plus a clean positive characterisation and a reusable methods lesson (trial-count matching is mandatory for `c1_r`; faithfulness Δ=0.0000 throughout).
+
+**If continued:**
+- **Naive-powered learning test** — the only learning-linked hint left is the *number* of TF-responsive cells (Naive-poor everywhere), and it isn't robust; a subject with rich naive-stage yield would be needed to test it properly.
+- **Cohort / hierarchical** across DMS{046,039} + VMS{031} (region-pool once `region_bank_confirmed`).
+- **Beyond baseline-TF fidelity** — the learning signal may live elsewhere (change-evoked coding, population geometry, D1/D2 push-pull). B9 specifically closes the "baseline sensory-fidelity" door.
