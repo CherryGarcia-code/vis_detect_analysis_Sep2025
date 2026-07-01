@@ -27,7 +27,10 @@
 # and skips units already in its CSV.
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=8G
-#SBATCH -t 0-01:30
+# 2.5h: at 1 core + linear the slowest units are ~270s, so the biggest chunks
+# (~30-40 units) need ~90-130 min. The 1.5h wall timed out ~97 BG_031 tasks
+# (killed 1-6 units short); resumable, so a re-run with this wall finishes them.
+#SBATCH -t 0-02:30
 #SBATCH --array=1-20%80
 
 set -uo pipefail
