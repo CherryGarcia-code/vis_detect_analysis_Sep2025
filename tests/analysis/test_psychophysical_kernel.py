@@ -140,3 +140,27 @@ def test_stimulus_matched_control_decomposes_gain():
     np.testing.assert_allclose(d["sensory"], np.mean(pop_wh, 0), atol=1e-9)
     np.testing.assert_allclose(d["gain"], np.full(_L, 0.4), atol=1e-9)
     np.testing.assert_allclose(d["total"], d["sensory"] + d["gain"], atol=1e-9)
+
+
+# ── late-FA gate ─────────────────────────────────────────────────────────
+def test_fa_kernel_epochs_late_only_by_default():
+    rng = np.random.default_rng(0)
+    bv = np.repeat(np.exp2(rng.normal(0, 0.25, 800)), 3)
+    late = _trial(bv, "fa", fa=5.0)          # >= FA_RT_SPLIT (3.0) -> kept
+    early = _trial(bv, "fa", fa=2.0)         # < 3.0 -> dropped (late-FA gate)
+    eps = pk.fa_kernel_epochs(_session([late, early]))
+    assert len(eps) == 1 and eps[0]["trial_idx"] == 0
+    # explicit override includes early FAs
+    eps2 = pk.fa_kernel_epochs(_session([late, early]), min_fa_latency=0.5)
+    assert len(eps2) == 2
+
+
+# ── real-time stimulus tracking ──────────────────────────────────────────
+def test_stimulus_tracking_xcorr_recovers_lag():
+    y = np.sin(np.linspace(0, 8 * np.pi, 200))
+    lag = 4
+    S = np.zeros_like(y)
+    S[lag:] = y[:-lag]                        # S(t) = y(t - lag) (neural lags stimulus)
+    r = pk.stimulus_tracking_xcorr(S, y, max_lag_bins=10)
+    assert int(np.nanargmax(r)) == lag
+    assert r[lag] > 0.99

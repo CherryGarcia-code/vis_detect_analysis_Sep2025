@@ -63,8 +63,10 @@ def subject_sessions(subject, stages=STAGES, data_dir=DATA_DIR):
         gc.collect()
 
 
-def tf_responsive_units(subject, data_dir=DATA_DIR):
-    """{session_date_key: {cluster_id: sign}} for TF-responsive units.
+def tf_responsive_units(subject, data_dir=DATA_DIR, responsive=True):
+    """{session_date_key: {cluster_id: sign}} for TF-responsive units
+    (``responsive=False`` returns the NON-responsive units — the specificity
+    control for real-time tracking).
 
     sign = +1 if c1_r_log2 >= 0 (fast-TF-preferring) else -1. NOTE:
     ``region_bank_confirmed`` is False across the whole registry (provisional
@@ -72,7 +74,7 @@ def tf_responsive_units(subject, data_dir=DATA_DIR):
     VMS: 031), and per-unit region labels are treated as provisional."""
     reg = pd.read_csv(os.path.join(data_dir, "cache", "tf_responsive",
                                    f"{_reg_filename(subject)}_tf_responsive.csv"))
-    reg = reg[reg["resp_log2"] == True].copy()
+    reg = reg[reg["resp_log2"] == bool(responsive)].copy()
     reg["skey"] = reg["session"].map(session_date_key)
     out = {}
     for skey, g in reg.groupby("skey"):

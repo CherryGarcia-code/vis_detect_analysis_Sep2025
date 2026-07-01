@@ -76,3 +76,12 @@ def test_fa_epochs_by_state_splits(monkeypatch):
     monkeypatch.setattr(s, "load_state_labels_by_key", lambda *a, **k: labels)
     by = s.fa_epochs_by_state(sess, "BG_046", skey="01072025")
     assert len(by["StimSens"]) == 6 and len(by["Impulsive"]) == 4
+
+
+def test_session_tracking_shapes():
+    t = _load("b10_tf_tracking")
+    sess = _mk_session(10, 10, with_clusters=True)
+    real, shuf, peakr = t.session_tracking(sess, {7: +1}, np.random.default_rng(0))
+    max_lag = int(round(t.MAX_LAG_S / pk.DT))
+    assert real is not None and real.shape[0] == max_lag + 1
+    assert isinstance(peakr, dict) and len(peakr) > 0

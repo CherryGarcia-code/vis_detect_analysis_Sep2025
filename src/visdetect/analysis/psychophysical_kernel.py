@@ -20,10 +20,15 @@ Design notes
 from __future__ import annotations
 import numpy as np
 
+from visdetect.analysis.constants import FA_RT_SPLIT
+
 DT = 0.05
 KERNEL_PRE_S = 1.5           # window starts this far before the lick
 KERNEL_REFRACTORY_S = 0.15   # exclude the last 150 ms (sensorimotor)
-MIN_BASELINE_S = 0.5         # FA lick must be >= this after Baseline_ON
+# Late-FA gate: impulsivity analyses use only self-timed LATE FAs (latency >=
+# FA_RT_SPLIT = 3.0 s). Early FAs (<3 s) are reflexive / carry-over, and their
+# pre-lick baseline window would run before Baseline_ON. (Matches lick.py / N1.)
+MIN_FA_LATENCY_S = FA_RT_SPLIT
 CHANGE_GUARD_S = 0.5         # drop FAs within this of change_time
 BOOT_SEED = 42
 N_BOOT = 1000
@@ -63,13 +68,16 @@ def _fa_latency(trial):
         return np.nan
 
 
-def fa_kernel_epochs(session, lick_shift_ms=0.0, dt=DT):
+def fa_kernel_epochs(session, lick_shift_ms=0.0, dt=DT, min_fa_latency=None):
     """Per usable FA trial: {trial_idx, lick_t, window}. window = log2-TF over
     [lick_t - KERNEL_PRE_S, lick_t - KERNEL_REFRACTORY_S] (len L).
 
-    Guards: outcome=='fa', finite FA latency, lick_t >= MIN_BASELINE_S, enough
-    pre-lick history (j0 >= 0), and |lick_t - change_time| >= CHANGE_GUARD_S when
+    Guards: outcome=='fa', finite FA latency, lick_t >= min_fa_latency (default
+    MIN_FA_LATENCY_S = FA_RT_SPLIT = 3.0 s -> LATE FAs only, the self-timed
+    impulsive licks; pass a smaller value to include early FAs), enough pre-lick
+    history (j0 >= 0), and |lick_t - change_time| >= CHANGE_GUARD_S when
     change_time is finite (drop FAs that hug a real change)."""
+    min_fa = MIN_FA_LATENCY_S if min_fa_latency is None else min_fa_latency
     L = round((KERNEL_PRE_S - KERNEL_REFRACTORY_S) / dt)
     shift = lick_shift_ms / 1000.0
     out = []
@@ -77,7 +85,7 @@ def fa_kernel_epochs(session, lick_shift_ms=0.0, dt=DT):
         if (getattr(tr, "trialoutcome", "") or "").lower() != "fa":
             continue
         lick_t = _fa_latency(tr)
-        if not np.isfinite(lick_t) or lick_t < MIN_BASELINE_S:
+        if not np.isfinite(lick_t) or lick_t < min_fa:
             continue
         ct = float(getattr(tr, "change_time", np.nan) or np.nan)
         if np.isfinite(ct) and abs(lick_t - ct) < CHANGE_GUARD_S:
@@ -254,3 +262,24 @@ def stimulus_matched_control(fa_windows, withhold_windows, fa_pop, withhold_pop)
     sensory = wh_p.mean(0)
     total = fa_p.mean(0)
     return {"sensory": sensory, "gain": total - sensory, "total": total}
+
+
+# ── real-time stimulus tracking (does the population ride the stimulus?) ──
+def stimulus_tracking_xcorr(S, y, max_lag_bins):
+    """Pearson r between neural signal S(t) and stimulus y(t-lag) for
+    lag = 0..max_lag_bins (the neural signal LAGS the stimulus by its response
+    latency). r[lag] = corr(S[lag:], y[:-lag]); NaN where a segment is constant
+    or too short. Peak lag ~ the neural integration latency (~200-250 ms)."""
+    S = np.asarray(S, float).ravel()
+    y = np.asarray(y, float).ravel()
+    n = min(S.size, y.size)
+    out = np.full(max_lag_bins + 1, np.nan)
+    for lag in range(max_lag_bins + 1):
+        if n - lag < 3:
+            break
+        a = S[lag:n]
+        b = y[:n - lag]
+        if a.std() < 1e-9 or b.std() < 1e-9:
+            continue
+        out[lag] = np.corrcoef(a, b)[0, 1]
+    return out
