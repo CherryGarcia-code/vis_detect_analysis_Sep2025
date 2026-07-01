@@ -20,7 +20,8 @@ import matplotlib.pyplot as plt
 from matplotlib import gridspec
 
 sys.path.insert(0, "E:/python_analysis/git_repos/vd_tf_bg046/scripts/tf_responsiveness/state_conditioned")
-from population_geometry import (session_geometry, STATES, STATE_COLORS, PKL_DIR, SEED)  # noqa: E402
+from population_geometry import (session_geometry, qc_sessions, STATES, STATE_COLORS,  # noqa: E402
+                                 PKL_DIR, SEED)
 
 SUBJECTS = [("BG_046", "DMS"), ("BG_039", "DMS"), ("BG_031", "VMS")]
 OUT = Path("E:/python_analysis/git_repos/vd_tf_bg046/FIGURES/tf_glm_bg046/population_geometry")
@@ -32,8 +33,14 @@ except Exception:
 plt.rcParams.update({"font.size": 12, "axes.titlesize": 13, "axes.labelsize": 12})
 
 
-def run_subject(subj):
+def run_subject(subj, qc=False):
     sess = sorted(Path(p).stem for p in glob.glob(str(Path(PKL_DIR.format(subj=subj)) / "*.pkl")))
+    if qc:
+        from visdetect.analysis import config
+        keep = qc_sessions(subj)
+        if keep is not None:
+            sess = [s for s in sess
+                    if config.canonical_session_id(s.replace(f"{subj}_", "", 1)) in keep]
     res = []
     with cf.ProcessPoolExecutor(max_workers=8) as ex:
         for r in ex.map(session_geometry, [(subj, s) for s in sess]):
@@ -75,7 +82,11 @@ def state_space_panel(ax, res, subj, region, show_legend=False):
 
 
 def main():
-    data = {subj: run_subject(subj) for subj, _ in SUBJECTS}
+    import argparse
+    qc = argparse.ArgumentParser(); qc.add_argument("--qc", action="store_true")
+    a = qc.parse_args()
+    suffix = "_qc" if a.qc else ""
+    data = {subj: run_subject(subj, qc=a.qc) for subj, _ in SUBJECTS}
     fig = plt.figure(figsize=(19, 5.6))
     gs = gridspec.GridSpec(1, 4, width_ratios=[1, 1, 1, 1.05], wspace=0.28)
     axes = [fig.add_subplot(gs[0, i]) for i in range(3)]
@@ -120,9 +131,10 @@ def main():
                  fontsize=13.5, y=1.06)
     OUT.mkdir(parents=True, exist_ok=True)
     for ext in ("png", "pdf"):
-        fig.savefig(OUT / f"combined_population_geometry.{ext}", dpi=200, bbox_inches="tight")
+        fig.savefig(OUT / f"combined_population_geometry{suffix}.{ext}", dpi=200, bbox_inches="tight")
     plt.close(fig)
-    print(f"wrote {OUT}/combined_population_geometry.png (+ .pdf)")
+    print(f"wrote {OUT}/combined_population_geometry{suffix}.png (+ .pdf)"
+          + ("  [QC-passing sessions only]" if a.qc else ""))
     for subj, region in SUBJECTS:
         cos = [r["cosine"] for r in data[subj]]
         print(f"  {subj} ({region}): {len(cos)} sessions, median cosine {np.median(cos):+.3f}")

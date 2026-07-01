@@ -208,6 +208,18 @@ def _dprime(session):
         return np.nan
 
 
+def qc_sessions(subj):
+    """Canonical ids of QC-passing sessions (staging manifest qc_fail=False =
+    stage != 'Excluded'). None if no manifest."""
+    from visdetect.analysis import config
+    man = Path(f"E:/python_analysis/git_repos/vis_detect_analysis_Sep2025/data/{subj}_staging_manifest.csv")
+    if not man.exists():
+        return None
+    d = pd.read_csv(man, dtype={"session_name": str})
+    keep = d.loc[~d["qc_fail"].astype(bool), "session_name"]
+    return set(keep.map(config.canonical_session_id))
+
+
 def _date_key(session):
     from visdetect.analysis import config
     try:
@@ -225,16 +237,25 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--subject", default="BG_046")
     ap.add_argument("--workers", type=int, default=12)
+    ap.add_argument("--qc", action="store_true",
+                    help="only QC-passing sessions (staging manifest qc_fail=False)")
     ap.add_argument("--out-dir", default=None)
     a = ap.parse_args(argv)
     subj = a.subject
+    suffix = "_qc" if a.qc else ""
     out = Path(a.out_dir or f"E:/python_analysis/git_repos/vd_tf_bg046/FIGURES/"
-               f"tf_glm_bg046/population_geometry/{subj}")
+               f"tf_glm_bg046/population_geometry/{subj}{suffix}")
     out.mkdir(parents=True, exist_ok=True)
 
     sessions = sorted(Path(p).stem for p in glob.glob(str(Path(PKL_DIR.format(subj=subj)) / "*.pkl")))
+    if a.qc:
+        keep = qc_sessions(subj)
+        if keep is not None:
+            from visdetect.analysis import config
+            sessions = [s for s in sessions
+                        if config.canonical_session_id(s.replace(f"{subj}_", "", 1)) in keep]
     tasks = [(subj, s) for s in sessions]
-    print(f"{subj}: {len(tasks)} sessions", flush=True)
+    print(f"{subj}{suffix}: {len(tasks)} sessions", flush=True)
     res = []
     with cf.ProcessPoolExecutor(max_workers=a.workers) as ex:
         for r in ex.map(session_geometry, tasks):
