@@ -66,9 +66,9 @@ OUTCOME_COLORS = getattr(cfg, "OUTCOME_COLORS",
 
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STATE_TAG_CSV = os.path.join(_REPO, "data", "cache", "state_tags", SUBJECT, f"{SESSION}.csv")
-RESP_CACHE = os.path.join(_REPO, "analysis_suite", "cache", "responsiveness_all_sessions.csv")
+RESP_CACHE = os.path.join(_REPO, "data", "cache", "state_labeling", "responsiveness_all_sessions.csv")
 STATS_CSV = os.path.join(
-    _REPO, "analysis_suite", "figures", "state_labeler", SUBJECT,
+    _REPO, "FIGURES", "state_labeler", SUBJECT,
     "population_state_sensory_stats.csv",
 )
 

@@ -42,10 +42,24 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from visdetect.suite.config import STAGE_ORDER, CACHE_DIR
+from visdetect.analysis.config import STAGE_ORDER
 from visdetect.suite.loader import load_staging_manifest, load_session, load_waveform_labels
 from visdetect.analysis.utils import get_good_cluster_ids
-from visdetect.suite.plotting import setup_style, save_figure
+from visdetect.suite.plotting import setup_style
+
+# Transported out of analysis_suite (2026-07-01): outputs now live in the topic dirs.
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+CACHE_DIR = str(_ROOT / "data" / "cache" / "optotagging")
+_FIG_DIR = _ROOT / "FIGURES" / "optotagging" / "BG_046"
+
+
+def save_figure(fig, name, module_name=None, formats=("png",)):
+    """Write to FIGURES/optotagging/BG_046 (replaces the analysis_suite figures path)."""
+    _FIG_DIR.mkdir(parents=True, exist_ok=True)
+    for fmt in formats:
+        fig.savefig(_FIG_DIR / f"{name}.{fmt}", dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 from visdetect.analysis.optotagging import (
     OptoTagger, OptoMetrics,

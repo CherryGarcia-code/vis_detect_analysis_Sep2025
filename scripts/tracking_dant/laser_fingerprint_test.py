@@ -9,8 +9,8 @@ session pairs than random within-session pairs, and (b) be FLAT across learning 
 (no decline into early learning, the distinguishing prediction vs the task PSTH).
 
 Reuses the EXISTING optotagging caches (no recompute, no raw NIDAQ):
-  <PRIMARY>/analysis_suite/cache/optotagging_results.csv   (per session,cluster,fiber)
-  <PRIMARY>/analysis_suite/cache/optotagging_unit_tags.csv (per session,cluster: tier/pathway)
+  <PRIMARY>/data/cache/optotagging/optotagging_results.csv   (per session,cluster,fiber)
+  <PRIMARY>/data/cache/optotagging/optotagging_unit_tags.csv (per session,cluster: tier/pathway)
 Matched pairs come from the DANT curated tracks; random pairs are within-session different
 units. Join on session_date_key (session_name is an int -> leading zeros stripped).
 
@@ -31,8 +31,8 @@ import curate_dant as cd            # noqa: E402
 
 WT = cd.WORKTREE_ROOT
 PRIMARY = cd.PRIMARY_DEFAULT
-OPTO = PRIMARY / "analysis_suite" / "cache" / "optotagging_results.csv"
-TAGS = PRIMARY / "analysis_suite" / "cache" / "optotagging_unit_tags.csv"
+OPTO = PRIMARY / "data" / "cache" / "optotagging" / "optotagging_results.csv"
+TAGS = PRIMARY / "data" / "cache" / "optotagging" / "optotagging_unit_tags.csv"
 TRACKS = WT / "FIGURES" / "tracking_dant" / "BG_046" / "curation" / "curated_tracks.csv"
 REG = WT / "data" / "cache" / "dant" / "BG_046" / "dant_registry_curation.csv"
 OUT = WT / "FIGURES" / "tracking_dant" / "BG_046" / "prototype"

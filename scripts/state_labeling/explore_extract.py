@@ -45,8 +45,8 @@ LICK_WIN = (-1.0, 0.6); LICK_BASE = (-1.0, -0.6); LICK_PERI = (-0.15, 0.15)
 
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TAG_DIR = os.path.join(_REPO, "data", "cache", "state_tags", SUBJECT)
-RESP_CACHE = os.path.join(_REPO, "analysis_suite", "cache", "responsiveness_all_sessions.csv")
-OUT_DIR = os.path.join(_REPO, "analysis_suite", "cache", "state_neural_explore")
+RESP_CACHE = os.path.join(_REPO, "data", "cache", "state_labeling", "responsiveness_all_sessions.csv")
+OUT_DIR = os.path.join(_REPO, "data", "cache", "state_labeling", "state_neural_explore")
 
 
 def _evoked_by_state(tensor, bc, valid_trials, state_of, bm, bs, peri_win, states_wanted):

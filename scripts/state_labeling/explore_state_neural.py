@@ -43,10 +43,10 @@ MIN_TRIALS = 8
 MIN_DEC = 8                      # per class per state for decoding
 
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CACHE_DIR = os.path.join(_REPO, "analysis_suite", "cache", "state_neural_explore")
-GAIN_TRACES = os.path.join(_REPO, "analysis_suite", "cache", "state_gain_traces.npz")
+CACHE_DIR = os.path.join(_REPO, "data", "cache", "state_labeling", "state_neural_explore")
+GAIN_TRACES = os.path.join(_REPO, "data", "cache", "state_labeling", "state_gain_traces.npz")
 OUT = f"state_labeler/{SUBJECT}"
-STATS_CSV = os.path.join(_REPO, "analysis_suite", "figures", "state_labeler", SUBJECT,
+STATS_CSV = os.path.join(_REPO, "FIGURES", "state_labeler", SUBJECT,
                          "explore_state_neural_stats.csv")
 VC = {"unit": "0 + C(unit)"}
 IMP_TERM = "C(state, Treatment('StimSens'))[T.Impulsive]"

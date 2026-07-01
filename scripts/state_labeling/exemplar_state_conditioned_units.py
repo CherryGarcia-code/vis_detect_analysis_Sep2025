@@ -64,7 +64,7 @@ STATE_TAG_CSV = os.path.join(
     _REPO, "data", "cache", "state_tags", SUBJECT, f"{SESSION}.csv"
 )
 RESP_CACHE = os.path.join(
-    _REPO, "analysis_suite", "cache", "responsiveness_all_sessions.csv"
+    _REPO, "data", "cache", "state_labeling", "responsiveness_all_sessions.csv"
 )
 
 # Block configuration: (row_label, event, outcome_filter, window, base_win, resp_win)

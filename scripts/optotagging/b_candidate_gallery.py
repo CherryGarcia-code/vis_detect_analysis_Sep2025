@@ -17,7 +17,7 @@ Reads the caches produced by a_optotagging_identification.py:
 Reloads each session pkl once to get spike times + laser pulse times.
 
 Usage:
-  cd analysis_suite && py 09_optotagging/b_candidate_gallery.py [--per-page 12]
+  py scripts/optotagging/b_candidate_gallery.py [--per-page 12]
 """
 import argparse
 import os
@@ -32,10 +32,23 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-from visdetect.suite.config import CACHE_DIR
 from visdetect.suite.loader import load_session
-from visdetect.suite.plotting import setup_style, save_figure
+from visdetect.suite.plotting import setup_style
 from visdetect.analysis.optotagging import OptoTagger, COLLISION_REFRACTORY_MS
+
+# Transported out of analysis_suite (2026-07-01): outputs now live in the topic dirs.
+from pathlib import Path as _Path
+_ROOT = _Path(__file__).resolve().parents[2]
+CACHE_DIR = str(_ROOT / "data" / "cache" / "optotagging")
+_FIG_DIR = _ROOT / "FIGURES" / "optotagging" / "BG_046"
+
+
+def save_figure(fig, name, module_name=None, formats=("png",)):
+    """Write to FIGURES/optotagging/BG_046 (replaces the analysis_suite figures path)."""
+    _FIG_DIR.mkdir(parents=True, exist_ok=True)
+    for fmt in formats:
+        fig.savefig(_FIG_DIR / f"{name}.{fmt}", dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 setup_style()
 

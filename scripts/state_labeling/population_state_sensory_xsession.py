@@ -63,8 +63,8 @@ MIN_TRIALS_STATE = 8
 
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TAG_DIR = os.path.join(_REPO, "data", "cache", "state_tags", SUBJECT)
-RESP_CACHE = os.path.join(_REPO, "analysis_suite", "cache", "responsiveness_all_sessions.csv")
-OUT_DIR = os.path.join(_REPO, "analysis_suite", "figures", "state_labeler", SUBJECT)
+RESP_CACHE = os.path.join(_REPO, "data", "cache", "state_labeling", "responsiveness_all_sessions.csv")
+OUT_DIR = os.path.join(_REPO, "FIGURES", "state_labeler", SUBJECT)
 
 
 def wilcoxon_paired(x, y):
