@@ -1,14 +1,12 @@
-"""B9 deliverable 2 — TRIAL-MATCHED state-conditioned TF-encoding, early vs late (subject-generic).
+"""B9 deliverable 2 — TRIAL-MATCHED state-conditioned TF-encoding, early vs late (subject + state generic).
 
-Auto-picks responsive-rich, StimSens-covered sessions per stage-group
-(early = Naive+Learning, late = Expert), then for a FAIR comparison subsamples
-every session to a COMMON StimSens trial count (--n_match) and averages c1_r over
---k_draws random draws (c1_r attenuates with trial count, so early/late must be
-trial-matched). Responsive vs a non-responsive control. Includes a faithfulness
-spot-check (whole-session re-run reproduces the registry c1_r_log2). Sessions run
-in parallel (BLAS pinned per worker).
+Auto-picks responsive-rich, state-covered sessions per stage-group (early = Naive+Learning,
+late = Expert; DATE-staged so QC-'Excluded' sessions are included), subsamples every session
+to a COMMON trial count (--n_match) of the chosen --state, averages c1_r over --k_draws draws
+(c1_r attenuates with trial count -> must trial-match). Responsive vs a non-responsive control.
+Faithfulness spot-check reproduces the registry c1_r_log2. Sessions run in parallel.
 
-Run:  PYTHONPATH=src py scripts/state_tf_learning/b9_deliverable2.py --subject BG_031 --n_match 140
+Run:  PYTHONPATH=src py scripts/state_tf_learning/b9_deliverable2.py --subject BG_031 --state Disengaged --n_match 120
 """
 import os, sys, gc, argparse
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -28,7 +26,6 @@ from scipy import stats
 from concurrent.futures import ProcessPoolExecutor
 
 from visdetect.analysis import state_tf_learning as stl
-from visdetect.analysis.config import canonical_session_id as csid
 from visdetect.core.session import load_session
 
 MIN_RESP = 5         # min responsive units in the session
@@ -36,10 +33,9 @@ N_PICK = 3           # sessions per stage-group
 N_NONRESP = 8        # non-responsive control units per session
 
 
-def build_candidates(subject):
+def build_candidates(subject, state):
     reg = stl.load_registry(stl.registry_path(subject))
-    man = pd.read_csv(stl.manifest_path(subject)); man["sess_key"] = man["session_name"].map(csid)
-    stage_map = dict(zip(man.sess_key, man.stage.astype(str)))
+    smap = stl.date_stage_map(subject)   # date-stage ALL sessions (incl. QC-Excluded)
     meta = reg.drop_duplicates("sess_key").set_index("sess_key")[["session", "session_date"]]
     nresp = reg.groupby("sess_key")["resp_log2"].sum()
     rows = []
@@ -50,21 +46,20 @@ def build_candidates(subject):
             continue
         g = tags[tags["state_confidence"] >= 0.8]
         rows.append({"sess_key": key, "stem": mrow["session"], "orig": str(mrow["session_date"]),
-                     "stage": stage_map.get(key, "?"), "n_resp": int(nresp.get(key, 0)),
-                     "StimSens": int((g["state_label"] == "StimSens").sum())})
+                     "stage": smap.get(key, "?"), "n_resp": int(nresp.get(key, 0)),
+                     "n_state": int((g["state_label"] == state).sum())})
     return pd.DataFrame(rows), reg
 
 
 def pick(cand, n_match):
     def top(mask):
-        return cand[mask & (cand.StimSens >= n_match) & (cand.n_resp >= MIN_RESP)] \
+        return cand[mask & (cand.n_state >= n_match) & (cand.n_resp >= MIN_RESP)] \
             .sort_values("n_resp", ascending=False).head(N_PICK)
     return top(cand.stage.isin(["Naive", "Learning"])), top(cand.stage == "Expert")
 
 
 def _run_one(args):
-    """Trial-matched draws for one session: subsample StimSens to n_match, K times, mean c1_r/unit."""
-    subject, key, stem, orig, group, resp, nonresp, n_match, k_draws, seed = args
+    subject, key, stem, orig, group, state, resp, nonresp, n_match, k_draws, seed = args
     from visdetect.analysis import state_tf_learning as _stl
     from visdetect.core.session import load_session as _load
     import numpy as _np, pandas as _pd, gc as _gc
@@ -72,9 +67,9 @@ def _run_one(args):
     if not pkl.exists():
         return ("MISS", key, str(pkl))
     sess = _load(str(pkl)); tags = _stl.load_state_tags(subject, orig)
-    idx_full = _stl.state_trial_indices(tags, "StimSens")
+    idx_full = _stl.state_trial_indices(tags, state)
     if len(idx_full) < n_match:
-        del sess; _gc.collect(); return ("SKIP", key, f"{len(idx_full)} StimSens < n_match {n_match}")
+        del sess; _gc.collect(); return ("SKIP", key, f"{len(idx_full)} {state} < n_match {n_match}")
     cfg = _stl.b9_cfg(); rng = _np.random.default_rng(seed)
     draws = []
     try:
@@ -92,12 +87,12 @@ def _run_one(args):
     agg = alld.groupby("unit").agg(c1_r=("c1_r", "mean"), c2_p=("c2_p", "mean"),
                                    n_draws=("c1_r", "size")).reset_index()
     rset = set(int(u) for u in resp)
-    agg["sess_key"] = key; agg["group"] = group; agg["n_match"] = n_match
+    agg["sess_key"] = key; agg["group"] = group; agg["state"] = state; agg["n_match"] = n_match
     agg["resp_class"] = agg["unit"].map(lambda u: "responsive" if int(u) in rset else "nonresponsive")
     return ("OK", key, group, len(idx_full), agg)
 
 
-def faithfulness(subject, cand, reg, cache):
+def faithfulness(subject, cand, reg):
     best = cand.sort_values("n_resp", ascending=False).iloc[0]
     sess = load_session(str(stl.PKL_ROOT / subject / f"{best['stem']}.pkl"))
     rs = reg[reg.sess_key == best["sess_key"]]
@@ -110,25 +105,24 @@ def faithfulness(subject, cand, reg, cache):
         print("[FAITHFULNESS] no common units", flush=True); return None
     diff = np.abs(got.loc[common].to_numpy() - want.loc[common].to_numpy())
     med = float(np.nanmedian(diff))
-    print(f"[FAITHFULNESS] {best['sess_key']} responsive n={len(common)} | median abs-diff c1_r={med:.4f} "
-          f"max={float(np.nanmax(diff)):.4f}  (want < ~0.02)", flush=True)
+    print(f"[FAITHFULNESS] {best['sess_key']} responsive n={len(common)} | median abs-diff c1_r={med:.4f}", flush=True)
     return med
 
 
-def main(subject, n_workers, n_match, k_draws):
+def main(subject, n_workers, n_match, k_draws, state):
     cache = stl._REPO / "data" / "cache" / "state_tf_learning"; cache.mkdir(parents=True, exist_ok=True)
     figdir = stl._REPO / "FIGURES" / "state_tf_learning" / subject; figdir.mkdir(parents=True, exist_ok=True)
-    tag = f"N{n_match}"
-    cand, reg = build_candidates(subject)
+    tag = f"{state}_N{n_match}"
+    cand, reg = build_candidates(subject, state)
     early, late = pick(cand, n_match)
-    print(f"=== {subject}: picks (StimSens >= n_match={n_match}) ===", flush=True)
+    print(f"=== {subject} / state={state}: picks (n_state >= {n_match}) ===", flush=True)
     for lab, d in [("early(Naive/Learning)", early), ("late(Expert)", late)]:
-        print(f"  {lab}: " + ", ".join(f"{r.sess_key}(r{r.n_resp}/ss{r.StimSens})" for _, r in d.iterrows()), flush=True)
+        print(f"  {lab}: " + ", ".join(f"{r.sess_key}(r{r.n_resp}/{state[:4]}{r.n_state})" for _, r in d.iterrows()), flush=True)
     if early.empty or late.empty:
-        print("[ABORT] no usable early or late picks at this n_match", flush=True); return
+        print("[ABORT] no usable early or late picks at this n_match/state", flush=True); return
 
     print("=== FAITHFULNESS SPOT-CHECK (whole-session) ===", flush=True)
-    med = faithfulness(subject, cand, reg, cache)
+    med = faithfulness(subject, cand, reg)
     if med is not None and med > 0.1:
         print(f"[ABORT] faithfulness {med:.3f} > 0.1", flush=True); return
 
@@ -140,16 +134,15 @@ def main(subject, n_workers, n_match, k_draws):
             resp = rs.loc[rs.resp_log2 == True, "unit"].astype(int).tolist()   # noqa: E712
             non = rs.loc[rs.resp_log2 == False, "unit"].astype(int).tolist()   # noqa: E712
             nsamp = list(rng.choice(non, size=min(N_NONRESP, len(non)), replace=False)) if non else []
-            tasks.append((subject, r.sess_key, r.stem, r.orig, grp, resp, nsamp, n_match, k_draws, 100 * gi + si))
+            tasks.append((subject, r.sess_key, r.stem, r.orig, grp, state, resp, nsamp, n_match, k_draws, 100 * gi + si))
 
-    print(f"=== TRIAL-MATCHED STATE-CONDITIONED (StimSens, n_match={n_match}, k_draws={k_draws}): "
-          f"{len(tasks)} sessions x {n_workers} workers ===", flush=True)
+    print(f"=== TRIAL-MATCHED {state} (n_match={n_match}, k_draws={k_draws}): {len(tasks)} sessions x {n_workers} workers ===", flush=True)
     frames = []
     with ProcessPoolExecutor(max_workers=n_workers) as ex:
         for res in ex.map(_run_one, tasks):
             if res[0] == "OK":
                 _, key, grp, nfull, agg = res
-                print(f"[ok] {key} ({grp}): {nfull} StimSens -> matched {n_match}, {len(agg)} units", flush=True)
+                print(f"[ok] {key} ({grp}): {nfull} {state} -> matched {n_match}, {len(agg)} units", flush=True)
                 frames.append(agg)
             else:
                 print(f"[{res[0]}] {res[1]}: {res[2] if len(res) > 2 else ''}", flush=True)
@@ -162,7 +155,7 @@ def main(subject, n_workers, n_match, k_draws):
     e = rr[rr.group == "early"]["c1_r"].dropna(); l = rr[rr.group == "late"]["c1_r"].dropna()
     nr = res_df[res_df.resp_class == "nonresponsive"]
     p = stats.mannwhitneyu(e, l, alternative="two-sided")[1] if len(e) and len(l) else np.nan
-    print(f"\n[RESULT] {subject} trial-matched (N={n_match}) StimSens responsive c1_r: "
+    print(f"\n[RESULT] {subject} {state} trial-matched (N={n_match}) responsive c1_r: "
           f"early median={e.median():.3f} (n={len(e)})  late median={l.median():.3f} (n={len(l)})  MWU p={p:.4f}", flush=True)
     print(f"[RESULT] non-responsive control: early={nr[nr.group=='early']['c1_r'].median():.3f} "
           f"late={nr[nr.group=='late']['c1_r'].median():.3f}", flush=True)
@@ -178,15 +171,15 @@ def main(subject, n_workers, n_match, k_draws):
             ax.boxplot(d, positions=[xp], widths=.55, showfliers=False, patch_artist=True,
                        boxprops=dict(facecolor=col[(g, c)], alpha=.6), medianprops=dict(color="k"))
             ax.scatter(np.full(len(d), xp) + rng.uniform(-.12, .12, len(d)), d, s=16, color="k", alpha=.55, zorder=3)
-    ax.axhline(0.2, ls="--", color="k", lw=.8, alpha=.5)
+    ax.axhline(0.2, ls="--", color="k", lw=.8, alpha=.5); ax.axhline(0.0, color="#999", lw=.6)
     ax.set_xticks([0, 1, 2.4, 3.4]); ax.set_xticklabels(["early", "late", "early", "late"])
     ax.text(0.5, ax.get_ylim()[1], "RESPONSIVE", ha="center", va="bottom", fontsize=9, weight="bold")
     ax.text(2.9, ax.get_ylim()[1], "non-responsive (ctrl)", ha="center", va="bottom", fontsize=9)
-    ax.set_ylabel(f"trial-matched c1_r (StimSens, N={n_match})")
-    ax.set_title(f"{subject}: StimSens baseline-TF encoding, early vs late (trial-matched)\n"
+    ax.set_ylabel(f"trial-matched c1_r ({state}, N={n_match})")
+    ax.set_title(f"{subject}: {state} baseline-TF encoding, early vs late (trial-matched)\n"
                  f"responsive MWU p={p:.4f}  (early n={len(e)}, late n={len(l)})")
     fig.tight_layout(); fig.savefig(figdir / f"b9_deliverable2_state_conditioned_{tag}.png", dpi=150); plt.close(fig)
-    print(f"[done] wrote encoding CSV + figure for {subject} (n_match={n_match})", flush=True)
+    print(f"[done] wrote encoding CSV + figure for {subject} ({tag})", flush=True)
 
 
 if __name__ == "__main__":
@@ -195,5 +188,6 @@ if __name__ == "__main__":
     ap.add_argument("--n_workers", type=int, default=6)
     ap.add_argument("--n_match", type=int, default=140)
     ap.add_argument("--k_draws", type=int, default=3)
+    ap.add_argument("--state", default="StimSens")
     a = ap.parse_args()
-    main(a.subject, a.n_workers, a.n_match, a.k_draws)
+    main(a.subject, a.n_workers, a.n_match, a.k_draws, a.state)

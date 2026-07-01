@@ -37,6 +37,47 @@ def registry_path(subject: str) -> Path:
 def manifest_path(subject: str) -> Path:
     return _REPO / "data" / f"{subject}_staging_manifest.csv"
 
+
+def robust_date(k):
+    """Parse a (canonical) session key to a date, handling 8-digit DDMMYYYY and the
+    6-digit DDMMYY case that canonical_session_id zero-pads to 00DDMMYY."""
+    import datetime
+    k = str(k).split("_")[0]
+    if len(k) == 8 and k.isdigit():
+        dd, mm, yyyy = int(k[:2]), int(k[2:4]), int(k[4:])
+        if dd == 0:                              # 00120325 <- 6-digit DDMMYY
+            s6 = k[2:]; dd, mm, yy = int(s6[:2]), int(s6[2:4]), int(s6[4:]); yyyy = 2000 + yy
+        try:
+            return datetime.date(yyyy, mm, dd)
+        except Exception:
+            return None
+    return None
+
+
+def date_stage_map(subject: str) -> dict:
+    """Assign EVERY registry session a learning stage by DATE, using the manifest's
+    Naive/Learning/Expert date ranges — so QC-'Excluded' sessions (dropped by the
+    behavioural filter) are still staged for state-conditioned / recruitment work."""
+    reg = load_registry(registry_path(subject))
+    man = pd.read_csv(manifest_path(subject)); man["sess_key"] = man["session_name"].map(canonical_session_id)
+    man["date"] = [robust_date(k) for k in man["sess_key"]]
+    naive = [d for d, s in zip(man.date, man.stage.astype(str)) if s == "Naive" and d]
+    expert = [d for d, s in zip(man.date, man.stage.astype(str)) if s == "Expert" and d]
+    naive_end = max(naive) if naive else None
+    expert_start = min(expert) if expert else None
+    out = {}
+    for k in reg.sess_key.unique():
+        d = robust_date(k)
+        if d is None:
+            out[k] = "?"
+        elif naive_end and d <= naive_end:
+            out[k] = "Naive"
+        elif expert_start and d >= expert_start:
+            out[k] = "Expert"
+        else:
+            out[k] = "Learning"
+    return out
+
 _ENC_COLS = ["unit", "c1_r", "c2_p", "is_responsive_rerun", "r_red_mean",
              "n_folds_used", "kernel_peak_t", "kernel_fwhm", "n_spikes", "n_trials"]
 

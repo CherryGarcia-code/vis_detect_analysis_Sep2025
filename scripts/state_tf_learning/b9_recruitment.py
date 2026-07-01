@@ -31,8 +31,7 @@ OUT = stl._REPO / "FIGURES" / "state_tf_learning"
 
 def per_session_fraction(subject):
     reg = stl.load_registry(stl.registry_path(subject))
-    man = pd.read_csv(stl.manifest_path(subject)); man["sess_key"] = man["session_name"].map(csid)
-    smap = dict(zip(man.sess_key, man.stage.astype(str)))
+    smap = stl.date_stage_map(subject)   # date-stage ALL sessions (incl. QC-Excluded)
     per = reg.groupby("sess_key").agg(n_units=("resp_log2", "size"), n_resp=("resp_log2", "sum"))
     per["frac"] = per["n_resp"] / per["n_units"]
     per["stage"] = [smap.get(k, "?") for k in per.index]
