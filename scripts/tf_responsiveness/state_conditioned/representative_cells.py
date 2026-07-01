@@ -1,18 +1,16 @@
-"""Representative TF-responsive cells (one per subject) — response to the TF
-PULSE (fast vs slow) and to each OUTCOME (Hit/Miss @ Change_ON, FA @ FA-event),
-faceted by behavioural STATE, with 95% bootstrap CI and trial-count MATCHING
-across states (subsample to the min per outcome — the clean way given c1_r's
-trial-count sensitivity). Plus a population across-learning panel. QC-passing
-sessions only (drop the Excluded/breakdown sessions). Uses project conventions
-throughout: align.get_event_times_by_trial + EVENT_VALID_OUTCOMES, DEFAULT_BIN_SIZE
-/ DEFAULT_SIGMA_MS, TF_PULSE_WINDOW, EVENT_RESPONSIVENESS_WINDOWS.
+"""Representative TF-responsive cells (best exemplar per subject, QC-pass
+sessions) — response to the TF PULSE (fast vs slow) and to the OUTCOMES
+(Hit vs Miss @ Change_ON, FA @ early-lick), all with 95% bootstrap CI. No state
+faceting. Plus a 'recruitment' panel = TF-responsive fraction across CHRONOLOGICAL
+5-session bins (regardless of learning stage). Project conventions throughout:
+align.get_event_times_by_trial + EVENT_VALID_OUTCOMES, DEFAULT_BIN_SIZE/SIGMA_MS,
+TF_PULSE_WINDOW, EVENT_RESPONSIVENESS_WINDOWS.
 """
 from __future__ import annotations
 import os
 for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
     os.environ.setdefault(_v, "1")
 import sys
-import glob
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +23,7 @@ from scipy.ndimage import gaussian_filter1d
 
 sys.path.insert(0, "E:/python_analysis/git_repos/vd_tf_bg046/src")
 from visdetect.core.session import load_session  # noqa: E402
+from visdetect.analysis import config  # noqa: E402
 from visdetect.analysis.align import get_event_times_by_trial, align_spikes_to_events  # noqa: E402
 from visdetect.analysis.constants import (DEFAULT_BIN_SIZE, DEFAULT_SIGMA_MS,  # noqa: E402
     TF_PULSE_WINDOW, EVENT_RESPONSIVENESS_WINDOWS)
@@ -33,15 +32,11 @@ from visdetect.analysis.tf_glm import (TFGLMConfig, assemble_design,  # noqa: E4
 from visdetect.analysis.tf_glm_data import session_trial_regressors  # noqa: E402
 
 REPO = "E:/python_analysis/git_repos/vis_detect_analysis_Sep2025"
-STATES = ["StimSens", "Impulsive", "Disengaged"]
-STATE_COLORS = {"StimSens": "#6baed6", "Impulsive": "#ef6548", "Disengaged": "#3474ae"}
-# representative session per subject (QC-pass, all 3 states, strong TF cell)
-REPR = {"BG_046": ("10092025", "DMS"), "BG_039": ("16042025", "DMS"), "BG_031": ("190325", "VMS")}
-OUTCOME_EVENT = [("hit", "Change_ON"), ("miss", "Change_ON"), ("fa", "FA")]
-DISP_WIN = (-0.5, 1.0)          # align.py default display window
+SUBJECTS = [("BG_046", "DMS"), ("BG_039", "DMS"), ("BG_031", "VMS")]
+DISP_WIN = (-0.5, 1.0)
 BIN = DEFAULT_BIN_SIZE
-SIG = DEFAULT_SIGMA_MS / 1000.0 / BIN   # smoothing sigma in bins
-MIN_TRIALS = 12
+SIG = DEFAULT_SIGMA_MS / 1000.0 / BIN
+BINSIZE = 5             # sessions per recruitment bin
 SEED = 42
 OUT = Path("E:/python_analysis/git_repos/vd_tf_bg046/FIGURES/tf_glm_bg046/representative_cells")
 try:
@@ -63,8 +58,7 @@ def _smooth(a):
 
 
 def _boot_ci(mat, n=1000, seed=SEED):
-    """mat: (n_events, n_bins) firing rate in Hz (align_spikes_to_events already
-    divides by bin_size). Returns smoothed (mean, lo, hi)."""
+    """mat: (n_events, n_bins) in Hz (align_spikes_to_events already /bin_size)."""
     rng = np.random.default_rng(seed)
     m = _smooth(mat.mean(0))
     if len(mat) < 3:
@@ -73,137 +67,132 @@ def _boot_ci(mat, n=1000, seed=SEED):
     return m, np.percentile(boots, 2.5, 0), np.percentile(boots, 97.5, 0)
 
 
-def outcome_state_peths(spikes, session, lab, outcome, event):
-    """{state -> (t, mean, lo, hi, n)} for one outcome/event, N-matched across states."""
-    et = np.array(get_event_times_by_trial(session, event), float)  # per-trial, NaN if invalid
-    # trials of this outcome with a valid event time, grouped by state
-    by_state = {st: [] for st in STATES}
-    for i, t in enumerate(session.trials):
-        oc = str(getattr(t, "trialoutcome", "") or "").lower()
-        if oc == outcome and i < et.size and np.isfinite(et[i]):
-            stt = lab.get(i)
-            if stt in by_state:
-                by_state[stt].append(et[i])
-    have = {st: np.array(v) for st, v in by_state.items() if len(v) >= MIN_TRIALS}
-    if not have:
-        return {}, None
-    nmatch = min(len(v) for v in have.values())          # trial-count MATCH across states
-    rng = np.random.default_rng(SEED)
-    out, t_axis = {}, None
-    for st, times in have.items():
-        sel = times[rng.choice(len(times), nmatch, replace=False)] if len(times) > nmatch else times
-        binned, t_axis = align_spikes_to_events(spikes, sel.tolist(), window=DISP_WIN, bin_size=BIN)
-        binned = np.asarray(binned, float)
-        m, lo, hi = _boot_ci(binned)
-        out[st] = (t_axis, m, lo, hi, nmatch)
-    return out, t_axis
-
-
-def pulse_peths(spikes, session):
-    """fast/slow TF-pulse PETH (Hz, baseline-subtracted) + CI95."""
-    cfg = TFGLMConfig(include_movement=False, include_phase=False, include_tiled_baseline=True,
-                      standardize_design=True, fast_fit=True, tf_encoding="log2", min_pulses_per_label=20)
-    trials, units = session_trial_regressors(session, cfg)
-    d = assemble_design(trials, cfg)
-    fast, slow = pulse_times_from_tf(d, cfg)
-    res = {}
-    for name, p in (("fast", fast), ("slow", slow)):
-        binned, t = align_spikes_to_events(spikes, p.tolist(), window=TF_PULSE_WINDOW, bin_size=BIN)
-        binned = np.asarray(binned, float)
-        m, lo, hi = _boot_ci(binned)
-        base = m[t < 0].mean()
-        res[name] = (t, m - base, lo - base, hi - base)
-    return res
-
-
 def _registry(subj):
-    return pd.read_csv(f"{REPO}/data/cache/tf_responsive/{subj.lower().replace('_','')}_tf_responsive.csv",
-                       dtype={"session": str, "session_date": str})
+    r = pd.read_csv(f"{REPO}/data/cache/tf_responsive/{subj.lower().replace('_','')}_tf_responsive.csv",
+                    dtype={"session": str, "session_date": str})
+    r["resp"] = r.resp_log2.astype(str).str.lower().isin(["true", "1", "1.0"])
+    return r
 
 
-def pick_unit(subj, date):
-    """Best exemplar: responsive cell with the highest C1 AMONG the higher-firing
-    half (clean PETHs need firing rate, not just C1)."""
+def _qc_dates(subj):
+    man = pd.read_csv(f"{REPO}/data/{subj}_staging_manifest.csv", dtype={"session_name": str})
+    return set(man.loc[~man.qc_fail.astype(bool), "session_name"])
+
+
+def pick_unit(subj):
+    """Best exemplar across QC-pass sessions: highest C1 among the higher-firing
+    responsive cells (clean PETHs need firing rate)."""
     reg = _registry(subj)
-    reg = reg[reg.resp_log2.astype(str).str.lower().isin(["true", "1", "1.0"]) & (reg.session_date == date)]
-    hi = reg[reg.n_spikes >= reg.n_spikes.median()]
+    reg = reg[reg.resp & reg.session_date.isin(_qc_dates(subj))]
+    hi = reg[reg.n_spikes >= reg.n_spikes.quantile(0.6)]
     r = (hi if len(hi) else reg).sort_values("c1_r_log2", ascending=False).iloc[0]
     return r["session"], int(r["unit"]), float(r["c1_r_log2"])
 
 
-def learning_curve(subj):
-    """responsive fraction per learning stage over QC-pass sessions (fraction is
-    trial-count-robust, unlike c1_r). Returns [(stage, frac, n_units, n_sess)]."""
-    man = pd.read_csv(f"{REPO}/data/{subj}_staging_manifest.csv", dtype={"session_name": str})
-    qc = man.loc[~man.qc_fail.astype(bool)]
-    stage = dict(zip(qc.session_name, qc.stage.astype(str)))
+def outcome_peth(spikes, session, outcome, event):
+    """single PETH (Hz) + CI95 for trials of `outcome`, aligned to `event`."""
+    et = np.array(get_event_times_by_trial(session, event), float)
+    times = [et[i] for i, t in enumerate(session.trials)
+             if str(getattr(t, "trialoutcome", "") or "").lower() == outcome
+             and i < et.size and np.isfinite(et[i])]
+    if len(times) < 5:
+        return None
+    binned, t = align_spikes_to_events(spikes, times, window=DISP_WIN, bin_size=BIN)
+    m, lo, hi = _boot_ci(np.asarray(binned, float))
+    return t, m, lo, hi, len(times)
+
+
+def pulse_peths(spikes, session):
+    cfg = TFGLMConfig(include_movement=False, include_phase=False, include_tiled_baseline=True,
+                      standardize_design=True, fast_fit=True, tf_encoding="log2", min_pulses_per_label=20)
+    trials, _ = session_trial_regressors(session, cfg)
+    d = assemble_design(trials, cfg)
+    fast, slow = pulse_times_from_tf(d, cfg)
+    res = {}
+    for nm, p in (("fast", fast), ("slow", slow)):
+        binned, t = align_spikes_to_events(spikes, p.tolist(), window=TF_PULSE_WINDOW, bin_size=BIN)
+        m, lo, hi = _boot_ci(np.asarray(binned, float))
+        base = m[t < 0].mean()
+        res[nm] = (t, m - base, lo - base, hi - base)
+    return res
+
+
+def recruit_bins(subj, binsize=BINSIZE):
+    """TF-responsive fraction per CHRONOLOGICAL bin of `binsize` QC-pass sessions."""
     reg = _registry(subj)
-    reg = reg[reg.session_date.isin(qc.session_name)].copy()
-    reg["stage"] = reg.session_date.map(stage)
-    reg["resp"] = reg.resp_log2.astype(str).str.lower().isin(["true", "1", "1.0"])
-    order = [s for s in ["Naive", "Learning", "Expert"] if s in set(reg.stage)]
+    reg = reg[reg.session_date.isin(_qc_dates(subj))]
+    per = (reg.groupby("session_date").agg(n=("resp", "size"), r=("resp", "sum")).reset_index())
+    per["d"] = per.session_date.map(config.parse_session_date)
+    per = per.dropna(subset=["d"]).sort_values("d").reset_index(drop=True)
     out = []
-    for st in order:
-        g = reg[reg.stage == st]
-        out.append((st, 100 * g.resp.mean(), len(g), g.session_date.nunique()))
+    for b in range(0, len(per), binsize):
+        chunk = per.iloc[b:b + binsize]
+        frac = 100 * chunk.r.sum() / chunk.n.sum()
+        out.append((b // binsize, frac, int(chunk.r.sum()), int(chunk.n.sum()), len(chunk)))
     return out
 
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    fig = plt.figure(figsize=(23, 12))
-    gs = gridspec.GridSpec(3, 5, hspace=0.5, wspace=0.36)
-    for row, (subj, (date, region)) in enumerate(REPR.items()):
-        sess, uid, c1 = pick_unit(subj, date)
+    fig = plt.figure(figsize=(19, 12))
+    gs = gridspec.GridSpec(3, 4, hspace=0.48, wspace=0.34)
+    for row, (subj, region) in enumerate(SUBJECTS):
+        sess, uid, c1 = pick_unit(subj)
         s = load_session(f"{REPO}/data/pkls/{subj}/{sess}.pkl")
         spk = _spikes(s, uid)
-        lab = pd.read_csv(f"{REPO}/data/cache/state_tags/{subj}/{date}.csv").set_index("trial_idx")["state_label"].to_dict()
-        # --- pulse panel ---
-        axp = fig.add_subplot(gs[row, 0])
-        pp = pulse_peths(spk, s)
+        # --- pulse ---
+        axp = fig.add_subplot(gs[row, 0]); pp = pulse_peths(spk, s)
         for nm, col in (("fast", "#d6322a"), ("slow", "#2b6fb3")):
             t, m, lo, hi = pp[nm]
-            axp.plot(t, m, color=col, lw=2, label=nm)
-            axp.fill_between(t, lo, hi, color=col, alpha=0.2)
+            axp.plot(t, m, color=col, lw=2, label=nm); axp.fill_between(t, lo, hi, color=col, alpha=0.2)
         axp.axvline(0, color="0.7", lw=0.8); axp.axhline(0, color="0.7", lw=0.8)
         axp.set_title(f"{subj} ({region})  u{uid}\nTF pulse  (C1={c1:.2f})", fontsize=11)
-        axp.set_ylabel("Δ firing (Hz)"); axp.set_xlabel("t from pulse (s)")
-        axp.legend(frameon=False, fontsize=8)
-        # --- outcome x state panels ---
-        for col, (oc, ev) in enumerate(OUTCOME_EVENT, start=1):
-            ax = fig.add_subplot(gs[row, col])
-            peths, _ = outcome_state_peths(spk, s, lab, oc, ev)
-            for st in STATES:
-                if st in peths:
-                    t, m, lo, hi, n = peths[st]
-                    ax.plot(t, m, color=STATE_COLORS[st], lw=1.8, label=f"{st} (n={n})")
-                    ax.fill_between(t, lo, hi, color=STATE_COLORS[st], alpha=0.18)
-            # shade the canonical responsiveness (post) window for this event
-            pw = EVENT_RESPONSIVENESS_WINDOWS.get(ev, (None, (0, 0)))[1]
-            if pw and DISP_WIN[0] <= pw[1] and pw[0] <= DISP_WIN[1]:
-                ax.axvspan(max(pw[0], DISP_WIN[0]), min(pw[1], DISP_WIN[1]), color="0.9", zorder=0)
-            ax.axvline(0, color="0.7", lw=0.8)
-            title = {"hit": "Hit @ Change_ON", "miss": "Miss @ Change_ON", "fa": "FA @ early-lick"}[oc]
-            ax.set_title(title + "  (N-matched)", fontsize=10)
-            ax.set_xlabel(f"t from {ev} (s)")
-            if peths:
-                ax.legend(frameon=False, fontsize=7.5)
-        # --- population across-learning (col 4): responsive fraction per stage ---
-        axl = fig.add_subplot(gs[row, 4])
-        lc = learning_curve(subj)
-        axl.bar(range(len(lc)), [f for _, f, _, _ in lc], color="#5aa469", width=0.62)
-        for i, (st, f, nu, ns) in enumerate(lc):
-            axl.text(i, f, f"{f:.1f}%\n{ns}s", ha="center", va="bottom", fontsize=8)
-        axl.set_xticks(range(len(lc))); axl.set_xticklabels([s for s, *_ in lc], fontsize=9)
-        axl.set_ylabel("% TF-responsive"); axl.set_ylim(0, None)
-        axl.set_title("Across learning\n(resp. fraction, QC-pass)", fontsize=10)
-        for sp in ("top", "right"): axl.spines[sp].set_visible(False)
-    fig.suptitle("Representative TF-responsive cells — pulse response + outcome × behavioural state "
-                 "(95% CI, trial-count matched; QC-pass sessions)", fontsize=13, y=0.995)
+        axp.set_ylabel("Δ firing (Hz)"); axp.set_xlabel("t from pulse (s)"); axp.legend(frameon=False, fontsize=8)
+        # --- Hit vs Miss @ Change_ON ---
+        axc = fig.add_subplot(gs[row, 1])
+        for oc, col, ls in (("hit", "#1a7f37", "-"), ("miss", "0.45", "--")):
+            r = outcome_peth(spk, s, oc, "Change_ON")
+            if r:
+                t, m, lo, hi, n = r
+                axc.plot(t, m, color=col, lw=2, ls=ls, label=f"{oc} (n={n})")
+                axc.fill_between(t, lo, hi, color=col, alpha=0.18)
+        pw = EVENT_RESPONSIVENESS_WINDOWS["Change_ON"][1]
+        axc.axvspan(pw[0], pw[1], color="0.9", zorder=0); axc.axvline(0, color="0.7", lw=0.8)
+        axc.set_title("Hit vs Miss @ Change_ON", fontsize=10); axc.set_xlabel("t from Change_ON (s)")
+        axc.legend(frameon=False, fontsize=8)
+        # --- FA @ early-lick ---
+        axf = fig.add_subplot(gs[row, 2])
+        r = outcome_peth(spk, s, "fa", "FA")
+        if r:
+            t, m, lo, hi, n = r
+            axf.plot(t, m, color="#8856a7", lw=2, label=f"FA (n={n})")
+            axf.fill_between(t, lo, hi, color="#8856a7", alpha=0.2)
+        fw = EVENT_RESPONSIVENESS_WINDOWS["FA"][1]
+        axf.axvspan(fw[0], fw[1], color="0.9", zorder=0); axf.axvline(0, color="0.7", lw=0.8)
+        axf.set_title("FA @ early-lick", fontsize=10); axf.set_xlabel("t from FA (s)")
+        axf.legend(frameon=False, fontsize=8)
+        # --- recruitment: 5-session chronological bins ---
+        axr = fig.add_subplot(gs[row, 3]); rb = recruit_bins(subj)
+        axr.plot([b for b, *_ in rb], [f for _, f, *_ in rb], "-o", color="#5aa469", ms=6, lw=1.5)
+        for b, f, nr, nu, ns in rb:
+            axr.text(b, f, f"{f:.1f}", ha="center", va="bottom", fontsize=7)
+        axr.set_xticks([b for b, *_ in rb])
+        axr.set_xticklabels([f"{b*BINSIZE+1}-{b*BINSIZE+ns}" for b, *_, ns in rb], fontsize=7, rotation=30)
+        axr.set_ylabel("% TF-responsive"); axr.set_ylim(0, None)
+        axr.set_title(f"Recruitment\n({BINSIZE}-session bins, chronological)", fontsize=10)
+        axr.set_xlabel("session bin")
+        for ax in (axc, axf, axr):
+            for sp in ("top", "right"):
+                ax.spines[sp].set_visible(False)
+    fig.suptitle("Representative TF-responsive cells — TF-pulse + outcome responses (95% CI) · "
+                 "recruitment across 5-session bins (QC-pass sessions)", fontsize=13, y=0.995)
     for ext in ("png", "pdf"):
         fig.savefig(OUT / f"representative_cells.{ext}", dpi=170, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {OUT}/representative_cells.png (+.pdf)")
+    for subj, _ in SUBJECTS:
+        sess, uid, c1 = pick_unit(subj)
+        print(f"  {subj}: exemplar {sess} u{uid} C1={c1:.2f}")
 
 
 if __name__ == "__main__":
