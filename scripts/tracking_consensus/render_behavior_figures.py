@@ -32,6 +32,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
+plt.rcParams.update({"xtick.labelsize": 10, "ytick.labelsize": 10, "axes.labelsize": 11})
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -90,23 +91,44 @@ def _stage_state(entries, sessions, key, state):
     return (num / den, den) if den else (np.nan, 0)
 
 
+def _stage_psth_ci(entries, sessions, cond):
+    """Trial-weighted mean PSTH + across-session 95% CI (SEM) for one condition."""
+    psths, ns, centers = [], [], None
+    for sk in sessions:
+        d = entries[sk]["fa"] if cond == "fa" else entries[sk]["psths"].get(cond)
+        if d is None or d["psth"] is None or d["n"] == 0:
+            continue
+        psths.append(np.asarray(d["psth"], float)); ns.append(d["n"]); centers = d["centers"]
+    if not psths:
+        return None, None, 0, None
+    P = np.vstack(psths); w = np.array(ns, float)
+    mean = (P * w[:, None]).sum(0) / w.sum()
+    sem = (P.std(0, ddof=1) / np.sqrt(len(psths))) if len(psths) >= 2 else None
+    return mean, centers, int(w.sum()), sem
+
+
 # ----------------------------------------------------------------- panels
 def _plot_event(ax, entries, stages, cond, title, xline0="event"):
     any_data = False
     for stg in STAGE_ORDER:
         if stg not in stages:
             continue
-        p, centers, n = _wmean_psth(entries, stages[stg], cond)
+        p, centers, n, sem = _stage_psth_ci(entries, stages[stg], cond)
         if p is None:
             continue
-        ax.plot(centers, p, color=STAGE_COLORS[stg], lw=2,
-                label=f"{stg} (n={n})"); any_data = True
+        ax.plot(centers, p, color=STAGE_COLORS[stg], lw=2.3, label=f"{stg} (n={n})")
+        if sem is not None:   # 95% CI band across the stage's sessions
+            ax.fill_between(centers, p - 1.96 * sem, p + 1.96 * sem,
+                            color=STAGE_COLORS[stg], alpha=0.18, linewidth=0)
+        any_data = True
     ax.axvline(0, color="0.4", lw=0.8, ls=":")
-    ax.set_title(title, fontsize=10)
-    ax.set_xlabel("time (s)"); ax.set_ylabel("Hz")
+    ax.set_title(title, fontsize=12)
+    ax.set_xlabel("time (s)", fontsize=11); ax.set_ylabel("Hz", fontsize=11)
+    ax.tick_params(labelsize=10)
     if any_data:
-        ax.legend(fontsize=7, frameon=False)
+        ax.legend(fontsize=9, frameon=False)
     ax.spines[["top", "right"]].set_visible(False)
+    return any_data
     return any_data
 
 
@@ -175,15 +197,19 @@ def render_neuron(uid, cache, cohort, tf_lookup):
     # Row 2a: Hit vs Miss (Change_ON) across stages
     ax = fig.add_subplot(gs[1, 0])
     for stg in present:
-        ph, c, nh = _wmean_psth(entries, stages[stg], "change_on_big_hit")
-        pm, _, nm = _wmean_psth(entries, stages[stg], "change_on_big_miss")
+        ph, c, nh, sh = _stage_psth_ci(entries, stages[stg], "change_on_big_hit")
+        pm, cm, nm, sm = _stage_psth_ci(entries, stages[stg], "change_on_big_miss")
         if ph is not None:
-            ax.plot(c, ph, color=STAGE_COLORS[stg], lw=2, label=f"{stg} hit")
+            ax.plot(c, ph, color=STAGE_COLORS[stg], lw=2.2, label=f"{stg} hit")
+            if sh is not None:
+                ax.fill_between(c, ph - 1.96*sh, ph + 1.96*sh, color=STAGE_COLORS[stg], alpha=0.15, lw=0)
         if pm is not None:
-            ax.plot(c, pm, color=STAGE_COLORS[stg], lw=1.4, ls="--", label=f"{stg} miss")
+            ax.plot(cm, pm, color=STAGE_COLORS[stg], lw=1.5, ls="--", label=f"{stg} miss")
+            if sm is not None:
+                ax.fill_between(cm, pm - 1.96*sm, pm + 1.96*sm, color=STAGE_COLORS[stg], alpha=0.08, lw=0)
     ax.axvline(0, color="0.4", lw=0.8, ls=":")
-    ax.set_title("Choice: Change_ON Hit vs Miss", fontsize=10)
-    ax.set_xlabel("time (s)"); ax.set_ylabel("Hz"); ax.legend(fontsize=6.5, frameon=False)
+    ax.set_title("Choice: Change_ON Hit vs Miss", fontsize=12)
+    ax.set_xlabel("time (s)"); ax.set_ylabel("Hz"); ax.legend(fontsize=8, frameon=False)
     ax.spines[["top", "right"]].set_visible(False)
 
     # Row 2b: big/small change tuning
@@ -194,7 +220,7 @@ def render_neuron(uid, cache, cohort, tf_lookup):
     ax.bar(x - w/2, big, w, color="#cb181d", label="large change")
     ax.bar(x + w/2, small, w, color="#fcae91", label="small change")
     ax.set_xticks(x); ax.set_xticklabels(present); ax.set_ylabel("evoked Hz")
-    ax.set_title("Change-size tuning (hit)", fontsize=10); ax.legend(fontsize=7, frameon=False)
+    ax.set_title("Change-size tuning (hit)", fontsize=12); ax.legend(fontsize=7, frameon=False)
     ax.spines[["top", "right"]].set_visible(False)
 
     # Row 2c: choice AUROC by stage
@@ -205,7 +231,7 @@ def render_neuron(uid, cache, cohort, tf_lookup):
     ax.axhline(0.5, color="0.4", ls="--", lw=1)
     ax.set_xticks(x); ax.set_xticklabels(present); ax.set_ylim(0, 1)
     ax.set_ylabel("AUROC (hit vs miss)")
-    ax.set_title("Choice coding across learning", fontsize=10)
+    ax.set_title("Choice coding across learning", fontsize=12)
     ax.spines[["top", "right"]].set_visible(False)
 
     # Row 2d: RT coding by stage
@@ -216,7 +242,7 @@ def render_neuron(uid, cache, cohort, tf_lookup):
     ax.axhline(0, color="0.4", ls="-", lw=0.8)
     ax.set_xticks(x); ax.set_xticklabels(present)
     ax.set_ylabel("Spearman(resp, RT)")
-    ax.set_title("Reaction-time coding (hits)", fontsize=10)
+    ax.set_title("Reaction-time coding (hits)", fontsize=12)
     ax.spines[["top", "right"]].set_visible(False)
 
     # Row 3a: baseline firing by state
@@ -226,8 +252,8 @@ def render_neuron(uid, cache, cohort, tf_lookup):
         vals = [_stage_state(entries, stages[s], "baseline_state", st)[0] for s in present]
         ax.bar(xs + (j-1)*w, vals, w, color=STATE_COLORS[st], label=st)
     ax.set_xticks(xs); ax.set_xticklabels(present); ax.set_ylabel("baseline Hz")
-    ax.set_title("Baseline firing by behavioural state", fontsize=10)
-    ax.legend(fontsize=6.5, frameon=False); ax.spines[["top", "right"]].set_visible(False)
+    ax.set_title("Baseline firing by behavioural state", fontsize=12)
+    ax.legend(fontsize=8, frameon=False); ax.spines[["top", "right"]].set_visible(False)
 
     # Row 3b: change response by state
     ax = fig.add_subplot(gs[2, 1])
@@ -235,8 +261,8 @@ def render_neuron(uid, cache, cohort, tf_lookup):
         vals = [_stage_state(entries, stages[s], "state_resp", st)[0] for s in present]
         ax.bar(xs + (j-1)*w, vals, w, color=STATE_COLORS[st], label=st)
     ax.set_xticks(xs); ax.set_xticklabels(present); ax.set_ylabel("evoked Hz")
-    ax.set_title("Change response by behavioural state", fontsize=10)
-    ax.legend(fontsize=6.5, frameon=False); ax.spines[["top", "right"]].set_visible(False)
+    ax.set_title("Change response by behavioural state", fontsize=12)
+    ax.legend(fontsize=8, frameon=False); ax.spines[["top", "right"]].set_visible(False)
 
     # Row 3c: identity + TF-status text badge (span 2)
     ax = fig.add_subplot(gs[2, 2:]); ax.axis("off")
@@ -295,7 +321,7 @@ def render_cohort_summary(cache, cohort, done, tf_lookup):
     ax.axhline(0.5, color="0.4", ls="--", lw=1)
     ax.set_xticks([0, 1]); ax.set_xticklabels(["Learning", "Expert"]); ax.set_ylim(0, 1)
     ax.set_ylabel("choice AUROC (hit vs miss)")
-    ax.set_title("Choice coding per neuron", fontsize=10)
+    ax.set_title("Choice coding per neuron", fontsize=12)
     ax.spines[["top", "right"]].set_visible(False)
 
     ax = fig.add_subplot(gs[0, 1])
@@ -304,7 +330,7 @@ def render_cohort_summary(cache, cohort, done, tf_lookup):
             ax.plot([0, 1], [r["L_big"], r["E_big"]], "-o", color="#cb181d", ms=4, alpha=0.6)
     ax.set_xticks([0, 1]); ax.set_xticklabels(["Learning", "Expert"])
     ax.set_ylabel("large-change evoked Hz")
-    ax.set_title("Change-evoked response per neuron", fontsize=10)
+    ax.set_title("Change-evoked response per neuron", fontsize=12)
     ax.spines[["top", "right"]].set_visible(False)
 
     ax = fig.add_subplot(gs[0, 2])
@@ -319,14 +345,14 @@ def render_cohort_summary(cache, cohort, done, tf_lookup):
         ax.bar(["TF-enc\n≥2 sess", "TF-enc\n1 sess", "not TF-enc"], vals,
                color=["#6a51a3", "#9e9ac8", "#bdbdbd"])
         for i, v in enumerate(vals):
-            ax.text(i, v, str(v), ha="center", va="bottom", fontsize=10)
+            ax.text(i, v, str(v), ha="center", va="bottom", fontsize=12)
         ax.set_ylabel("# neurons")
-        ax.set_title("TF-encoding (GLM resp_log2, 2.8% base rate)", fontsize=10)
+        ax.set_title("TF-encoding (GLM resp_log2, 2.8% base rate)", fontsize=12)
         ax.spines[["top", "right"]].set_visible(False)
     else:
         ax.axis("off")
-        ax.text(0.5, 0.5, "TF registry\nnot found", ha="center", va="center", fontsize=10)
-        ax.set_title("TF-encoding status", fontsize=10)
+        ax.text(0.5, 0.5, "TF registry\nnot found", ha="center", va="center", fontsize=12)
+        ax.set_title("TF-encoding status", fontsize=12)
 
     out = OUT_DIR / "behavior_cohort_summary.png"
     fig.savefig(out, dpi=140); plt.close(fig)

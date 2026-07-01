@@ -26,6 +26,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
+plt.rcParams.update({"xtick.labelsize": 10, "ytick.labelsize": 10, "axes.labelsize": 11})
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -36,7 +37,7 @@ from visdetect.core.session import load_session  # noqa: E402
 import _subject_paths as sjp  # noqa: E402
 # reusable behaviour feature extractors + panel helpers (BG_046 pipeline)
 from compute_behavior_cache import _psth_dict, _fa_psth, _change_trialwise, _go_indices  # noqa: E402
-from render_behavior_figures import _plot_event, _wmean_psth, _stage_scalar  # noqa: E402
+from render_behavior_figures import _plot_event, _wmean_psth, _stage_scalar, _stage_psth_ci  # noqa: E402
 
 STAGE_COLORS = {"Naive": "#addd8e", "Learning": "#74c476", "Expert": "#238b45"}
 STAGE_ORDER = ["Naive", "Learning", "Expert"]
@@ -148,14 +149,18 @@ def main():
         # Row 2a: hit vs miss by stage
         ax = fig.add_subplot(gs[1, 0])
         for stg in present:
-            ph, c, _ = _wmean_psth(entries, stages[stg], "change_on_big_hit")
-            pm, _, _ = _wmean_psth(entries, stages[stg], "change_on_big_miss")
+            ph, c, _, sh = _stage_psth_ci(entries, stages[stg], "change_on_big_hit")
+            pm, cm, _, sm = _stage_psth_ci(entries, stages[stg], "change_on_big_miss")
             if ph is not None:
-                ax.plot(c, ph, color=STAGE_COLORS[stg], lw=2, label=f"{stg} hit")
+                ax.plot(c, ph, color=STAGE_COLORS[stg], lw=2.2, label=f"{stg} hit")
+                if sh is not None:
+                    ax.fill_between(c, ph - 1.96*sh, ph + 1.96*sh, color=STAGE_COLORS[stg], alpha=0.15, lw=0)
             if pm is not None:
-                ax.plot(c, pm, color=STAGE_COLORS[stg], lw=1.4, ls="--", label=f"{stg} miss")
-        ax.axvline(0, color="0.4", lw=0.8, ls=":"); ax.set_title("Change_ON Hit vs Miss", fontsize=10)
-        ax.set_xlabel("time (s)"); ax.set_ylabel("Hz"); ax.legend(fontsize=6.5, frameon=False)
+                ax.plot(cm, pm, color=STAGE_COLORS[stg], lw=1.5, ls="--", label=f"{stg} miss")
+                if sm is not None:
+                    ax.fill_between(cm, pm - 1.96*sm, pm + 1.96*sm, color=STAGE_COLORS[stg], alpha=0.08, lw=0)
+        ax.axvline(0, color="0.4", lw=0.8, ls=":"); ax.set_title("Change_ON Hit vs Miss", fontsize=12)
+        ax.set_xlabel("time (s)"); ax.set_ylabel("Hz"); ax.legend(fontsize=8, frameon=False)
         ax.spines[["top", "right"]].set_visible(False)
 
         # Row 2b: change-size tuning
@@ -164,7 +169,7 @@ def main():
         small = [_stage_scalar(entries, stages[s], "small_resp")[0] for s in present]
         ax.bar(x - w/2, big, w, color="#cb181d", label="large"); ax.bar(x + w/2, small, w, color="#fcae91", label="small")
         ax.set_xticks(x); ax.set_xticklabels(present); ax.set_ylabel("evoked Hz")
-        ax.set_title("Change-size tuning (hit)", fontsize=10); ax.legend(fontsize=7, frameon=False)
+        ax.set_title("Change-size tuning (hit)", fontsize=12); ax.legend(fontsize=7, frameon=False)
         ax.spines[["top", "right"]].set_visible(False)
 
         # Row 2c: choice AUROC
@@ -172,7 +177,7 @@ def main():
         au = [_stage_scalar(entries, stages[s], "choice_auroc") for s in present]
         ax.bar(x, [a[0] for a in au], yerr=[a[1] for a in au], color=[STAGE_COLORS[s] for s in present], capsize=3)
         ax.axhline(0.5, color="0.4", ls="--", lw=1); ax.set_ylim(0, 1); ax.set_xticks(x); ax.set_xticklabels(present)
-        ax.set_ylabel("AUROC (hit vs miss)"); ax.set_title("Choice coding", fontsize=10)
+        ax.set_ylabel("AUROC (hit vs miss)"); ax.set_title("Choice coding", fontsize=12)
         ax.spines[["top", "right"]].set_visible(False)
 
         # Row 2d: RT coding
@@ -180,7 +185,7 @@ def main():
         rt = [_stage_scalar(entries, stages[s], "rt_spearman") for s in present]
         ax.bar(x, [a[0] for a in rt], yerr=[a[1] for a in rt], color=[STAGE_COLORS[s] for s in present], capsize=3)
         ax.axhline(0, color="0.4", lw=0.8); ax.set_xticks(x); ax.set_xticklabels(present)
-        ax.set_ylabel("Spearman(resp, RT)"); ax.set_title("Reaction-time coding (hits)", fontsize=10)
+        ax.set_ylabel("Spearman(resp, RT)"); ax.set_title("Reaction-time coding (hits)", fontsize=12)
         ax.spines[["top", "right"]].set_visible(False)
 
         # Row 3a: TF-encoding across sessions (c1_r per session, colored by resp)
@@ -196,7 +201,7 @@ def main():
         ax.axhline(0.2, color="#d7301f", ls="--", lw=1, label="GLM C1 threshold (0.2)")
         ax.set_xticks(range(len(sk_sorted))); ax.set_xticklabels(labs, rotation=90, fontsize=7)
         ax.set_ylabel("GLM TF-kernel corr (c1_r_log2)")
-        ax.set_title("TF-encoding per session (purple = resp_log2 True)", fontsize=10)
+        ax.set_title("TF-encoding per session (purple = resp_log2 True)", fontsize=12)
         ax.legend(fontsize=7); ax.spines[["top", "right"]].set_visible(False)
 
         # Row 3b: text badge

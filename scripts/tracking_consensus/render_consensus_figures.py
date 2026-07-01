@@ -41,6 +41,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from matplotlib.lines import Line2D
+plt.rcParams.update({"xtick.labelsize": 10, "ytick.labelsize": 10, "axes.labelsize": 11.5})
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -174,7 +175,7 @@ def render_candidate(um_uid, cohort, members, holdout, nonmatched, stage_of,
     for tr, c in zip(traces, colors):
         ax_wave.plot(tr, color=c, lw=1.2, alpha=0.85)
     ax_wave.set_title(f"Spike waveform, every session\n(peak channel; shape r = {wave_r:.2f})",
-                      fontsize=11)
+                      fontsize=12.5)
     ax_wave.set_xlabel("sample"); ax_wave.set_ylabel("µV")
     ax_wave.spines[["top", "right"]].set_visible(False)
     # session-order colorbar (early→late) in the empty top-right header gap
@@ -195,7 +196,7 @@ def render_candidate(um_uid, cohort, members, holdout, nonmatched, stage_of,
         ax.plot(ISI_CENTERS, h, color=c, lw=1.1, alpha=0.8); n_isi += 1
     ax.set_xscale("log")
     ax.set_title(f"Inter-spike-interval fingerprint\n(held-out spikes, {n_isi} sessions)",
-                 fontsize=11)
+                 fontsize=12.5)
     ax.set_xlabel("ISI (s)"); ax.set_ylabel("prob."); ax.spines[["top", "right"]].set_visible(False)
 
     # (0,2) held-out ISI vs population
@@ -206,7 +207,7 @@ def render_candidate(um_uid, cohort, members, holdout, nonmatched, stage_of,
     ax.axvline(mval, color="#d7301f", lw=2.5,
                label=f"this neuron (r={mval:.2f})")
     ax.set_title(f"ISI match vs population\n(cohort AUC {cohort_auc:.2f}; "
-                 f"beats {row['matched_isi_pctile']*100:.0f}% of null)", fontsize=11)
+                 f"beats {row['matched_isi_pctile']*100:.0f}% of null)", fontsize=12.5)
     ax.set_xlabel("cross-session ISI correlation"); ax.set_ylabel("density")
     ax.legend(fontsize=8, loc="upper left"); ax.spines[["top", "right"]].set_visible(False)
 
@@ -217,14 +218,14 @@ def render_candidate(um_uid, cohort, members, holdout, nonmatched, stage_of,
         ax.imshow(snip.T, aspect="auto", cmap="RdBu_r", origin="lower",
                   vmin=-np.abs(snip).max(), vmax=np.abs(snip).max())
         ax.set_title(f"Footprint — {lab} session\n{valid_sess[idx]} "
-                     f"({stage_of.get(valid_sess[idx],'?')})", fontsize=11)
+                     f"({stage_of.get(valid_sess[idx],'?')})", fontsize=12.5)
         ax.set_xlabel("sample"); ax.set_ylabel("channel (near peak)")
 
     # (1,2) depth trajectory
     ax = fig.add_subplot(gs[1, 2])
     ax.plot(range(len(valid_sess)), depths, "-o", color="#238b45", lw=1.5, ms=5)
     ax.set_title(f"Probe depth stability\n(range {np.nanmax(depths)-np.nanmin(depths):.0f} µm)",
-                 fontsize=11)
+                 fontsize=12.5)
     ax.set_xlabel("session (early → late)"); ax.set_ylabel("depth on probe (µm)")
     ax.spines[["top", "right"]].set_visible(False)
 
@@ -247,7 +248,7 @@ def render_candidate(um_uid, cohort, members, holdout, nonmatched, stage_of,
     ax.set_xticks(x); ax.set_xticklabels(union, rotation=90, fontsize=6.5)
     ax.set_title(f"Two independent trackers across all sessions "
                  f"(red = both agree, {len(agreed)} sessions; "
-                 f"UM spans {len(um_s)}, DANT spans {len(dant_s)})", fontsize=11)
+                 f"UM spans {len(um_s)}, DANT spans {len(dant_s)})", fontsize=12.5)
     for sp in ["top", "right", "left"]:
         ax.spines[sp].set_visible(False)
 
@@ -271,7 +272,7 @@ def render_summary(cohort, val):
     ax = fig.add_subplot(gs[0, 0])
     ax.hist(cohort["n_agree"], bins=range(2, int(cohort["n_agree"].max()) + 2),
             color="#238b45", edgecolor="white")
-    ax.set_title("agreed span (sessions)", fontsize=11)
+    ax.set_title("agreed span (sessions)", fontsize=12.5)
     ax.set_xlabel("# sessions both trackers agree"); ax.set_ylabel("# neurons")
     ax.spines[["top", "right"]].set_visible(False)
 
@@ -281,7 +282,7 @@ def render_summary(cohort, val):
     ax.axvline(val["nonmatched_corr_mean"], color="#999999", ls="--",
                label=f"null mean {val['nonmatched_corr_mean']:.2f}")
     ax.set_title(f"held-out ISI match  (cohort AUC {val['auc_matched_vs_nonmatched']:.2f})",
-                 fontsize=11)
+                 fontsize=12.5)
     ax.set_xlabel("cross-session ISI correlation"); ax.set_ylabel("# neurons")
     ax.legend(fontsize=8); ax.spines[["top", "right"]].set_visible(False)
 
@@ -292,7 +293,7 @@ def render_summary(cohort, val):
         ax.text(i, c, str(c), ha="center", va="bottom", fontsize=9)
     n2e = int(cohort["naive_to_expert"].sum()); l2e = int(cohort["learning_to_expert"].sum())
     ax.set_title(f"tracked ≥ k sessions\n(Learning→Expert: {l2e}; strict Naive→Expert: {n2e})",
-                 fontsize=11)
+                 fontsize=12.5)
     ax.set_xlabel("k (min agreed sessions)"); ax.set_ylabel("# neurons")
     ax.spines[["top", "right"]].set_visible(False)
 

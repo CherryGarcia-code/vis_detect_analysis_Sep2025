@@ -29,6 +29,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
+plt.rcParams.update({"xtick.labelsize": 10, "ytick.labelsize": 10, "axes.labelsize": 11.5})
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -205,7 +206,7 @@ def main():
         ax = fig.add_subplot(gs[0, 0])
         for tr, c in zip(traces, colors):
             ax.plot(tr, color=c, lw=1.2, alpha=0.85)
-        ax.set_title(f"Spike waveform, every session\n(peak channel; r = {wave_r:.2f})", fontsize=11)
+        ax.set_title(f"Spike waveform, every session\n(peak channel; r = {wave_r:.2f})", fontsize=12.5)
         ax.set_xlabel("sample"); ax.set_ylabel("µV"); ax.spines[["top", "right"]].set_visible(False)
         cax = ax.inset_axes([0.60, 0.07, 0.36, 0.05])   # tucked bottom-right, clear of header
         cb = fig.colorbar(plt.cm.ScalarMappable(cmap="viridis"), cax=cax, orientation="horizontal")
@@ -220,7 +221,7 @@ def main():
                 continue
             ax.plot(ISI_CENTERS, h, color=c, lw=1.1, alpha=0.8); n_isi += 1
         ax.set_xscale("log")
-        ax.set_title(f"ISI fingerprint\n(held-out spikes, {n_isi} sessions)", fontsize=11)
+        ax.set_title(f"ISI fingerprint\n(held-out spikes, {n_isi} sessions)", fontsize=12.5)
         ax.set_xlabel("ISI (s)"); ax.set_ylabel("prob."); ax.spines[["top", "right"]].set_visible(False)
 
         # (0,2) ISI vs population
@@ -229,7 +230,7 @@ def main():
             ax.hist(nonmatched, bins=40, color="#cccccc", density=True, label="unrelated pairs (null)")
         if np.isfinite(matched_isi):
             ax.axvline(matched_isi, color="#d7301f", lw=2.5, label=f"this neuron (r={matched_isi:.2f})")
-        ax.set_title(f"ISI match vs population\n(AUC {auc:.2f}; beats {pctile*100:.0f}% of null)", fontsize=11)
+        ax.set_title(f"ISI match vs population\n(AUC {auc:.2f}; beats {pctile*100:.0f}% of null)", fontsize=12.5)
         ax.set_xlabel("cross-session ISI corr"); ax.set_ylabel("density")
         ax.legend(fontsize=8, loc="upper left"); ax.spines[["top", "right"]].set_visible(False)
 
@@ -244,7 +245,7 @@ def main():
         # (1,2) depth trajectory
         ax = fig.add_subplot(gs[1, 2])
         ax.plot(range(len(vsess)), depths, "-o", color="#238b45", lw=1.5, ms=5)
-        ax.set_title(f"Probe depth stability\n(range {depth_rng:.0f} µm)", fontsize=11)
+        ax.set_title(f"Probe depth stability\n(range {depth_rng:.0f} µm)", fontsize=12.5)
         ax.set_xlabel("session (early → late)"); ax.set_ylabel("depth (µm)")
         ax.spines[["top", "right"]].set_visible(False)
 

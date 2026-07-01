@@ -375,22 +375,35 @@ def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str,
         ax.set_title(title, fontsize=10)
         return
 
+    from scipy.ndimage import gaussian_filter1d
     mat, centers, _stages, _ = data
-    mat_sub = mat - float(baseline_scalar)
-    # Symmetric vmax from absolute-value 95th percentile, with a floor so
-    # near-zero-modulation cells don't get a degenerate scale.
-    vmax = max(float(np.percentile(np.abs(mat_sub), 95)), 0.5)
-    ax.imshow(mat_sub, aspect="auto", origin="upper", cmap="RdBu_r",
-              extent=[centers[0], centers[-1], mat_sub.shape[0], 0],
+    centers = np.asarray(centers, dtype=float)
+    # (1) Smooth each session row (sigma ~= 25 ms) so single-unit per-bin Poisson
+    #     noise doesn't dominate; (2) z-score to a SHARED pre-event baseline
+    #     (mean+SD pooled over pre-0 bins across all sessions) so the noise scale is
+    #     divided out and modulation reads clearly regardless of firing rate.
+    bin_ms = (centers[1] - centers[0]) * 1000.0 if len(centers) > 1 else 25.0
+    mat_s = gaussian_filter1d(mat, max(25.0 / bin_ms, 0.5), axis=1)
+    base = centers < 0
+    if not base.any():
+        base = np.ones_like(centers, dtype=bool)
+    b = mat_s[:, base]
+    mu, sd = float(b.mean()), float(b.std())
+    if sd < 1e-6:
+        sd = 1.0
+    matz = (mat_s - mu) / sd
+    vmax = float(np.clip(np.percentile(np.abs(matz), 95), 2.0, 6.0))
+    ax.imshow(matz, aspect="auto", origin="upper", cmap="RdBu_r",
+              extent=[centers[0], centers[-1], matz.shape[0], 0],
               vmin=-vmax, vmax=vmax)
     ax.axvline(0, color="0.3", linewidth=0.8, alpha=0.7)
-    ax.set_title(title, fontsize=10)
-    ax.set_xlabel("time (s)"); ax.set_ylabel("session #")
-    # Inline ±vmax annotation so reviewers can calibrate the color scale.
-    ax.text(0.98, 0.02, f"±{vmax:.1f} Hz",
-            transform=ax.transAxes, fontsize=7, color="0.3",
+    ax.set_title(title, fontsize=12)
+    ax.set_xlabel("time (s)", fontsize=11); ax.set_ylabel("session #", fontsize=11)
+    ax.tick_params(labelsize=9)
+    ax.text(0.98, 0.02, f"±{vmax:.1f} z  (25 ms smooth, shared baseline)",
+            transform=ax.transAxes, fontsize=8.5, color="0.3",
             ha="right", va="bottom",
-            bbox=dict(facecolor="white", edgecolor="none", alpha=0.7, pad=1))
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.75, pad=1))
 
     if dropped_indices:
         # Build uid_idx -> heatmap_row_idx mapping using the same filter as
@@ -455,9 +468,14 @@ def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
         if mask.sum() == 0:
             continue
         label_solid = f"{st} hit" if miss_keys else st
-        stage_mean = mat[mask].mean(axis=0) - float(baseline_scalar)
+        smat = mat[mask] - float(baseline_scalar)
+        stage_mean = smat.mean(axis=0)
         ax.plot(centers, stage_mean, color=STAGE_COLORS_LOCAL[st],
-                linewidth=1.2, label=label_solid)
+                linewidth=1.8, label=label_solid)
+        if smat.shape[0] >= 2:   # 95% CI band across this stage's sessions
+            sem = smat.std(axis=0, ddof=1) / np.sqrt(smat.shape[0])
+            ax.fill_between(centers, stage_mean - 1.96 * sem, stage_mean + 1.96 * sem,
+                            color=STAGE_COLORS_LOCAL[st], alpha=0.20, linewidth=0)
         has_label = True
 
     if miss_keys:
@@ -472,20 +490,24 @@ def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
                 mask = np.array([s == st for s in mstages])
                 if mask.sum() == 0:
                     continue
-                stage_mean = mmat[mask].mean(axis=0) - float(baseline_scalar)
+                mm = mmat[mask] - float(baseline_scalar)
+                stage_mean = mm.mean(axis=0)
                 ax.plot(mcenters, stage_mean,
-                        color=STAGE_COLORS_LOCAL[st], linewidth=1.0,
-                        linestyle="--", alpha=0.7,
-                        label=f"{st} miss")
+                        color=STAGE_COLORS_LOCAL[st], linewidth=1.4,
+                        linestyle="--", alpha=0.85, label=f"{st} miss")
+                if mm.shape[0] >= 2:
+                    sem = mm.std(axis=0, ddof=1) / np.sqrt(mm.shape[0])
+                    ax.fill_between(mcenters, stage_mean - 1.96 * sem, stage_mean + 1.96 * sem,
+                                    color=STAGE_COLORS_LOCAL[st], alpha=0.10, linewidth=0)
                 has_label = True
 
     ax.axvline(0, color="0.5", linewidth=0.7)
     ax.axhline(0, color="0.7", linewidth=0.5, alpha=0.8, zorder=0)
-    ax.set_xlabel("time (s)")
-    ax.set_ylabel("Hz (rel. baseline)")
-    ax.tick_params(labelsize=8)
+    ax.set_xlabel("time (s)", fontsize=11)
+    ax.set_ylabel("Hz (rel. baseline)", fontsize=11)
+    ax.tick_params(labelsize=10)
     if has_label:
-        ax.legend(loc="upper right", fontsize=6 if miss_keys else 7, frameon=False)
+        ax.legend(loc="upper right", fontsize=8 if miss_keys else 9, frameon=False)
 
 
 def render_page2(uid: UIDIntermediate, isi_score: float, depth_std: float,
