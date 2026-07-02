@@ -338,9 +338,11 @@ def session_date_key(session) -> Tuple[int, int, int]:
     if not m:
         raise ValueError(f"no date digits in session token {session!r}")
     d = m.group(1)
+    if len(d) in (5, 7):                             # DMMYY / DMMYYYY: int64 dropped
+        d = d.zfill(len(d) + 1)                      # the leading-zero DAY -> restore it
     if len(d) == 6:                                  # DDMMYY -> 20YY
         return (2000 + int(d[4:6]), int(d[2:4]), int(d[:2]))
-    d = d.zfill(8)                                   # 7- or 8-digit -> DDMMYYYY
+    d = d.zfill(8)                                   # 8-digit -> DDMMYYYY
     return (int(d[4:]), int(d[2:4]), int(d[:2]))
 
 

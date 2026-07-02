@@ -40,6 +40,23 @@ def test_prefixed_with_v2_suffix():
     assert session_date_key("BG_039_01042025_v2") == (2025, 4, 1)
 
 
+def test_bare_5digit_dmmyy_leading_zero_stripped():
+    # BG_031 manifest stores DDMMYY as an int64 -> the leading-zero DAY is dropped
+    # (5 Mar 2025 -> "50325"). Must parse to 2025-03-05, NOT the (325, 5, 0) garbage
+    # the old zfill(8)-as-DDMMYYYY path produced (silently dropped these sessions).
+    assert session_date_key("50325") == (2025, 3, 5)
+    assert session_date_key("70325") == (2025, 3, 7)
+    assert session_date_key(50325) == (2025, 3, 5)          # int form too
+
+
+def test_5digit_matches_6digit_and_prefixed():
+    # the manifest 5-digit form and the pkl/registry 6-digit + prefixed forms of the
+    # SAME session must yield the SAME key (so the join succeeds).
+    assert (session_date_key("50325")
+            == session_date_key("050325")
+            == session_date_key("BG_031_050325") == (2025, 3, 5))
+
+
 def test_chronological_ordering_mixed_formats():
     sessions = ["BG_031_19052025_b", "BG_031_050325", "BG_031_01042025"]
     assert sorted(sessions, key=session_date_key) == [
