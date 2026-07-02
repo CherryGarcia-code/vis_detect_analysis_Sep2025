@@ -21,9 +21,11 @@ signal** (proven by a stimulus-matched control). (3) That ramp is larger in Naiv
 Expert in **DMS** (a learning effect, but a motor one). (4) **THE POSITIVE:**
 TF-responsive striatal cells **track the moment-to-moment grating speed in real time**
 (~0.45–0.6 s neural lag, matching their independent pulse-response latency), robustly above
-two nulls in both regions; **sustained-kernel cells drive this more than transient ones**.
+two nulls in both regions; **sustained-kernel cells drive this significantly more than
+transient ones** (paired within-session test: DMS p=0.002, VMS p=0.015, pooled p=5×10⁻⁵).
 (An earlier "VMS tracking switches off when disengaged" claim did **not** survive proper
-session-level error bars — engagement modulation is unresolved, at best suggestive.)
+session-level CIs or the paired test — engagement modulation is unresolved, at best a weak
+VMS trend, p≈0.055.)
 
 ---
 
@@ -155,25 +157,30 @@ latency, not a fast V1-like one. (This is why the green overlay hugs the trackin
 (0.037) is nominally above Disengaged (0.018) but the CIs overlap; DMS even reverses
 (Disengaged nominally higher). An earlier version pooled *per trial*, which gave falsely
 tight bands and a big apparent gap (the old "VMS 0.034 vs 0.004") — that was
-**pseudoreplication**, not a real gate. **Honest verdict: engagement modulation of tracking
-is at best *suggestive* (VMS direction) and needs a paired within-session test to claim — do
-NOT say "tracking switches off when disengaged."**
+**pseudoreplication**, not a real gate. **A paired within-session test settles it: engagement
+is NOT significant** — per session (StimSens−Disengaged mean r in the 0.3–0.6 s window),
+Wilcoxon signed-rank gives **DMS p=0.85** (24/41 sessions positive), **VMS p=0.055** (18/27 —
+a weak trend in the StimSens direction), **pooled p=0.16**. **Verdict: engagement modulation
+of tracking is unresolved — at most a weak VMS trend. Do NOT say "tracking switches off when
+disengaged."**
 
 **Transient vs sustained responders (TF-kernel-width split; method from the sibling TF-GLM
 analysis — transient `fwhm ≤ 50 ms`, sustained `fwhm ≥ 150 ms`, both from the registry
-`kernel_fwhm`).** **Sustained responders track the continuous stimulus better than transient
-ones in both regions** (VMS sustained 0.039 vs transient 0.022; DMS 0.029 vs 0.014), at a
-shorter lag. Mechanistically sensible — sustained/broad-kernel cells integrate the ongoing
-fluctuation; transient/narrow-kernel cells fire to onsets. Direction is consistent across
-regions but the CIs overlap (sustained = fewer cells) → **suggestive**, would firm up with a
-paired test. Caveat: ~60 % of cells sit at the 50 ms FWHM floor, so "transient" is a coarse
-bucket.
+`kernel_fwhm`).** **Sustained responders track the continuous stimulus significantly better
+than transient ones in both regions** (VMS sustained 0.039 vs transient 0.022; DMS 0.029 vs
+0.014), at a shorter lag. **The paired within-session test confirms this** — sustained−transient
+per session is **DMS p=0.002** (15/18 positive), **VMS p=0.015** (18/24), **pooled p=5×10⁻⁵**
+(33/42 sessions sustained>transient). Mechanistically sensible: sustained/broad-kernel cells
+integrate the ongoing fluctuation; transient/narrow-kernel cells fire to onsets. Caveat: ~60 %
+of cells sit at the 50 ms FWHM floor, so "transient" is a coarse bucket — but the class contrast
+is robust to the paired test. **This is the firmest positive in the tracking analysis.**
 
 **How to say it:** *TF-responsive striatal cells carry a small but reliable real-time
 read-out of the grating speed, ~0.45–0.6 s behind it — cleanly above shuffle and
 non-responsive controls, at a lag that matches their independent pulse-response latency.
-Sustained-kernel cells drive it more than transient ones. Whether engagement modulates it is
-unresolved — the apparent gating did not survive proper session-level error bars.*
+Sustained-kernel cells drive it significantly more than transient ones (paired test, both
+regions). Whether engagement modulates it is unresolved — the apparent gating did not survive
+proper session-level error bars (paired test n.s.; VMS only a weak trend).*
 
 ### Why this positive is trustworthy (the verification)
 
