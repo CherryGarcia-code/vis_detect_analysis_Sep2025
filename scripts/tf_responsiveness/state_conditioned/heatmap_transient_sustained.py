@@ -41,7 +41,9 @@ ALIGN = {  # name: (display window, baseline window)
     "change": ((-0.5, 1.0), (-0.5, -0.05)),
     "fa": ((-0.8, 0.8), (-0.8, -0.40)),
 }
-TITLES = {"pulse": "fast TF pulse", "change": "Hit @ Change_ON", "fa": "FA @ early-lick"}
+TITLES = {"pulse": "fast TF pulse", "change": "Change_ON (hit trials)", "fa": "FA (early lick)"}
+XLAB = {"pulse": "t from fast TF pulse (s)", "change": "t from Change_ON (s)",
+        "fa": "t from FA lick (s)"}
 MIN_EV = 5
 PULSE_CAP = 600          # subsample fast pulses (thousands/session) — plenty for a mean PETH
 OUT = Path("E:/python_analysis/git_repos/vd_tf_bg046/FIGURES/tf_glm_bg046/heatmap_transient_sustained")
@@ -174,8 +176,8 @@ def main():
             pk = np.nanmax(np.abs(M), axis=1, keepdims=True)
             pk[~np.isfinite(pk) | (pk < 1e-9)] = 1.0
             M = M / pk
-        vlim = 1.0 if peaknorm else 4.0
-        ylab = "peak-norm (pop mean)" if peaknorm else "z (pop mean)"
+        vlim = 1.0 if peaknorm else 3.0
+        ylab = "peak-norm (pop mean)" if peaknorm else "z-score (pop mean)"
         # PSTH (normalize-then-average): mean across each class
         axp = fig.add_subplot(gs[0, j])
         for c, col in (("transient", TCOL), ("sustained", SCOL)):
@@ -185,14 +187,16 @@ def main():
                 continue
             mean = np.nanmean(sub, 0)
             sem = np.nanstd(sub, 0) / np.sqrt(np.sum(np.isfinite(sub), 0).clip(1))
-            axp.plot(t, mean, color=col, lw=2, label=c)
+            axp.plot(t, mean, color=col, lw=2.2, label=c)
             axp.fill_between(t, mean - sem, mean + sem, color=col, alpha=0.2)
         axp.axvline(0, color="0.6", lw=0.8); axp.axhline(0, color="0.85", lw=0.8)
-        axp.set_title(TITLES[k] + ("  (shape)" if peaknorm else "  (magnitude)"),
-                      fontsize=12, fontweight="bold")
-        axp.set_xlim(t[0], t[-1]); axp.set_ylabel(ylab if j == 0 else "")
+        axp.set_title(TITLES[k] + ("  — shape" if peaknorm else "  — magnitude"),
+                      fontsize=14, fontweight="bold")
+        axp.set_xlim(t[0], t[-1])
         if j == 0:
-            axp.legend(frameon=False, fontsize=9)
+            axp.set_ylabel(ylab, fontsize=13)
+            axp.legend(frameon=False, fontsize=11)
+        axp.tick_params(labelsize=11)
         for sp in ("top", "right"):
             axp.spines[sp].set_visible(False)
         # heatmap
@@ -200,20 +204,27 @@ def main():
         ims[k] = axh.imshow(M, aspect="auto", cmap="RdBu_r", vmin=-vlim, vmax=vlim,
                             extent=[t[0], t[-1], len(M), 0], interpolation="nearest")
         axh.axhline(n_tr, color="k", lw=1.5)
-        axh.axvline(0, color="k", lw=0.8, ls="--")
-        axh.set_xlabel(f"t from {TITLES[k].split('@')[0].strip()} (s)")
+        axh.axvline(0, color="k", lw=1.0, ls="--")
+        axh.set_xlabel(XLAB[k], fontsize=13)
+        axh.tick_params(labelsize=11)
         if j == 0:
-            axh.set_ylabel("cell  (transient ↑ | sustained ↓)")
-            axh.text(-0.14, n_tr / 2, "transient", rotation=90, va="center", ha="center",
-                     transform=axh.get_yaxis_transform(), color=TCOL, fontsize=11, fontweight="bold")
-            axh.text(-0.14, n_tr + (len(M) - n_tr) / 2, "sustained", rotation=90, va="center", ha="center",
-                     transform=axh.get_yaxis_transform(), color=SCOL, fontsize=11, fontweight="bold")
+            # the two colored labels ARE the y-axis descriptor (block above/below
+            # the divider); no separate ylabel → no duplication. tick numbers = cell index.
+            axh.text(-0.145, n_tr / 2, "transient", rotation=90, va="center", ha="center",
+                     transform=axh.get_yaxis_transform(), color=TCOL, fontsize=13, fontweight="bold")
+            axh.text(-0.145, n_tr + (len(M) - n_tr) / 2, "sustained", rotation=90, va="center",
+                     ha="center", transform=axh.get_yaxis_transform(), color=SCOL,
+                     fontsize=13, fontweight="bold")
         else:
             axh.set_yticks([])
-    cb1 = fig.colorbar(ims["pulse"], ax=fig.axes[1], fraction=0.05, pad=0.02)
-    cb1.set_label("pulse: peak-norm (shape)", fontsize=8)
-    cb2 = fig.colorbar(ims["fa"], ax=[fig.axes[3], fig.axes[5]], fraction=0.015, pad=0.01)
-    cb2.set_label("change / FA: z-score (per-unit, baseline)")
+    # colorbars: pulse (peak-norm shape) separate from change/FA (z magnitude);
+    # change/FA on symmetric ±3 (was ±4, washed out) so 0 stays white and the bulk 0–2 shows colour
+    cb2 = fig.colorbar(ims["fa"], ax=[fig.axes[3], fig.axes[5]], fraction=0.02, pad=0.015)
+    cb2.set_label("change / FA:  z-score (per-unit, baseline)", fontsize=12)
+    cb2.ax.tick_params(labelsize=10)
+    cb1 = fig.colorbar(ims["pulse"], ax=fig.axes[1], fraction=0.05, pad=0.03)
+    cb1.set_label("pulse: peak-norm", fontsize=11)
+    cb1.ax.tick_params(labelsize=9)
     n_su = len(order) - n_tr
     fig.suptitle(f"TF-responsive cells by kernel width — transient (n={n_tr}) vs sustained (n={n_su})\n"
                  "sustained cells carry the change- and lick-related signals; transient cells are near-pure fast sensory",
