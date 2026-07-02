@@ -170,8 +170,8 @@ def recruit_bins(subj, binsize=BINSIZE):
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    fig = plt.figure(figsize=(19, 15.5))
-    gs = gridspec.GridSpec(4, 4, hspace=0.55, wspace=0.34)
+    fig = plt.figure(figsize=(17, 19.5))
+    gs = gridspec.GridSpec(4, 3, hspace=0.72, wspace=0.30)
     for row, (subj, region, late) in enumerate(ROWS):
         sess, uid, c1, kt = pick_unit(subj, late=late)
         s = load_session(f"{REPO}/data/pkls/{subj}/{sess}.pkl")
@@ -183,8 +183,10 @@ def main():
             t, m, lo, hi = pp[nm]
             axp.plot(t, m, color=col, lw=2, label=nm); axp.fill_between(t, lo, hi, color=col, alpha=0.2)
         axp.axvline(0, color="0.7", lw=0.8); axp.axhline(0, color="0.7", lw=0.8)
-        axp.set_title(f"{subj} ({region})  u{uid}  [{tag}]\nTF pulse  C1={c1:.2f}, peak={kt:.2f}s", fontsize=10.5)
-        axp.set_ylabel("Δ firing (Hz)"); axp.set_xlabel("t from pulse (s)"); axp.legend(frameon=False, fontsize=8)
+        axp.set_title(f"{subj} ({region})  u{uid}  [{tag}]\nTF pulse  C1={c1:.2f}, peak={kt:.2f}s",
+                      fontsize=14, fontweight="bold")
+        axp.set_ylabel("Δ firing (Hz)", fontsize=15); axp.set_xlabel("t from pulse (s)", fontsize=15)
+        axp.legend(frameon=False, fontsize=12)
         # --- Hit vs Miss @ Change_ON ---
         axc = fig.add_subplot(gs[row, 1])
         for oc, col, ls in (("hit", "#1a7f37", "-"), ("miss", "0.45", "--")):
@@ -195,8 +197,9 @@ def main():
                 axc.fill_between(t, lo, hi, color=col, alpha=0.18)
         pw = EVENT_RESPONSIVENESS_WINDOWS["Change_ON"][1]
         axc.axvspan(pw[0], pw[1], color="0.9", zorder=0); axc.axvline(0, color="0.7", lw=0.8)
-        axc.set_title("Hit vs Miss @ Change_ON", fontsize=10); axc.set_xlabel("t from Change_ON (s)")
-        axc.legend(frameon=False, fontsize=8)
+        axc.set_title("Hit vs Miss @ Change_ON", fontsize=14, fontweight="bold")
+        axc.set_xlabel("t from Change_ON (s)", fontsize=15)
+        axc.legend(frameon=False, fontsize=12)
         # --- FA @ early-lick ---
         axf = fig.add_subplot(gs[row, 2])
         r = outcome_peth(spk, s, "fa", "FA")
@@ -206,23 +209,16 @@ def main():
             axf.fill_between(t, lo, hi, color="#8856a7", alpha=0.2)
         fw = EVENT_RESPONSIVENESS_WINDOWS["FA"][1]
         axf.axvspan(fw[0], fw[1], color="0.9", zorder=0); axf.axvline(0, color="0.7", lw=0.8)
-        axf.set_title("FA @ early-lick", fontsize=10); axf.set_xlabel("t from FA (s)")
-        axf.legend(frameon=False, fontsize=8)
-        # --- recruitment ---
-        axr = fig.add_subplot(gs[row, 3]); rb = recruit_bins(subj)
-        axr.plot([b for b, *_ in rb], [f for _, f, _ in rb], "-o", color="#5aa469", ms=6, lw=1.5)
-        for b, f, ns in rb:
-            axr.text(b, f, f"{f:.1f}", ha="center", va="bottom", fontsize=7)
-        axr.set_xticks([b for b, *_ in rb])
-        axr.set_xticklabels([f"{b*BINSIZE+1}-{b*BINSIZE+ns}" for b, _, ns in rb], fontsize=7, rotation=30)
-        axr.set_ylabel("% TF-responsive"); axr.set_ylim(0, None)
-        axr.set_title(f"Recruitment ({BINSIZE}-sess bins,\nchronological, pre-breakdown)", fontsize=9.5)
-        axr.set_xlabel("session bin")
-        for ax in (axc, axf, axr):
+        axf.set_title("FA @ early-lick", fontsize=14, fontweight="bold")
+        axf.set_xlabel("t from FA (s)", fontsize=15)
+        axf.legend(frameon=False, fontsize=12)
+        for ax in (axp, axc, axf):
+            ax.tick_params(labelsize=12)
             for sp in ("top", "right"):
                 ax.spines[sp].set_visible(False)
-    fig.suptitle("Representative TF-responsive cells — TF-pulse + outcome responses (95% CI) · "
-                 "recruitment across 5-session bins (QC-pass, pre-breakdown; early vs late BG_031)", fontsize=13, y=0.995)
+    fig.suptitle("Representative TF-responsive cells — TF-pulse + outcome responses (95% CI)\n"
+                 "(QC-pass, pre-breakdown sessions; early- vs late-responding BG_031 exemplars)",
+                 fontsize=16, y=1.0)
     for ext in ("png", "pdf"):
         fig.savefig(OUT / f"representative_cells.{ext}", dpi=170, bbox_inches="tight")
     plt.close(fig)
