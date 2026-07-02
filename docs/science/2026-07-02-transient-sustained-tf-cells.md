@@ -79,6 +79,16 @@ rate, and the three Δrate metrics above (cache
 to both licks; transient cells have a sharp TF pulse response but little
 change/lick signal.
 
+**Robustness (`robustness_width_coupling/robustness_width_coupling.png`).** Because
+`kernel_fwhm` is a coarse 50 ms-grid index, we confirmed the effect is not a
+threshold artifact: the **continuous** Spearman(kernel_fwhm, outcome) is monotonic
+and significant, **in both regions** — Change ρ=+0.18 (p=3×10⁻⁵; DMS +0.15/VMS +0.19),
+Hit ρ=+0.24 (2×10⁻⁸; +0.35/+0.18), FA ρ=+0.32 (4×10⁻¹⁴; +0.32/+0.34); and the
+sustained−transient gap is significant across four split definitions (current,
+median-split, exclude-floor, strict) — all p<10⁻³ for Hit/FA, three of four for
+Change (median-split is the only weak one, expected because it lumps borderline
+0.05 s cells into "sustained").
+
 ---
 
 ## 3. `heatmap_transient_sustained/heatmap_transient_sustained.png` — presentation figure
@@ -180,9 +190,21 @@ session-mixed-model **p=0.49**. The raw-Hz result was also pseudoreplicated
 "sensory-drive class-invariant" control was vacuous (both classes ~0 on this GLM
 metric).
 
-**Bottom line:** the width split does **not** rescue the (previously reported)
-weak/absent single-cell state effect. Sensory and coupling structure is state-
-axis-orthogonal here, consistent with the project's TF/state findings.
+**StimSens vs Impulsive (within-cell, `statesplit_rt_leakage/`).** Sustained cells'
+change response *looked* larger in the Impulsive state (paired Wilcoxon p=4×10⁻³),
+but this is **lick/RT leakage**: Impulsive hits are ~120 ms faster (0.50 vs 0.63 s,
+p=3×10⁻¹¹), so the lick leaks into the (0,0.25) s window. The effect decays as
+leakage is removed — uncensored p=4×10⁻³ → **lick-censored (0→lick) p=0.067** →
+**RT>0.25 s clean subset p=0.33 (null)**. Transient cells null throughout. So it
+is not a genuine gain effect. (Reusable lesson: any Change_ON-window metric split
+by a condition that differs in RT must be lick-censored + RT-matched.)
+
+**Bottom line — the transient/sustained axis is STATE-INVARIANT.** Every route
+(task-state loading, StimSens-vs-Impulsive, FA-by-state, single-cell state-split)
+is null under proper controls. The functional dissociation (§§2–6) does not depend
+on behavioural engagement state — consistent with the Lohse picture (sensory and
+coupling structure preserved across states; state is a separate/orthogonal axis
+not attributable to these cell classes).
 
 ---
 
