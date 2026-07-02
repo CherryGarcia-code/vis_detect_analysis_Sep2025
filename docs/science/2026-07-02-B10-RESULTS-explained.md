@@ -20,8 +20,10 @@ behavioral state → impulsivity here looks **internally driven, not stimulus-tr
 signal** (proven by a stimulus-matched control). (3) That ramp is larger in Naive than
 Expert in **DMS** (a learning effect, but a motor one). (4) **THE POSITIVE:**
 TF-responsive striatal cells **track the moment-to-moment grating speed in real time**
-(~0.4 s neural lag), robustly above two nulls, and in **VMS this tracking is switched off
-when the animal disengages** (engagement gating).
+(~0.45–0.6 s neural lag, matching their independent pulse-response latency), robustly above
+two nulls in both regions; **sustained-kernel cells drive this more than transient ones**.
+(An earlier "VMS tracking switches off when disengaged" claim did **not** survive proper
+session-level error bars — engagement modulation is unresolved, at best suggestive.)
 
 ---
 
@@ -128,31 +130,50 @@ an urgency/motor ramp, not a sensory signal; the control proves the ramp isn't t
    - **Non-responsive control**: the same signed-sum built from *non*-TF-responsive cells
      (subsampled to the same count). Should sit at ~0.
 
-**Result (peak Pearson r):**
+**Result (peak Pearson r; window extended to 1.0 s, 95% bootstrap-over-session CIs):**
 
 | Region | responsive (real) | trial-shuffle null | non-responsive | peak lag |
 |---|---|---|---|---|
-| **DMS** (046+039, 51 sess) | **0.017** | −0.0004 | 0.0018 | ~0.50 s |
-| **VMS** (031, 31 sess) | **0.034** | 0.0005 | 0.0068 | ~0.45 s |
+| **DMS** (046+039, 51 sess) | **0.018** | ~0.003 | ~0.002 | **~0.60 s** |
+| **VMS** (031, 31 sess) | **0.034** | ~0.003 | ~0.006 | **~0.45 s** |
 
-The responsive curve **rises with lag and separates cleanly from both nulls** (its
-bootstrap CI excludes the shuffle from ~0.2 s onward). So the striatal TF-responsive
-population **does carry a real-time read-out of the grating speed**, at a ~0.4–0.5 s neural
-lag. The absolute `r` is **small** — expected, because it's a few cells (2–3/session in
-DMS) reading a small, fast, noisy stimulus — but it is **real, time-specific, and
-cell-specific**.
+The responsive curve **rises with lag and its 95% CI separates cleanly from both nulls**
+(from ~0.3 s onward). So the TF-responsive population **carries a real-time read-out of the
+grating speed**. Extending the window mattered: **DMS was right-truncated at 0.5 s — its
+true peak is ~0.60 s**; VMS peaks at ~0.45 s. Both peaks fall inside the **green band = the
+registry pulse-kernel peak-time (median 0.40 s, IQR 0.2–0.6 s)**. The `r` is **small** (a
+few cells reading a small, fast, noisy stimulus) but **real, time-specific, cell-specific**.
 
-**Engagement gating (right panels):** we recompute the tracking curve separately for
-**engaged (StimSens)** vs **Disengaged** trials.
-- **VMS: StimSens r = 0.034 vs Disengaged r = 0.004** — tracking essentially **switches
-  off when the animal disengages**. Striking.
-- DMS: StimSens 0.017 vs Disengaged 0.011 — modest, and tracking persists when disengaged
-  (consistent with B9's "TF cells still encode when disengaged").
+**Why ~400–600 ms and not fast?** These striatal TF cells are genuinely slow — their *own*
+registry pulse-response kernel peaks at **median ~0.40 s** (IQR 0.2–0.6). So the tracking
+lag is **not a smoothing artifact**: two independent methods (pulse-aligned GLM and
+continuous cross-correlation) agree on ~0.4–0.6 s. It's an evidence-integration-scale
+latency, not a fast V1-like one. (This is why the green overlay hugs the tracking peak.)
 
-**How to say it:** *striatal cells that encode grating speed track it moment-to-moment,
-~0.4 s behind the stimulus — cleanly above a shuffle and a non-responsive control. In
-ventral striatum this real-time read-out is gated by attention: it's present when the
-mouse is engaged and vanishes when it disengages.*
+**Engagement (StimSens vs Disengaged) — NOT established once CI'd honestly.** With proper
+**session-level** bootstrap CIs the two curves **overlap** in both regions: VMS StimSens
+(0.037) is nominally above Disengaged (0.018) but the CIs overlap; DMS even reverses
+(Disengaged nominally higher). An earlier version pooled *per trial*, which gave falsely
+tight bands and a big apparent gap (the old "VMS 0.034 vs 0.004") — that was
+**pseudoreplication**, not a real gate. **Honest verdict: engagement modulation of tracking
+is at best *suggestive* (VMS direction) and needs a paired within-session test to claim — do
+NOT say "tracking switches off when disengaged."**
+
+**Transient vs sustained responders (TF-kernel-width split; method from the sibling TF-GLM
+analysis — transient `fwhm ≤ 50 ms`, sustained `fwhm ≥ 150 ms`, both from the registry
+`kernel_fwhm`).** **Sustained responders track the continuous stimulus better than transient
+ones in both regions** (VMS sustained 0.039 vs transient 0.022; DMS 0.029 vs 0.014), at a
+shorter lag. Mechanistically sensible — sustained/broad-kernel cells integrate the ongoing
+fluctuation; transient/narrow-kernel cells fire to onsets. Direction is consistent across
+regions but the CIs overlap (sustained = fewer cells) → **suggestive**, would firm up with a
+paired test. Caveat: ~60 % of cells sit at the 50 ms FWHM floor, so "transient" is a coarse
+bucket.
+
+**How to say it:** *TF-responsive striatal cells carry a small but reliable real-time
+read-out of the grating speed, ~0.45–0.6 s behind it — cleanly above shuffle and
+non-responsive controls, at a lag that matches their independent pulse-response latency.
+Sustained-kernel cells drive it more than transient ones. Whether engagement modulates it is
+unresolved — the apparent gating did not survive proper session-level error bars.*
 
 ### Why this positive is trustworthy (the verification)
 

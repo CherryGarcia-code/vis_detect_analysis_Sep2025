@@ -29,14 +29,23 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from visdetect.analysis import psychophysical_kernel as pk
+from visdetect.analysis.config import session_date_key
 from visdetect.suite.plotting import setup_style
 from visdetect.analysis.evidence_learning_io import (
     CACHE_DIR, FIG_DIR, subject_sessions, tf_responsive_units,
     load_state_labels_by_key)
 
+# Transient/sustained split of TF-responsive cells (method from the vd_tf_bg046
+# chat): a hard threshold on the GLM TF-kernel width `kernel_fwhm` (already a
+# registry column). transient <= 0.05 s (one 50 ms bin), sustained >= 0.15 s.
+# ~60% of cells sit at the 50 ms floor -> "transient" is a coarse, resolution-
+# limited bucket; treat the split as a heuristic.
+FWHM_TRANSIENT_S = 0.05
+FWHM_SUSTAINED_S = 0.15
+
 setup_style()
 REGION_POOLS = {"DMS": ("BG_046", "BG_039"), "VMS": ("BG_031",)}
-MAX_LAG_S = 0.5
+MAX_LAG_S = 1.0      # extended past 0.5 so the DMS peak (near the old edge) is interior
 # The neural response INTEGRATES the stimulus over ~250 ms (Khilkevich-Lohse), so
 # correlate at that timescale, not raw 50 ms bins (Poisson-noise dominated).
 SMOOTH_SIGMA_S = 0.15
@@ -94,19 +103,73 @@ def _boot_band(curves, n_boot=1000, seed=pk.BOOT_SEED):
     return mean, lo, hi
 
 
+def region_kernel_peak_t(subs):
+    """(median, q25, q75) of the registry pulse-response kernel_peak_t for the
+    responsive cells of a region — the INDEPENDENT pulse-based estimate of these
+    cells' TF-response latency, to anchor the continuous-tracking peak lag."""
+    vals = []
+    for subject in subs:
+        fn = subject.replace("_", "").lower()
+        reg = pd.read_csv(os.path.join("data", "cache", "tf_responsive",
+                                       f"{fn}_tf_responsive.csv"))
+        r = reg[reg["resp_log2"] == True]
+        if "kernel_peak_t" in r:
+            vals.append(np.asarray(r["kernel_peak_t"].dropna(), float))
+    if not vals:
+        return None
+    v = np.concatenate(vals)
+    return float(np.median(v)), float(np.percentile(v, 25)), float(np.percentile(v, 75))
+
+
+def tf_responsive_classes(subject):
+    """{session_date_key: {cluster_id: 'transient'|'sustained'|'intermediate'}}
+    for responsive cells, from the registry `kernel_fwhm` (vd_tf_bg046 method)."""
+    fn = subject.replace("_", "").lower()
+    reg = pd.read_csv(os.path.join("data", "cache", "tf_responsive",
+                                   f"{fn}_tf_responsive.csv"))
+    reg = reg[reg["resp_log2"] == True].copy()
+    reg["skey"] = reg["session"].map(session_date_key)
+
+    def _cls(w):
+        w = float(w)
+        if w <= FWHM_TRANSIENT_S:
+            return "transient"
+        if w >= FWHM_SUSTAINED_S:
+            return "sustained"
+        return "intermediate"
+
+    out = {}
+    for skey, g in reg.groupby("skey"):
+        out[skey] = {int(u): _cls(w) for u, w in zip(g["unit"], g["kernel_fwhm"])}
+    return out
+
+
+def _overlay_kernel_peak_t(ax, kpt):
+    """Shade the registry pulse-kernel peak-time IQR + median on a lag axis."""
+    if kpt is None:
+        return
+    med, q1, q3 = kpt
+    ax.axvspan(q1, q3, color="green", alpha=0.07, zorder=0)
+    ax.axvline(med, color="green", ls=":", lw=1.2,
+               label=f"pulse-kernel peak (med {med:.2f}s)")
+
+
 def main():
     dt = pk.DT
     max_lag = int(round(MAX_LAG_S / dt))
     lags = np.arange(max_lag + 1) * dt
     stats = []
-    fig, axes = plt.subplots(len(REGION_POOLS), 2,
-                             figsize=(12, 4 * len(REGION_POOLS)), squeeze=False)
+    fig, axes = plt.subplots(len(REGION_POOLS), 3,
+                             figsize=(17, 4 * len(REGION_POOLS)), squeeze=False)
     for ri, (region, subs) in enumerate(REGION_POOLS.items()):
         resp_real, resp_shuf, nonresp_real = [], [], []
-        state_curves = {"StimSens": [], "Disengaged": []}
+        transient_real, sustained_real = [], []
+        state_curves = {"StimSens": [], "Disengaged": []}   # per-SESSION mean curves
+        state_ntr = {"StimSens": 0, "Disengaged": 0}
         for subject in subs:
             resp = tf_responsive_units(subject, responsive=True)
             nonr = tf_responsive_units(subject, responsive=False)
+            cls_by = tf_responsive_classes(subject)
             rng = np.random.default_rng(pk.BOOT_SEED)
             for skey, sname, stage, sess in subject_sessions(subject):
                 rsigns = resp.get(skey, {})
@@ -126,61 +189,99 @@ def main():
                     n_real, _, _ = session_tracking(sess, nsigns, rng)
                     if n_real is not None:
                         nonresp_real.append(n_real)
-                # state split: accumulate each trial's full lag curve by state
+                # transient vs sustained (registry kernel_fwhm class)
+                cmap = cls_by.get(skey, {})
+                t_signs = {c: s for c, s in rsigns.items() if cmap.get(c) == "transient"}
+                s_signs = {c: s for c, s in rsigns.items() if cmap.get(c) == "sustained"}
+                if t_signs:
+                    t_real, _, _ = session_tracking(sess, t_signs, rng)
+                    if t_real is not None:
+                        transient_real.append(t_real)
+                if s_signs:
+                    s_real, _, _ = session_tracking(sess, s_signs, rng)
+                    if s_real is not None:
+                        sustained_real.append(s_real)
+                # state split: per-session MEAN lag-curve per state (session = the
+                # bootstrap unit, so the state panels get session-level CIs)
                 labels = load_state_labels_by_key(subject, skey)
-                if labels is not None:
-                    for idx, rc in per_trial.items():
-                        if idx in labels.index:
-                            row = labels.loc[idx]
-                            if (float(row["state_confidence"]) >= CONF
-                                    and row["state_label"] in state_curves):
-                                state_curves[row["state_label"]].append(rc)
-        # Panel 1: lag-r curves
+                if labels is None:
+                    continue
+                sess_state = {"StimSens": [], "Disengaged": []}
+                for idx, rc in per_trial.items():
+                    if idx in labels.index:
+                        row = labels.loc[idx]
+                        if (float(row["state_confidence"]) >= CONF
+                                and row["state_label"] in sess_state):
+                            sess_state[row["state_label"]].append(rc)
+                for st, cs in sess_state.items():
+                    if cs:
+                        state_curves[st].append(np.nanmean(np.asarray(cs, float), axis=0))
+                        state_ntr[st] += len(cs)
+        kpt = region_kernel_peak_t(subs)
+        # Panel 1: lag-r curves (real + both nulls), all with bootstrap-over-session CIs
         ax = axes[ri][0]
-        m, lo, hi = _boot_band(resp_real)
-        if m is not None:
-            ax.plot(lags, m, color="C1", lw=2, label="TF-responsive (real)")
-            ax.fill_between(lags, lo, hi, color="C1", alpha=0.2)
+        _overlay_kernel_peak_t(ax, kpt)
+        for curves, col, lab, sig in (
+                (resp_real, "C1", "TF-responsive (real)", "responsive_real"),
+                (resp_shuf, "0.5", "trial-shuffle null", "responsive_shuffle"),
+                (nonresp_real, "C0", "non-responsive (control)", "nonresponsive_real")):
+            m, lo, hi = _boot_band(curves)
+            if m is None:
+                continue
+            ls = "--" if sig == "responsive_shuffle" else "-"
+            lw = 2 if sig == "responsive_real" else 1.3
+            ax.plot(lags, m, color=col, ls=ls, lw=lw, label=lab)
+            ax.fill_between(lags, lo, hi, color=col, alpha=0.15)
             pk_i = int(np.nanargmax(m))
-            stats.append({"region": region, "signal": "responsive_real",
-                          "n_sessions": len(resp_real), "peak_r": float(m[pk_i]),
-                          "peak_lag_s": float(lags[pk_i])})
-        ms, _, _ = _boot_band(resp_shuf)
-        if ms is not None:
-            ax.plot(lags, ms, color="0.5", ls="--", label="trial-shuffle null")
-            stats.append({"region": region, "signal": "responsive_shuffle",
-                          "n_sessions": len(resp_shuf),
-                          "peak_r": float(np.nanmax(ms)), "peak_lag_s": np.nan})
-        mn, _, _ = _boot_band(nonresp_real)
-        if mn is not None:
-            ax.plot(lags, mn, color="C0", label="non-responsive (control)")
-            stats.append({"region": region, "signal": "nonresponsive_real",
-                          "n_sessions": len(nonresp_real),
-                          "peak_r": float(np.nanmax(mn)), "peak_lag_s": np.nan})
+            stats.append({"region": region, "signal": sig, "n_sessions": len(curves),
+                          "peak_r": float(m[pk_i]), "peak_lag_s": float(lags[pk_i])})
         ax.axhline(0, color="k", lw=0.5)
         ax.set_title(f"{region}: population tracks momentary TF")
         ax.set_xlabel("neural lag behind stimulus (s)")
         ax.set_ylabel("Pearson r (S(t) vs log2-TF)")
-        ax.legend(fontsize=8)
-        # Panel 2: engagement — mean lag curve for engaged (StimSens) vs Disengaged
-        # trials (proper per-condition curves, NOT a per-trial max).
+        ax.legend(fontsize=7)
+        # Panel 2: engagement — per-session state curves with session-level CIs
         ax2 = axes[ri][1]
+        _overlay_kernel_peak_t(ax2, kpt)
         for st, col in (("StimSens", "#6baed6"), ("Disengaged", "#3474ae")):
-            curves = state_curves[st]
-            if curves:
-                m = np.nanmean(np.asarray(curves, float), axis=0)
-                ax2.plot(lags, m, color=col, label=f"{st} (n={len(curves)})")
-                pk_i = int(np.nanargmax(m))
-                stats.append({"region": region, "signal": f"track_{st}",
-                              "n_sessions": len(curves), "peak_r": float(m[pk_i]),
-                              "peak_lag_s": float(lags[pk_i])})
+            m, lo, hi = _boot_band(state_curves[st])
+            if m is None:
+                continue
+            ax2.plot(lags, m, color=col, lw=1.6,
+                     label=f"{st} ({len(state_curves[st])} sess, {state_ntr[st]} tr)")
+            ax2.fill_between(lags, lo, hi, color=col, alpha=0.18)
+            pk_i = int(np.nanargmax(m))
+            stats.append({"region": region, "signal": f"track_{st}",
+                          "n_sessions": len(state_curves[st]),
+                          "peak_r": float(m[pk_i]), "peak_lag_s": float(lags[pk_i])})
         ax2.axhline(0, color="k", lw=0.5)
         ax2.set_title(f"{region}: tracking by engagement state")
         ax2.set_xlabel("neural lag behind stimulus (s)")
         ax2.set_ylabel("Pearson r (S(t) vs log2-TF)")
-        ax2.legend(fontsize=8)
-    fig.text(0.5, -0.01, "Baseline-only, stimulus-referenced (leakage-safe). Real vs "
-             "trial-shuffle null vs non-responsive control. Region labels provisional.",
+        ax2.legend(fontsize=7)
+        # Panel 3: tracking by TF-kernel class (transient vs sustained responders)
+        ax3 = axes[ri][2]
+        _overlay_kernel_peak_t(ax3, kpt)
+        for curves, col, lab in (
+                (transient_real, "#e6550d", "transient (fwhm<=50ms)"),
+                (sustained_real, "#31a354", "sustained (fwhm>=150ms)")):
+            m, lo, hi = _boot_band(curves)
+            if m is None:
+                continue
+            ax3.plot(lags, m, color=col, lw=1.6, label=f"{lab} ({len(curves)} sess)")
+            ax3.fill_between(lags, lo, hi, color=col, alpha=0.18)
+            pk_i = int(np.nanargmax(m))
+            stats.append({"region": region, "signal": f"track_{lab.split()[0]}",
+                          "n_sessions": len(curves), "peak_r": float(m[pk_i]),
+                          "peak_lag_s": float(lags[pk_i])})
+        ax3.axhline(0, color="k", lw=0.5)
+        ax3.set_title(f"{region}: tracking by TF-kernel class")
+        ax3.set_xlabel("neural lag behind stimulus (s)")
+        ax3.set_ylabel("Pearson r (S(t) vs log2-TF)")
+        ax3.legend(fontsize=7)
+    fig.text(0.5, -0.01, "Baseline-only, stimulus-referenced (leakage-safe). Bands = 95% "
+             "bootstrap CI over sessions. Green = registry pulse-kernel peak time (median "
+             "+ IQR) — the independent pulse-based estimate of these cells' TF latency.",
              ha="center", fontsize=8, style="italic")
     fig.tight_layout()
     outdir = os.path.join(FIG_DIR, "tracking")
