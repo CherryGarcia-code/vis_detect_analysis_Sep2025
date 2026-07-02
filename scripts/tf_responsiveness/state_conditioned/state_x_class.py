@@ -38,7 +38,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
-from scipy.stats import mannwhitneyu, wilcoxon
+from scipy.stats import mannwhitneyu, wilcoxon, spearmanr
 
 _HERE = str(Path(__file__).resolve().parent)
 if _HERE not in sys.path:
@@ -163,6 +163,23 @@ def _mwu(a, b):
     return float(a.median()), float(b.median()), len(a), len(b), float(mannwhitneyu(a, b).pvalue)
 
 
+def _mixed_p(df, col):
+    """p for the class effect on `col` with a session random intercept + region
+    fixed effect — the same pseudoreplication control used for the width claim."""
+    d = df[df["cls"].isin(["transient", "sustained"])].copy()
+    d = d.dropna(subset=[col]).replace([np.inf, -np.inf], np.nan).dropna(subset=[col])
+    d["is_sus"] = (d["cls"] == "sustained").astype(float)
+    try:
+        import warnings
+        import statsmodels.formula.api as smf
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            m = smf.mixedlm(f"{col} ~ is_sus + C(region)", d, groups=d["session"]).fit(method="lbfgs")
+        return float(m.pvalues.get("is_sus", np.nan))
+    except Exception:
+        return np.nan
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
@@ -175,30 +192,52 @@ def main():
         pass
     plt.rcParams.update({"font.size": 11})
     lines = []
+    df["region"] = df["subject"].map({"BG_046": "DMS", "BG_039": "DMS", "BG_031": "VMS"})
     tr, su = df[df.cls == "transient"], df[df.cls == "sustained"]
 
     fig = plt.figure(figsize=(18, 10))
     gs = gridspec.GridSpec(2, 3, hspace=0.42, wspace=0.30)
 
-    # (i) task-state |loading| by class
+    # (i) task-state loading by class — FR-NORMALIZED (per-session z).
+    # CRITICAL FIX (verification): raw-Hz |task_load| is FIRING-RATE-CONFOUNDED
+    # (sustained cells fire faster) — an invalid cross-neuron comparison
+    # (CLAUDE.md golden rule). The honest test uses task_load_z (per-session z
+    # across the responsive pop). It is NULL. The earlier raw-Hz 3.65-vs-2.24
+    # "p=4.9e-3" headline is RETRACTED.
     axa = fig.add_subplot(gs[0, 0])
-    for si, (nm, d_) in enumerate([("transient", tr), ("sustained", su)]):
-        v = d_["task_load"].abs().replace([np.inf, -np.inf], np.nan).dropna()
+    trz = tr["task_load_z"].abs().replace([np.inf, -np.inf], np.nan).dropna()
+    suz = su["task_load_z"].abs().replace([np.inf, -np.inf], np.nan).dropna()
+    for si, v in enumerate([trz, suz]):
         jit = (np.random.default_rng(si).random(len(v)) - 0.5) * 0.28
         axa.scatter(np.full(len(v), si) + jit, v, s=10, alpha=0.4,
-                    color=(TCOL if nm == "transient" else SCOL), edgecolors="none")
+                    color=(TCOL if si == 0 else SCOL), edgecolors="none")
         axa.hlines(np.median(v), si - 0.25, si + 0.25, color="k", lw=2.3, zorder=5)
-    mt, ms, nt, ns, p = _mwu(tr.task_load.abs(), su.task_load.abs())
-    axa.text(0.5, 0.96, f"|task-state loading|\ntransient {mt:.2f} vs sustained {ms:.2f} Hz\nMWU p={p:.1e}",
+    mtz, msz, ntz, nsz, pz = _mwu(tr["task_load_z"].abs(), su["task_load_z"].abs())
+    axa.text(0.5, 0.97, f"FR-normalized (per-session z)\ntransient {mtz:.2f} vs sustained {msz:.2f}\nMWU p={pz:.2f}  —  NS",
              transform=axa.transAxes, ha="center", va="top", fontsize=9)
     axa.set_xticks([0, 1]); axa.set_xticklabels(["transient", "sustained"], fontsize=10)
-    axa.set_ylabel("|engaged − Disengaged| baseline (Hz)")
-    axa.set_ylim(0, np.nanpercentile(df.task_load.abs(), 97))
-    axa.set_title("(i) task-state CD loading by class", fontsize=10.5)
-    lines.append(f"[task_load |·|] transient med={mt:.3f}(n{nt}) vs sustained med={ms:.3f}(n{ns}) MWU p={p:.2e}")
-    # signed, and z
-    mt2, ms2, _, _, p2 = _mwu(tr.task_load, su.task_load)
-    lines.append(f"[task_load signed] t={mt2:.3f} s={ms2:.3f} p={p2:.2e}")
+    axa.set_ylabel("|task-state loading|  (z, FR-normalized)")
+    axa.set_ylim(0, np.nanpercentile(pd.concat([trz, suz]), 97))
+    axa.set_title("(i) task-state loading — FR-normalized = NULL", fontsize=10.5)
+
+    # honest stats: raw (confounded) vs normalized, per-subject, per-region, mixed model
+    mtr, msr, ntr_, nsr, praw = _mwu(tr.task_load.abs(), su.task_load.abs())
+    lines.append(f"[task_load RAW-Hz POOLED] t={mtr:.3f} s={msr:.3f} MWU p={praw:.2e}  <-- FR-CONFOUNDED "
+                 f"(raw Hz scales with firing rate; sustained fire faster); RETRACTED, not a valid cross-neuron test")
+    lines.append(f"[task_load_z FR-NORM POOLED] t={mtz:.3f} s={msz:.3f} MWU p={pz:.3f}  <-- HONEST test = NULL")
+    for subj in ["BG_046", "BG_039", "BG_031"]:
+        a = df[(df.subject == subj) & (df.cls == "transient")]["task_load_z"].abs()
+        b = df[(df.subject == subj) & (df.cls == "sustained")]["task_load_z"].abs()
+        _, _, na, nb, ps = _mwu(a, b)
+        lines.append(f"   z {subj}: t(n{na}) vs s(n{nb}) p={ps if ps == ps else float('nan'):.3f}")
+    for reg in ["DMS", "VMS"]:
+        a = df[(df.region == reg) & (df.cls == "transient")]["task_load_z"].abs()
+        b = df[(df.region == reg) & (df.cls == "sustained")]["task_load_z"].abs()
+        _, _, na, nb, ps = _mwu(a, b)
+        lines.append(f"   z {reg}: t(n{na}) vs s(n{nb}) p={ps if ps == ps else float('nan'):.3f}")
+    df["abs_task_load_z"] = df["task_load_z"].abs()
+    lines.append(f"   |z| session-random-intercept mixedLM (is_sustained) p={_mixed_p(df, 'abs_task_load_z'):.3f}"
+                 f"  [signed-z mixedLM p={_mixed_p(df, 'task_load_z'):.3f}, different question]")
 
     # (ii) change response by state x class
     def state_panel(ax, prefix, title):
@@ -268,8 +307,9 @@ def main():
              transform=axc.transAxes, va="top", ha="left", fontsize=8, family="monospace")
 
     fig.suptitle("2a — does the transient/sustained axis interact with behavioural state?\n"
-                 "(i) task-state CD loading by class · (ii) change & FA ramps split by state",
-                 fontsize=13, y=1.005)
+                 "(i) FR-NORMALIZED task-state loading is NULL (raw-Hz result was a firing-rate artifact) · "
+                 "(ii) change & FA ramps split by state",
+                 fontsize=12.5, y=1.005)
     for ext in ("png", "pdf"):
         fig.savefig(OUT / f"state_x_class.{ext}", dpi=175, bbox_inches="tight")
     plt.close(fig)
