@@ -28,7 +28,8 @@ _HERE = str(Path(__file__).resolve().parent)
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from representative_cells import REPO, _spikes, load_session, get_event_times_by_trial  # noqa: E402
-from transient_vs_sustained import load_cells, TCOL, SCOL                     # noqa: E402
+from transient_vs_sustained import load_cells, TCOL, SCOL, NARROW, BROAD      # noqa: E402
+from matplotlib.colors import TwoSlopeNorm                                    # noqa: E402
 from visdetect.analysis.align import align_spikes_to_events                   # noqa: E402
 from visdetect.analysis.tf_glm import TFGLMConfig, assemble_design, pulse_times_from_tf  # noqa: E402
 from visdetect.analysis.tf_glm_data import session_trial_regressors           # noqa: E402
@@ -160,6 +161,14 @@ def main():
     n_tr = len(order[0])
     order = np.concatenate(order)
 
+    # kernel_fwhm per cell (registry) for the width-distribution top panel — the
+    # actual quantity that DEFINES the classes (sign-agnostic; unlike the raw
+    # pulse-PETH pop-mean, which is ~flat only because cells tile response latencies).
+    cells_reg = load_cells()
+    fwhm_map = {(r.subject, r.session, int(r.unit)): r.kernel_fwhm for r in cells_reg.itertuples()}
+    fwhm = np.array([fwhm_map.get((str(D["meta_subject"][i]), str(D["meta_session"][i]),
+                                   int(D["meta_unit"][i])), np.nan) for i in range(len(cls))])
+
     fig = plt.figure(figsize=(16, 11))
     gs = gridspec.GridSpec(2, 3, height_ratios=[1, 3.2], hspace=0.16, wspace=0.22)
     keys = ["pulse", "change", "fa"]
@@ -176,33 +185,50 @@ def main():
             pk = np.nanmax(np.abs(M), axis=1, keepdims=True)
             pk[~np.isfinite(pk) | (pk < 1e-9)] = 1.0
             M = M / pk
-        vlim = 1.0 if peaknorm else 3.0
-        ylab = "peak-norm (pop mean)" if peaknorm else "z-score (pop mean)"
-        # PSTH (normalize-then-average): mean across each class
+        # ── top panel ────────────────────────────────────────────────
         axp = fig.add_subplot(gs[0, j])
-        for c, col in (("transient", TCOL), ("sustained", SCOL)):
-            m = cls[order] == c
-            sub = M[m]
-            if not len(sub):
-                continue
-            mean = np.nanmean(sub, 0)
-            sem = np.nanstd(sub, 0) / np.sqrt(np.sum(np.isfinite(sub), 0).clip(1))
-            axp.plot(t, mean, color=col, lw=2.2, label=c)
-            axp.fill_between(t, mean - sem, mean + sem, color=col, alpha=0.2)
-        axp.axvline(0, color="0.6", lw=0.8); axp.axhline(0, color="0.85", lw=0.8)
-        axp.set_title(TITLES[k] + ("  — shape" if peaknorm else "  — magnitude"),
-                      fontsize=14, fontweight="bold")
-        axp.set_xlim(t[0], t[-1])
-        if j == 0:
-            axp.set_ylabel(ylab, fontsize=13)
+        if peaknorm:
+            # kernel-WIDTH distribution by class (defines the classes). The raw
+            # pulse-PETH pop-mean is uninformative: cells tile latencies AND ~50%
+            # are suppression-type, so their signed mean cancels to ~flat.
+            bins = np.arange(0, 0.66, 0.05)
+            for c, col in (("transient", TCOL), ("sustained", SCOL)):
+                axp.hist(fwhm[cls == c], bins=bins, color=col, alpha=0.6, label=c,
+                         density=True, edgecolor="white", linewidth=0.4)
+            axp.axvline(NARROW, color=TCOL, ls="--", lw=1.3)
+            axp.axvline(BROAD, color=SCOL, ls="--", lw=1.3)
+            axp.set_title("kernel WIDTH defines the classes", fontsize=14, fontweight="bold")
+            axp.set_xlabel("GLM TF-kernel FWHM (s)", fontsize=12)
+            axp.set_ylabel("density", fontsize=13)
             axp.legend(frameon=False, fontsize=11)
+        else:
+            for c, col in (("transient", TCOL), ("sustained", SCOL)):
+                sub = M[cls[order] == c]
+                if not len(sub):
+                    continue
+                mean = np.nanmean(sub, 0)
+                sem = np.nanstd(sub, 0) / np.sqrt(np.sum(np.isfinite(sub), 0).clip(1))
+                axp.plot(t, mean, color=col, lw=2.2, label=c)
+                axp.fill_between(t, mean - sem, mean + sem, color=col, alpha=0.2)
+            axp.axvline(0, color="0.6", lw=0.8); axp.axhline(0, color="0.85", lw=0.8)
+            axp.set_title(TITLES[k] + "  — magnitude", fontsize=14, fontweight="bold")
+            axp.set_xlim(t[0], t[-1])
+            axp.set_ylabel("z-score (pop mean)", fontsize=13) if j == 1 else None
         axp.tick_params(labelsize=11)
         for sp in ("top", "right"):
             axp.spines[sp].set_visible(False)
-        # heatmap
+        # ── heatmap ──────────────────────────────────────────────────
         axh = fig.add_subplot(gs[1, j])
-        ims[k] = axh.imshow(M, aspect="auto", cmap="RdBu_r", vmin=-vlim, vmax=vlim,
-                            extent=[t[0], t[-1], len(M), 0], interpolation="nearest")
+        if peaknorm:
+            norm = None
+            imkw = dict(vmin=-1.0, vmax=1.0)
+        else:
+            # asymmetric TwoSlopeNorm: responses are mostly EXCITATORY (0..3),
+            # only mild suppression (down to ~-1.5), so don't waste the deep-blue.
+            norm = TwoSlopeNorm(vmin=-1.5, vcenter=0.0, vmax=3.0)
+            imkw = dict(norm=norm)
+        ims[k] = axh.imshow(M, aspect="auto", cmap="RdBu_r",
+                            extent=[t[0], t[-1], len(M), 0], interpolation="nearest", **imkw)
         axh.axhline(n_tr, color="k", lw=1.5)
         axh.axvline(0, color="k", lw=1.0, ls="--")
         axh.set_xlabel(XLAB[k], fontsize=13)
