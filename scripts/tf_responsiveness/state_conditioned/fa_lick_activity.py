@@ -60,9 +60,12 @@ def main():
         pass
     plt.rcParams.update({"font.size": 12})
 
+    rr = np.nanmean(M[:, pre], axis=1)     # pre-lick ramp per cell (all)
+    rr_s = np.nanmean(Msort[:, pre], axis=1)
+
     fig = plt.figure(figsize=(15, 9))
-    gs = gridspec.GridSpec(2, 3, width_ratios=[0.05, 1, 0.9], height_ratios=[1.1, 3.0],
-                           wspace=0.06, hspace=0.28)
+    gs = gridspec.GridSpec(2, 3, width_ratios=[0.045, 1, 0.62], height_ratios=[1, 3.0],
+                           wspace=0.14, hspace=0.30)
 
     # ── grand-average PSTH (top-middle), class means ──────────────────
     axp = fig.add_subplot(gs[0, 1])
@@ -84,6 +87,22 @@ def main():
     for sp in ("top", "right"):
         axp.spines[sp].set_visible(False)
 
+    # ── pre-lick ramp DISTRIBUTION by class (top-right) ───────────────
+    axd = fig.add_subplot(gs[0, 2])
+    lo, hi = np.nanpercentile(rr[np.isfinite(rr)], [1, 99])
+    bins = np.linspace(lo, hi, 22)
+    for c, col in (("transient", TCOL), ("sustained", SCOL)):
+        v = rr_s[cls_s == c]
+        axd.hist(v, bins=bins, density=True, color=col, alpha=0.5, label=f"{c} (med {np.median(v):+.2f})")
+        axd.axvline(np.median(v), color=col, lw=2.2, ls="--")
+    axd.axvline(0, color="0.6", lw=0.9, ls=":")
+    axd.set_xlabel("pre-lick ramp (z)", fontsize=12); axd.set_ylabel("density", fontsize=12)
+    axd.set_title("sustained ramps are larger", fontsize=13, fontweight="bold")
+    axd.legend(frameon=False, fontsize=9.5, loc="upper right")
+    axd.tick_params(labelsize=10)
+    for sp in ("top", "right"):
+        axd.spines[sp].set_visible(False)
+
     # ── class strip (left of heatmap) ─────────────────────────────────
     axc = fig.add_subplot(gs[1, 0])
     strip = np.array([[0.0] if c == "transient" else [1.0] for c in cls_s])
@@ -92,8 +111,8 @@ def main():
     axc.set_xticks([]); axc.set_yticks([])
     axc.set_ylabel("cells, sorted by pre-lick ramp  →", fontsize=12)
 
-    # ── heatmap (middle) ──────────────────────────────────────────────
-    axh = fig.add_subplot(gs[1, 1])
+    # ── heatmap (spans cols 1–2) ──────────────────────────────────────
+    axh = fig.add_subplot(gs[1, 1:])
     im = axh.imshow(Msort, aspect="auto", cmap="RdBu_r",
                     norm=TwoSlopeNorm(vmin=-1.5, vcenter=0, vmax=3),
                     extent=[t[0], t[-1], n, 0], interpolation="nearest")
@@ -101,30 +120,9 @@ def main():
     axh.axvline(0, color="k", lw=1.1, ls="--")
     axh.set_xlabel("t from FA lick (s)", fontsize=13); axh.set_yticks([])
     axh.tick_params(labelsize=11)
-    cb = fig.colorbar(im, ax=axh, fraction=0.03, pad=0.015, ticks=[-1, 0, 1, 2, 3])
+    # transient/sustained block labels on the colour strip
+    cb = fig.colorbar(im, ax=axh, fraction=0.024, pad=0.012, ticks=[-1, 0, 1, 2, 3])
     cb.set_label("z-score", fontsize=11); cb.ax.tick_params(labelsize=9)
-
-    # ── per-cell pre-lick ramp (right), aligned to heatmap rows ───────
-    axr = fig.add_subplot(gs[1, 2], sharey=axh)
-    y = np.arange(n)
-    rr = np.nanmean(Msort[:, pre], 1)
-    from matplotlib.lines import Line2D
-    for c, col in (("transient", TCOL), ("sustained", SCOL)):
-        m = cls_s == c
-        axr.scatter(rr[m & lick_s], y[m & lick_s], s=11, color=col, alpha=0.75, edgecolors="none")
-        axr.scatter(rr[m & ~lick_s], y[m & ~lick_s], s=11, facecolors="none", edgecolors=col,
-                    linewidths=0.7, alpha=0.7)
-    axr.axvline(0, color="0.6", lw=0.9, ls=":")
-    axr.set_ylim(n, 0); axr.set_yticks([])
-    axr.set_xlabel("pre-lick ramp (z)", fontsize=12)
-    axr.set_title("per cell — filled = lick-responsive", fontsize=11.5)
-    axr.tick_params(labelsize=10)
-    axr.legend(handles=[Line2D([0], [0], marker="o", ls="", color=SCOL, label="sustained"),
-                        Line2D([0], [0], marker="o", ls="", color=TCOL, label="transient"),
-                        Line2D([0], [0], marker="o", ls="", mfc="none", mec="0.4", label="not lick-resp")],
-               frameon=False, fontsize=9.5, loc="lower right")
-    for sp in ("top", "right"):
-        axr.spines[sp].set_visible(False)
 
     fig.suptitle(f"FA-lick-aligned activity of TF-responsive cells (n={n}: {n_tr} transient, {n_su} sustained) — "
                  "sustained cells cluster at the strong pre-lick-ramp end (the basis of their 89% lick-responsiveness)",
