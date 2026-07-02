@@ -35,12 +35,15 @@ when the animal disengages** (engagement gating).
   `y = log2(baseline_values[::3] / median)` on a **50 ms grid** (`baseline_log2tf`). Units:
   log2 octaves around the trial median (0 = median speed, +1 = double).
 - **The neural signal, `S(t)`** — a single "population speed estimate" per trial. For each
-  TF-responsive cell we bin its spikes at 50 ms, **z-score** it to its own baseline
-  mean/SD (so fast- and slow-firing cells count equally), and take a **signed sum**:
-  `S(t) = mean_i sign_i · z_i(t)`, where `sign_i = sign(c1_r_log2)` is +1 for a
-  fast-speed-preferring cell and −1 for a slow-preferring cell (from the TF-GLM registry).
-  So `S(t)` goes up when the fast-preferring cells fire and the slow-preferring cells go
-  quiet — i.e. `S(t)` is the population's read-out of "is the grating fast right now?".
+  TF-responsive cell we bin its spikes at 50 ms and **z-score** it to its own baseline
+  mean/SD (so high- and low-firing cells count equally), then combine as
+  `S(t) = mean_i sign_i · z_i(t)` with `sign_i = sign(c1_r_log2)`. **Important framing note:**
+  the responsiveness threshold (`c1_r_log2 > 0.2`) only admits *fast*-speed-preferring cells,
+  so for the responsive set **every sign is +1** and `S(t)` is simply the **mean z-scored
+  activity of the TF-responsive cells** — it rises when they fire together, i.e. the
+  population's read-out of "is the grating fast right now?". (The `sign_i` only ever
+  differentiates cells in the *non-responsive control* set; for the responsive curve the
+  signed and unsigned means are byte-identical.)
 - **TF-responsive cells** = registry `resp_log2==True` (identified by an independent
   Poisson TF-GLM). Signs from `c1_r_log2`. Pooled **by subject** into DMS (046+039) and
   VMS (031); `region_bank_confirmed` is False across the whole registry so regions are
@@ -173,9 +176,13 @@ Three independent adversarial checks were run (subagents, from scratch):
 It reuses the same signs but mismatched trials; if the sign-labelling alone produced the
 correlation, the shuffle would be just as high. It sits at ~0. So the real>shuffle gap is
 genuine *within-trial, moment-to-moment* co-fluctuation, which a static ±1 label cannot
-create. (A stricter split-half control — derive each unit's sign from odd trials, test on
-even, so the signs never touch the test data — is the definitive confirmation; the
-shuffle-null result above already rules out the static-label artifact.)
+create. A stricter **held-out-sign control confirms this directly**: deriving each unit's
+sign from *odd* trials and measuring tracking on *even* trials only (so the signs never
+touch the test data) gives peak **r = 0.050**, still ~7× the shuffle (0.007) — **not
+circular**. A within-trial **circular-shift null** (same stimulus spectrum, time-lock
+broken) collapses to **−0.001** — so the tracking is genuinely time-locked, not shared
+slow drift. (In fact, because all responsive signs are +1, there is no sign heterogeneity
+for circularity to exploit in the first place.)
 
 ---
 
