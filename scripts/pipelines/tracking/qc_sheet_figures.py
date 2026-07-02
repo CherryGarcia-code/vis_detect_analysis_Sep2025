@@ -393,9 +393,11 @@ def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str,
         sd = 1.0
     matz = (mat_s - mu) / sd
     vmax = float(np.clip(np.percentile(np.abs(matz), 95), 2.0, 6.0))
+    # gaussian interpolation renders the (few-session x bins) grid as a smooth field
+    # instead of blocky nearest-neighbour pixels -- the single biggest legibility win.
     ax.imshow(matz, aspect="auto", origin="upper", cmap="RdBu_r",
               extent=[centers[0], centers[-1], matz.shape[0], 0],
-              vmin=-vmax, vmax=vmax)
+              vmin=-vmax, vmax=vmax, interpolation="gaussian")
     ax.axvline(0, color="0.3", linewidth=0.8, alpha=0.7)
     ax.set_title(title, fontsize=12)
     ax.set_xlabel("time (s)", fontsize=11); ax.set_ylabel("session #", fontsize=11)
