@@ -153,20 +153,22 @@ def main():
     lines = [f"n cells (>=10 FA events) = {len(df)}; "
              + str(df.cls.value_counts().to_dict())]
 
-    fig = plt.figure(figsize=(17, 5.6))
-    gs = gridspec.GridSpec(1, 3, wspace=0.32)
+    fig = plt.figure(figsize=(18, 6.6))
+    gs = gridspec.GridSpec(1, 3, wspace=0.34)
 
     # (1) enrichment: P(lick-resp | class)
     ax1 = fig.add_subplot(gs[0, 0])
     fr, ns = [], []
     for c in ORDER:
         f, n = _frac(df, c); fr.append(f); ns.append(n)
-    ax1.bar(range(len(ORDER)), fr, color=[CLS_COL[c] for c in ORDER])
-    for i, (f, n) in enumerate(zip(fr, ns)):
-        ax1.text(i, f + 1, f"{f:.0f}%\nn{n}", ha="center", va="bottom", fontsize=8)
-    ax1.set_xticks(range(len(ORDER))); ax1.set_xticklabels(ORDER, fontsize=9, rotation=15)
-    ax1.set_ylabel("% lick-responsive"); ax1.set_ylim(0, max(fr) * 1.25 if fr else 100)
-    ax1.set_title("(1) lick-responsiveness by TF class", fontsize=11, fontweight="bold")
+    ax1.bar(range(len(ORDER)), fr, color=[CLS_COL[c] for c in ORDER], width=0.72)
+    for i, f in enumerate(fr):
+        ax1.text(i, f + 2, f"{f:.0f}%", ha="center", va="bottom", fontsize=13, fontweight="bold")
+    ax1.set_xticks(range(len(ORDER)))
+    ax1.set_xticklabels([f"{c}\n(n={n:,})" for c, n in zip(ORDER, ns)], fontsize=10.5)
+    ax1.set_ylabel("% lick-responsive", fontsize=13); ax1.set_ylim(0, 118)
+    ax1.tick_params(labelsize=11)
+    ax1.set_title("(1) lick-responsiveness by TF class", fontsize=13, fontweight="bold", pad=12)
     # sustained vs transient Fisher
     tab = pd.crosstab(df[df.cls.isin(["transient", "sustained"])].cls,
                       df[df.cls.isin(["transient", "sustained"])].lick_sig)
@@ -186,10 +188,13 @@ def main():
         for c in ORDER:
             ax2.bar(xi, comp[c], bottom=bottom, color=CLS_COL[c], label=(c if xi == 0 else None))
             bottom += comp[c]
-    ax2.set_xticks([0, 1]); ax2.set_xticklabels(["lick-resp", "not lick-resp"], fontsize=9)
-    ax2.set_ylabel("fraction"); ax2.set_title("(2) TF composition of lick cells", fontsize=11, fontweight="bold")
-    ax2.legend(frameon=False, fontsize=8, loc="upper right")
     p_tf_given_lick = 100 * df[df.lick_sig].cls.isin(["transient", "sustained", "intermediate"]).mean()
+    ax2.set_xticks([0, 1]); ax2.set_xticklabels(["lick-resp", "not lick-resp"], fontsize=11)
+    ax2.set_ylabel("fraction of cells", fontsize=13); ax2.set_ylim(0, 1.02)
+    ax2.tick_params(labelsize=11)
+    ax2.set_title(f"(2) lick cells are almost all non-TF\n(only {p_tf_given_lick:.0f}% of lick cells are TF-responsive)",
+                  fontsize=12.5, fontweight="bold", pad=10)
+    ax2.legend(frameon=False, fontsize=9.5, loc="lower center", ncol=4, bbox_to_anchor=(0.5, -0.20))
     lines.append(f"[reverse] P(TF-responsive | lick-responsive) = {p_tf_given_lick:.1f}% "
                  f"(so {'largely separate' if p_tf_given_lick < 40 else 'substantial overlap'})")
 
@@ -204,10 +209,12 @@ def main():
         ax3.bar(xs, vals, w, color=("#fdae6b" if stg == "Learning" else "#31a354"), label=stg)
         for x, f, n in zip(xs, vals, nsx):
             if np.isfinite(f):
-                ax3.text(x, f + 1, f"{f:.0f}%\nn{n}", ha="center", va="bottom", fontsize=7.5)
-    ax3.set_xticks(range(2)); ax3.set_xticklabels(["transient", "sustained"], fontsize=9)
-    ax3.set_ylabel("% lick-responsive"); ax3.set_title("(3) acquisition across learning?", fontsize=11, fontweight="bold")
-    ax3.legend(frameon=False, fontsize=9)
+                ax3.text(x, f + 1.5, f"{f:.0f}%\n(n={n})", ha="center", va="bottom", fontsize=10)
+    ax3.set_xticks(range(2)); ax3.set_xticklabels(["transient", "sustained"], fontsize=11)
+    ax3.set_ylabel("% lick-responsive", fontsize=13); ax3.set_ylim(0, 118)
+    ax3.tick_params(labelsize=11)
+    ax3.set_title("(3) acquisition across learning?  (both n.s.)", fontsize=13, fontweight="bold", pad=12)
+    ax3.legend(frameon=False, fontsize=11, loc="lower right")
     for c in ["transient", "sustained"]:
         for stg in ["Learning", "Expert"]:
             f, n = _frac(df, c, stg)
