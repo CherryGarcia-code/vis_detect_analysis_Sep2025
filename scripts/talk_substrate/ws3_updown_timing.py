@@ -41,8 +41,8 @@ import _common as C  # noqa: E402
 import _events_plot as E  # noqa: E402
 from visdetect.suite.plotting import setup_style  # noqa: E402
 
-setup_style()
-UP, DOWN = "#d73027", "#4575b4"
+C.setup_talk_style()
+UP, DOWN = C.SIGN_COLORS["up"], C.SIGN_COLORS["down"]   # canonical (config.MODULATION_SIGN_COLORS)
 # latency-measurement window per event (excludes the sign-defining window)
 LAT_WIN = {"Change_ON": (0.25, 1.5), "Hit": (-1.0, 0.5)}
 REF = {"Change_ON": "change", "Hit": "lick"}
@@ -94,23 +94,40 @@ def lat_panel(ax, pk, up, dn, event, title):
     ax.axvline(0, color="k", lw=0.8, ls=":")
     p = mannwhitneyu(a, b).pvalue if (len(a) and len(b)) else np.nan
     md, lo, hi = boot_median_diff(a, b)
-    ax.set_title(f"{title}\nMWU p={p:.1e} · up-down med {md:+.2f}s [{lo:+.2f},{hi:+.2f}]", fontsize=8.5)
+    ax.set_title(f"{title}\nMWU p={p:.1e} · up-down med {md:+.2f}s [{lo:+.2f},{hi:+.2f}]",
+                 fontsize=C.FS["title"] - 2)
     ax.set_xlabel(f"peak latency from {REF[event]} (s)"); ax.set_ylabel("density")
-    ax.legend(frameon=False, fontsize=7)
+    ax.legend(frameon=False, fontsize=C.FS["legend"])
     return dict(event=event, up_med=float(ma), down_med=float(mb), mwu_p=float(p),
                 med_diff=md, ci_lo=lo, ci_hi=hi, n_up=len(a), n_down=len(b))
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--group", choices=["celltype", "tf"], default="celltype",
+                    help="celltype (default) = narrow/broad rows; tf = TF-responsive / "
+                         "non-responsive rows (3 striatum mice only)")
+    args = ap.parse_args()
     cache = E.load_event_cache()
-    masks = E.celltype_masks(cache)   # COMMON width cutoff (FIX A), not the per-subject cache labels
+    if args.group == "tf":
+        if not C.has_tf_registry(C.SUBJECT):
+            raise SystemExit(f"no TF registry for {C.SUBJECT} (3 striatum mice only)")
+        resp, nonresp = E.tf_masks(cache, C.SUBJECT)
+        masks = {"TF-responsive": resp, "Non-responsive": nonresp}
+        groups = ["TF-responsive", "Non-responsive"]
+    else:
+        masks = E.celltype_masks(cache)   # COMMON width cutoff (FIX A), not per-subject cache labels
+        groups = [C.NARROW, C.BROAD]
+    name = "ws3_updown_timing_tf" if args.group == "tf" else "ws3_updown_timing"
+    gtxt = " — TF-responsive vs non-responsive rows" if args.group == "tf" else ""
 
     lat = {ev: latencies(cache, ev) for ev in ("Change_ON", "Hit")}
 
     fig = plt.figure(figsize=(17, 9))
     gs = gridspec.GridSpec(2, 3, hspace=0.45, wspace=0.30)
     rows = []
-    for ri, cell in enumerate([C.NARROW, C.BROAD]):
+    for ri, cell in enumerate(groups):
         cm = masks[cell]
         for ci, ev in enumerate(("Change_ON", "Hit")):
             s, pk, com, up, dn = lat[ev]
@@ -138,7 +155,7 @@ def main():
         for j in range(2):
             axT.text(j, i, str(tab[i, j]), ha="center", va="center",
                      color="white" if tab[i, j] > tab.max() / 2 else "black", fontsize=11)
-    axT.set_title(f"Sign-flip: change x lick sign\nflip fraction = {flip_frac:.2f}", fontsize=9)
+    axT.set_title(f"Sign-flip: change x lick sign\nflip fraction = {flip_frac:.2f}", fontsize=C.FS["title"] - 2)
     fig.colorbar(im, ax=axT, fraction=0.046)
 
     # verdict: scan all cell-type x event results. CLEAN if any has p<0.05, CI excludes 0,
@@ -162,20 +179,20 @@ def main():
             "identity needs optotagging.", "",
             f"carried by: {carriers}",
             f"VERDICT (up-vs-down timing): {verdict}"]
-    axV.text(0.0, 1.0, "\n".join(txt), va="top", ha="left", fontsize=8.3, family="monospace")
+    axV.text(0.0, 1.0, "\n".join(txt), va="top", ha="left", fontsize=C.FS["caption"] - 1, family="monospace")
 
-    fig.suptitle(f"{C.SUBJECT}: up- vs down-modulated relative timing (push-pull motivation)",
-                 fontsize=13, y=0.99)
+    fig.suptitle(f"{C.SUBJECT}: up- vs down-modulated relative timing (push-pull motivation){gtxt}",
+                 fontsize=C.FS["suptitle"], y=0.99)
     fig.text(0.5, 0.005,
              "Held-out sign (odd trials); latency read OUTSIDE the sign-defining window. Per-unit "
              "peak latency, up vs down, Mann-Whitney + bootstrap CI on the median difference. "
              "Sign != cell identity; this motivates (not proves) push-pull.",
-             ha="center", fontsize=8, color="#555555", wrap=True)
-    out = C.save_talk_figure(fig, "ws3_updown_timing")
+             ha="center", fontsize=C.FS["caption"], color=C.CAPTION_GREY, wrap=True)
+    out = C.save_talk_figure(fig, name)
     print(f"[fig] wrote {out}")
     df = pd.DataFrame(rows)
-    df.to_csv(C.stats_csv_path("ws3_updown_timing"), index=False)
-    print(f"[fig] wrote {C.stats_csv_path('ws3_updown_timing')}")
+    df.to_csv(C.stats_csv_path(name), index=False)
+    print(f"[fig] wrote {C.stats_csv_path(name)}")
     print(df.to_string(index=False))
     print(f"\nsign-flip fraction: {flip_frac:.3f}  contingency:\n{tab}")
     print(f"WS3 VERDICT: {verdict}")

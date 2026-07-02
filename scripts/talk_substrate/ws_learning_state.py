@@ -24,7 +24,7 @@ from visdetect.suite.plotting import setup_style  # noqa: E402
 from visdetect.analysis.config import STATE_LABEL_COLORS  # noqa: E402
 from visdetect.analysis.utils import bootstrap_ci  # noqa: E402
 
-setup_style()
+C.setup_talk_style()
 STAGES = ["Naive", "Learning", "Expert"]
 STATES = ["Impulsive", "StimSens", "Disengaged"]
 CSV = C.CACHE_DIR / "ws_learning_crossed_BG_046.csv"
@@ -64,8 +64,8 @@ def main():
     ax.axhline(0, color="k", lw=0.8, ls=":")
     ax.set_xticks(range(3)); ax.set_xticklabels(STAGES)
     ax.set_ylabel("big − small change response (z)")
-    ax.set_title("BG_046: change-size scaling across learning, by STATE", fontsize=11)
-    ax.legend(frameon=False, fontsize=8)
+    ax.set_title("BG_046: change-size scaling across learning, by STATE", fontsize=C.FS["title"])
+    ax.legend(frameon=False, fontsize=C.FS["legend"])
 
     # n per state x stage (the power/composition guard)
     ax2 = fig.add_subplot(gs[1])
@@ -77,16 +77,16 @@ def main():
                 color=STATE_LABEL_COLORS[st], label=st)
     ax2.set_xticks(range(3)); ax2.set_xticklabels(STAGES)
     ax2.set_ylabel("unit-sessions (with ≥3 trials)")
-    ax2.set_title("Power / state composition (guard)", fontsize=11)
-    ax2.legend(frameon=False, fontsize=7)
+    ax2.set_title("Power / state composition (guard)", fontsize=C.FS["title"])
+    ax2.legend(frameon=False, fontsize=C.FS["legend"])
 
     fig.suptitle("BG_046: change-size scaling ACROSS LEARNING x behavioural STATE (descriptive)",
-                 fontsize=13, y=1.0)
+                 fontsize=C.FS["suptitle"], y=1.0)
     fig.text(0.5, -0.04,
              "big−small within each state x stage (per-unit, 0–1 s post-change, shared baseline). "
              "CAVEAT: states are behaviourally defined (partly circular); naive thin; state composition "
              "is stage-dependent (right panel) — suggestive only. Colours = STATE_LABEL_COLORS.",
-             ha="center", fontsize=8, color="#555555", wrap=True)
+             ha="center", fontsize=C.FS["caption"], color=C.CAPTION_GREY, wrap=True)
     out = C.FIG_DIR.parent / "BG_046" / "ws_learning_state.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=300, bbox_inches="tight"); plt.close(fig)

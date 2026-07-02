@@ -36,7 +36,7 @@ from visdetect.analysis.config import canonical_session_id as canon, _ALL_STAGE_
 from visdetect.analysis.constants import EVENT_RESPONSIVENESS_WINDOWS  # noqa: E402
 from visdetect.analysis.utils import bootstrap_ci  # noqa: E402
 
-setup_style()
+C.setup_talk_style()
 STAGES = ["Naive", "Learning", "Expert"]
 SCOL = {s: _ALL_STAGE_COLORS.get(s, "#888888") for s in STAGES}
 ANIMALS = [("BG_046", "Striatum DMS"), ("BG_039", "Striatum DMS"),
@@ -129,22 +129,22 @@ def per_animal_fig(res, region):
     axA.axhline(0, color="k", lw=0.8, ls=":")
     axA.set_xticks(range(3)); axA.set_xticklabels([f"{s}\n(n={st[s]['n_unitsess']})" for s in STAGES])
     axA.set_ylabel("big - small change response (z)")
-    axA.set_title("A. Change-size (evidence) scaling per stage", fontsize=10)
+    axA.set_title("A. Change-size (evidence) scaling per stage", fontsize=C.FS["title"])
     # B magnitude
     axB = fig.add_subplot(gs[0, 1])
     for (lbl, _e, _c), col in zip(MAG_SPECS, ["#4CAF50", "#ef6548", "#3474ae"]):
         _pts(axB, lambda s, L=lbl: res["mag"][L][s][:3], col, lbl)
     axB.axhline(0, color="k", lw=0.8, ls=":")
     axB.set_xticks(range(3)); axB.set_xticklabels(STAGES)
-    axB.set_ylabel("peri-lick response (z)"); axB.set_title("B. Lick/FA response per stage", fontsize=10)
-    axB.legend(frameon=False, fontsize=7)
+    axB.set_ylabel("peri-lick response (z)"); axB.set_title("B. Lick/FA response per stage", fontsize=C.FS["title"])
+    axB.legend(frameon=False, fontsize=C.FS["legend"])
     # C matched scaling
     axC = fig.add_subplot(gs[0, 2])
     _pts(axC, lambda s: res["matched"][s], "#7a3b8f")
     axC.axhline(0, color="k", lw=0.8, ls=":")
     nmin = min([st[s]["n_unitsess"] for s in STAGES if st[s]["n_unitsess"] > 0], default=0)
     axC.set_xticks(range(3)); axC.set_xticklabels(STAGES)
-    axC.set_ylabel("big - small (z)"); axC.set_title(f"C. Scaling, unit-count MATCHED (n={nmin})", fontsize=10)
+    axC.set_ylabel("big - small (z)"); axC.set_title(f"C. Scaling, unit-count MATCHED (n={nmin})", fontsize=C.FS["title"])
     # D yield
     axD = fig.add_subplot(gs[1, 0])
     axD.bar(range(3), [st[s]["n_unitsess"] for s in STAGES], color=[SCOL[s] for s in STAGES])
@@ -152,13 +152,13 @@ def per_animal_fig(res, region):
         axD.text(i, st[s]["n_unitsess"], f"{st[s]['n_sessions']}sess\n~{st[s]['unique_per_sess']}u/sess",
                  ha="center", va="bottom", fontsize=7)
     axD.set_xticks(range(3)); axD.set_xticklabels(STAGES)
-    axD.set_ylabel("unit-sessions"); axD.set_title("D. YIELD per stage (guard)", fontsize=10)
+    axD.set_ylabel("unit-sessions"); axD.set_title("D. YIELD per stage (guard)", fontsize=C.FS["title"])
     # E composition
     axE = fig.add_subplot(gs[1, 1])
     axE.bar(range(3), [100 * st[s]["narrow_frac"] for s in STAGES], color="#e74c3c", alpha=0.7)
     axE.set_xticks(range(3)); axE.set_xticklabels(STAGES)
     axE.set_ylabel("% narrow (common cut)"); axE.set_ylim(0, 100)
-    axE.set_title("E. Cell-type composition (guard)", fontsize=10)
+    axE.set_title("E. Cell-type composition (guard)", fontsize=C.FS["title"])
     # F verdict
     axF = fig.add_subplot(gs[1, 2]); axF.axis("off")
     nv, ev_ = st["Naive"]["scaling"], st["Expert"]["scaling"]   # (mu, lo, hi, n)
@@ -186,15 +186,15 @@ def per_animal_fig(res, region):
                                     if np.isfinite(res['matched'][s][0]) else f"  {s:9s}: n/a"
                                     for s in STAGES]
     txt += ["", f"VERDICT: {verdict}"]
-    axF.text(0.0, 1.0, "\n".join(txt), va="top", ha="left", fontsize=9, family="monospace")
+    axF.text(0.0, 1.0, "\n".join(txt), va="top", ha="left", fontsize=C.FS["caption"], family="monospace")
 
     fig.suptitle(f"{subj} ({region}): change-size (evidence) scaling ACROSS LEARNING "
-                 "(descriptive)", fontsize=13, y=0.99)
+                 "(descriptive)", fontsize=C.FS["suptitle"], y=0.99)
     fig.text(0.5, 0.005,
              "Stages = manifest RAW stage (Naive/Learning/Expert). Metric = per-unit mean(big-small) "
              f"in {CHANGE_WIN}s post-change, ALL go trials; bands = bootstrap 95% CI over unit-sessions. "
              "Guards: yield (D) + unit-count-matched scaling (C) + composition (E). NOT N1; descriptive.",
-             ha="center", fontsize=8, color="#555555", wrap=True)
+             ha="center", fontsize=C.FS["caption"], color=C.CAPTION_GREY, wrap=True)
     out = C.FIG_DIR.parent / subj / "ws_learning_changesize.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=300, bbox_inches="tight"); plt.close(fig)
@@ -239,11 +239,11 @@ def main():
     ax.axhline(0, color="k", lw=0.8, ls=":")
     ax.set_xticks(range(3)); ax.set_xticklabels(STAGES)
     ax.set_ylabel("big - small change response (z)")
-    ax.set_title("Change-size (evidence) scaling ACROSS LEARNING — all animals", fontsize=12)
-    ax.legend(frameon=False, fontsize=8)
+    ax.set_title("Change-size (evidence) scaling ACROSS LEARNING — all animals", fontsize=C.FS["title"])
+    ax.legend(frameon=False, fontsize=C.FS["legend"])
     fig.text(0.5, -0.02, "Per-unit mean(big-small) in 0-1 s post-change, all go trials; bootstrap 95% CI "
              "over unit-sessions. Naive is thin (2-3 sessions); see per-animal yield guards.",
-             ha="center", fontsize=8, color="#555555", wrap=True)
+             ha="center", fontsize=C.FS["caption"], color=C.CAPTION_GREY, wrap=True)
     out = C.FIG_DIR.parent / "ws_learning_summary.png"
     fig.savefig(out, dpi=300, bbox_inches="tight"); plt.close(fig)
     print(f"[fig] wrote {out}")

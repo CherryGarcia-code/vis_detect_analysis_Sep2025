@@ -31,8 +31,8 @@ import _events_plot as E  # noqa: E402
 from visdetect.suite.plotting import setup_style  # noqa: E402
 from visdetect.analysis.config import OUTCOME_COLORS  # noqa: E402
 
-setup_style()
-SMALL, BIG = "#fdae6b", "#d94801"
+C.setup_talk_style()
+SMALL, BIG = C.CHANGE_COLORS["small"], C.CHANGE_COLORS["big"]   # canonical (config.CHANGE_SIZE_COLORS)
 H, M = OUTCOME_COLORS["Hit"], OUTCOME_COLORS["Miss"]
 RESP_WIN = (0.0, 1.0)
 GROUPS = [
@@ -88,14 +88,14 @@ def main():
             big_minus_small=round(win_mean(cache, "Change_ON", "big", RESP_WIN)
                                   - win_mean(cache, "Change_ON", "small", RESP_WIN), 4)))
 
-    fig.suptitle("STRIATUM vs CORTEX — task signals by region", fontsize=13, y=0.995)
+    fig.suptitle("STRIATUM vs CORTEX — task signals by region", fontsize=C.FS["suptitle"], y=0.995)
     fig.text(0.5, 0.005,
              "Population mean + bootstrap 95% CI across unit-sessions. Cell-type gloss is "
              "region-specific: striatum broad=SPN/narrow=FSI; cortex broad=pyramidal(RS)/narrow=FS. "
              "DMS = BG_046+BG_039 pooled (dorsal CP); VMS = BG_031; cortex = BG_038 (M1/S1 — "
              "high-quality cortical REFERENCE probe, NOT the MOs source region; positive control + "
              "generic cortex-vs-striatum dynamics contrast).",
-             ha="center", fontsize=8, color="#555555", wrap=True)
+             ha="center", fontsize=C.FS["caption"], color=C.CAPTION_GREY, wrap=True)
     out = C.FIG_DIR.parent / "ws_xanimal_cortex.png"
     fig.savefig(out, dpi=300, bbox_inches="tight"); plt.close(fig)
     print(f"[fig] wrote {out}")

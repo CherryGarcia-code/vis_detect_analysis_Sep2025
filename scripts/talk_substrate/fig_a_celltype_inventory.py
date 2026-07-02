@@ -46,7 +46,7 @@ from visdetect.analysis.tracking_qc import (                       # noqa: E402
 )
 from visdetect.analysis.waveform_celltype import compute_waveform_features  # noqa: E402
 
-setup_style()
+C.setup_talk_style()
 
 RAW_WF_DIR = cfg.RAW_WF_DIR
 T2P_CACHE = C.CACHE_DIR / "bg046_waveform_t2p.csv"
@@ -185,8 +185,8 @@ def main():
     ax1.set_xlabel("trough-to-peak width (ms)")
     ax1.set_ylabel("# units")
     ax1.set_title(f"Putative cell types by spike width\n"
-                  f"{n_lab} labelled units · {pct_narrow:.0f}% narrow", fontsize=11)
-    ax1.legend(frameon=False, fontsize=8, loc="upper right")
+                  f"{n_lab} labelled units · {pct_narrow:.0f}% narrow", fontsize=C.FS["title"])
+    ax1.legend(frameon=False, fontsize=C.FS["legend"], loc="upper right")
 
     # Panel 2: per-session yield + composition
     ax2 = fig.add_subplot(gs[1])
@@ -226,17 +226,17 @@ def main():
     for st in seen_stages:
         handles.append(Patch(facecolor=STAGE_COLORS.get(st, "#cccccc"), alpha=0.45,
                              label=f"stage: {st}"))
-    ax2.legend(handles=handles, frameon=False, fontsize=8, loc="upper left", ncol=2)
+    ax2.legend(handles=handles, frameon=False, fontsize=C.FS["legend"], loc="upper left", ncol=2)
 
     fig.suptitle(f"{C.SUBJECT} striatum (CP): cell-type substrate & recording yield",
-                 fontsize=13, y=1.02)
+                 fontsize=C.FS["suptitle"], y=1.02)
     fig.text(0.5, -0.04,
              "Putative cell types split by spike width (trough-to-peak); a 2-component GMM sets "
              "the dashed split. CAVEAT: 84% of units fall in the narrow/FSI mode — biologically "
              "implausible for striatum, where projection neurons should dominate — so the "
              "spike-width cell-type split is treated as unreliable (likely chronic-probe SPN "
              "under-yield), not a real ~5:1 FSI:SPN ratio.",
-             ha="center", fontsize=8, color="#555555", wrap=True)
+             ha="center", fontsize=C.FS["caption"], color=C.CAPTION_GREY, wrap=True)
 
     out = C.save_talk_figure(fig, "fig_a_celltype_inventory")
     print(f"[fig] wrote {out}")

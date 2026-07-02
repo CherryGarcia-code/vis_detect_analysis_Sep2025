@@ -29,7 +29,7 @@ import _common as C  # noqa: E402
 import _events_plot as E  # noqa: E402
 from visdetect.suite.plotting import setup_style  # noqa: E402
 
-setup_style()
+C.setup_talk_style()
 REGION = {"BG_046": "DMS", "BG_039": "DMS", "BG_031": "VMS", "BG_038": "Cortex(ref)"}
 LAT_WIN = (0.25, 1.5)   # change-aligned latency window (excludes the 0-0.25 s sign window)
 
@@ -97,12 +97,12 @@ def main():
     ax.set_yticks(ys); ax.set_yticklabels(labels, fontsize=8)
     ax.set_xlabel("CHANGE-aligned up-peak − down-trough latency (s)   [positive = suppression earlier]")
     ax.set_title("Push-pull TIMING at change onset: up vs down peak latency\n"
-                 "(red=narrow/FSI, blue=broad/SPN; common cutoff; bootstrap 95% CI)", fontsize=11)
+                 "(red=narrow/FSI, blue=broad/SPN; common cutoff; bootstrap 95% CI)", fontsize=C.FS["title"])
     fig.text(0.5, -0.02,
              "Positive Δ = up-units peak LATER than down-units trough, i.e. suppression is earlier. "
              "Offset is strongest in narrow/FSI but PRESENT in broad/SPN in some animals (no SPN-absence "
              "claim). Caveat: up-peak (~1 s) is movement-entangled — the clean claim is EARLY suppression "
-             "before the excitatory peak & movement.", ha="center", fontsize=8, color="#555555", wrap=True)
+             "before the excitatory peak & movement.", ha="center", fontsize=C.FS["caption"], color=C.CAPTION_GREY, wrap=True)
     out = C.FIG_DIR.parent / "ws_fixC_pushpull_change_timing.png"
     fig.savefig(out, dpi=300, bbox_inches="tight"); plt.close(fig)
     df.to_csv(C.FIG_DIR.parent / "ws_fixC_pushpull_change_timing.csv", index=False)
