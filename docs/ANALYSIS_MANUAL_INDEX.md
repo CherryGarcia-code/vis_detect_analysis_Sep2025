@@ -11,9 +11,9 @@ This directory contains detailed manuals for each component of the analysis pipe
     *   *Topics*: Lick responsiveness (stats generation), Early vs Late FA comparisons, Chronological progression.
     *   *Key Scripts*: `batch_run_lick_analysis.py`, `compare_early_late_fa.py`
 
-3.  **[Visual (TF) Analysis](manuals/MANUAL_TF_Analysis.md)**
-    *   *Topics*: Visual responsiveness mapping, identifying "splitter" neurons (TF/Orientation selective).
-    *   *Key Scripts*: `batch_run_tf_analysis.py`
+3.  **Visual (TF) Analysis** — *(standalone manual removed; superseded by the TF-encoding GLM pipeline)*
+    *   *Topics*: TF-responsiveness via a reduced-regressor Poisson encoding GLM (Khilkevich–Lohse replication); transient vs sustained TF cells.
+    *   *Key Scripts*: `scripts/tf_responsiveness/run_tf_glm_bg046.py`, `scripts/tf_responsiveness/run_tf_glm_khilkevich.py` (positive control)
 
 4.  **[Behavior Analysis](manuals/MANUAL_Behavior.md)**
     *   *Topics*: Psychometric curves, Hit/FA rates, Learning curves.
@@ -52,11 +52,10 @@ python scripts/analysis/behavior/batch_run_behavior.py \
   --out FIGURES/behavior/BG_046
 ```
 
-**C. Visual Responsiveness (TF)**
+**C. Visual Responsiveness (TF-encoding GLM)**
 ```bash
-python scripts/analysis/tf_response/batch_run_tf_analysis.py \
-  --manifest data/BG_046_staging_manifest.csv \
-  --pkl-dir data/pkls/BG_046 
+# TF-responsiveness now uses the reduced-regressor Poisson GLM (see --help for options)
+PYTHONPATH=src py scripts/tf_responsiveness/run_tf_glm_bg046.py --help
 ```
 
 ### 3. Run Group/Questions Analyses
