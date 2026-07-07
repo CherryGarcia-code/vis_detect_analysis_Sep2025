@@ -91,7 +91,17 @@ class TFGLMConfig:
 
 
 def trial_bin_edges(t_start: float, t_end: float, bin_s: float) -> np.ndarray:
-    """Left edges of 50-ms bins spanning [t_start, t_end)."""
+    """Left edges of 50-ms bins spanning [t_start, t_end).
+
+    Returns an empty array if either endpoint is non-finite. A trial with no
+    neural-clock timestamp (e.g. behavioural trials beyond the recorded
+    Baseline_ON/ephys coverage, as in split ``_b`` re-recordings where the
+    behaviour log outruns the NI events) then contributes zero bins to the
+    design instead of raising ``cannot convert float NaN to integer`` and
+    killing the whole session.
+    """
+    if not (np.isfinite(t_start) and np.isfinite(t_end)):
+        return np.zeros(0, dtype=float)
     n = int(np.floor((t_end - t_start) / bin_s + 1e-9))
     return t_start + np.arange(max(n, 0)) * bin_s
 

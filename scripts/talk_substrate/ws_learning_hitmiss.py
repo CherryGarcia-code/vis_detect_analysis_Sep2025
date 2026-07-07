@@ -24,7 +24,7 @@ from visdetect.suite.plotting import setup_style  # noqa: E402
 from visdetect.analysis.config import OUTCOME_COLORS  # noqa: E402
 from visdetect.analysis.utils import bootstrap_ci  # noqa: E402
 
-setup_style()
+C.setup_talk_style()
 STAGES = ["Naive", "Learning", "Expert"]
 ANIMALS = [("BG_046", "Striatum DMS"), ("BG_039", "Striatum DMS"),
            ("BG_031", "Striatum VMS"), ("BG_038", "Cortex M1/S1 ref")]
@@ -74,8 +74,8 @@ def main():
         ax.axhline(0, color="k", lw=0.8, ls=":")
         ax.set_xticks(range(3)); ax.set_xticklabels(STAGES)
         ax.set_ylabel("big − small change response (z)")
-        ax.set_title(f"{subj} ({region})", fontsize=10)
-        ax.legend(frameon=False, fontsize=8, loc="upper left")
+        ax.set_title(f"{subj} ({region})", fontsize=C.FS["title"])
+        ax.legend(frameon=False, fontsize=C.FS["legend"], loc="upper left")
         for s in STAGES:
             d = df[(df.subject == subj) & (df.stage == s)]
             hmu = mean_ci(d["hit_scaling"]); mmu = mean_ci(d["miss_scaling"])
@@ -88,12 +88,12 @@ def main():
                              miss_n=mmu[3]))
 
     fig.suptitle("Change-size (evidence) scaling ACROSS LEARNING — HIT vs MISS split",
-                 fontsize=13, y=0.98)
+                 fontsize=C.FS["suptitle"], y=0.98)
     fig.text(0.5, 0.02,
              "big−small change response computed WITHIN hits and WITHIN misses (per-unit, 0–1 s "
              "post-change, shared baseline). Scaling on MISS trials (no response) = sensory/evidence; "
              "hit-only = decision-contingent. Bands = bootstrap 95% CI over unit-sessions; naive thin.",
-             ha="center", fontsize=8, color="#555555", wrap=True)
+             ha="center", fontsize=C.FS["caption"], color=C.CAPTION_GREY, wrap=True)
     out = C.FIG_DIR.parent / "ws_learning_hitmiss.png"
     fig.savefig(out, dpi=300, bbox_inches="tight"); plt.close(fig)
     sdf = pd.DataFrame(rows)

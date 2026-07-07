@@ -27,7 +27,7 @@ ROOT = str(Path(__file__).resolve().parents[3])
 # ── Paths ──────────────────────────────────────────────────────────────
 LABELS_DIR = os.path.join(ROOT, "data", "labels")
 LABELS_PATH = os.path.join(LABELS_DIR, "tf_manual_labels.csv")
-CLASSIFICATION_CSV = os.path.join(ROOT, "analysis_suite", "cache",
+CLASSIFICATION_CSV = os.path.join(ROOT, "data", "cache", "tf_labeling",
                                   "tf_cell_classification.csv")
 TF_TRACES_DIR = os.path.join(ROOT, "data", "cache", "tf_traces", "BG_046")
 RASTER_CACHE_DIR = os.path.join(ROOT, "data", "cache", "tf_raster_cache")

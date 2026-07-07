@@ -751,7 +751,8 @@ def _trial_indices_for_sizes(session, sizes: Optional[Set[float]]) -> Optional[L
 
 def extract_unit_psths(session, ks_unit_id: int,
                        restrict_trials: Optional[Set[int]] = None,
-                        ) -> Dict[str, Tuple[np.ndarray, np.ndarray, int]]:
+                       with_sem: bool = False,
+                        ) -> Dict[str, Tuple]:
     """Build PSTHs for all spec conditions for one (session, unit).
 
     Returns
@@ -761,8 +762,16 @@ def extract_unit_psths(session, ks_unit_id: int,
         bin_centers shape: (n_bins,)
         n_trials: int — number of trials averaged
         If no trials match, value is (None, None, 0).
+
+    with_sem : if True, each value is a 4-tuple
+        (psth_smoothed_hz, bin_centers, n_trials, sem_smoothed_hz) where
+        sem is the across-trial standard error (same smoothing as the mean;
+        all-zeros when <2 trials). Empty conditions become (None, None, 0, None).
+        Default (False) preserves the 3-tuple contract used by every other
+        caller (track_curation, compute_behavior_cache, tests).
     """
-    out: Dict[str, Tuple[np.ndarray, np.ndarray, int]] = {}
+    empty = (None, None, 0, None) if with_sem else (None, None, 0)
+    out: Dict[str, Tuple] = {}
     for key, cfg in PSTH_CONDITIONS.items():
         trial_idx = _trial_indices_for_sizes(session, cfg["sizes"])
         if restrict_trials is not None:
@@ -772,7 +781,7 @@ def extract_unit_psths(session, ks_unit_id: int,
             else:
                 trial_idx = [i for i in trial_idx if i in allowed]
         if trial_idx is not None and len(trial_idx) == 0:
-            out[key] = (None, None, 0)
+            out[key] = empty
             continue
         try:
             tensor, centers, valid = build_population_tensor(
@@ -785,13 +794,24 @@ def extract_unit_psths(session, ks_unit_id: int,
                 trial_indices=trial_idx,
             )
         except ValueError:
-            out[key] = (None, None, 0)
+            out[key] = empty
             continue
         # tensor: (n_trials, n_bins, 1) — collapse units, mean over trials, smooth
-        mean_rate = tensor[:, :, 0].mean(axis=0)
+        rates = tensor[:, :, 0]                       # (n_trials, n_bins)
+        mean_rate = rates.mean(axis=0)
         smoothed = smooth_psth(mean_rate, bin_size=DEFAULT_BIN_SIZE,
                                 sigma_ms=DEFAULT_SIGMA_MS)
-        out[key] = (smoothed, centers, len(valid))
+        if with_sem:
+            n_tr = rates.shape[0]
+            if n_tr >= 2:
+                sem_rate = rates.std(axis=0, ddof=1) / np.sqrt(n_tr)
+                sem_sm = smooth_psth(sem_rate, bin_size=DEFAULT_BIN_SIZE,
+                                     sigma_ms=DEFAULT_SIGMA_MS)
+            else:
+                sem_sm = np.zeros_like(smoothed)
+            out[key] = (smoothed, centers, len(valid), sem_sm)
+        else:
+            out[key] = (smoothed, centers, len(valid))
     return out
 
 
@@ -874,8 +894,8 @@ def extract_session_records(session, ks_unit_ids: Sequence[int], session_name: s
         spike_times = np.asarray(cluster.spike_times)
         isi_h, isi_c = isi_log_histogram(spike_times)
 
-        # PSTHs
-        psths = extract_unit_psths(session, int(kid))
+        # PSTHs (with_sem=True so QC sheets can draw per-session CI95 bands)
+        psths = extract_unit_psths(session, int(kid), with_sem=True)
 
         out[int(kid)] = SessionRecord(
             session_name=session_name,

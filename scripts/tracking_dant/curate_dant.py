@@ -56,33 +56,38 @@ def write_curation_registry(in_csv, out_csv) -> Tuple[int, int]:
 @dataclass(frozen=True)
 class DantCurationPaths:
     """All paths the runner needs. Worktree-local outputs; PRIMARY data inputs."""
+    subject: str
     worktree_root: Path
     primary_root: Path
-    registry_in: Path          # data/cache/dant/BG_046/dant_registry.csv
-    registry_curation: Path    # data/cache/dant/BG_046/dant_registry_curation.csv
-    raw_wf_root: Path          # <PRIMARY>/data/unit_match/input/BG_046
-    pkl_dir: Path              # <PRIMARY>/data/pkls/BG_046
+    registry_in: Path          # data/cache/dant/<SUBJ>/dant_registry.csv
+    registry_curation: Path    # data/cache/dant/<SUBJ>/dant_registry_curation.csv
+    raw_wf_root: Path          # <PRIMARY>/data/unit_match/input/<SUBJ>
+    pkl_dir: Path              # <PRIMARY>/data/pkls/<SUBJ>
     states_empty: Path         # empty -> corroborator abstains
-    out_dir: Path              # FIGURES/tracking_dant/BG_046/curation
+    out_dir: Path              # FIGURES/tracking_dant/<SUBJ>/curation
     cache_path: Path           # curation_features_dant.pkl
     sheets_dir: Path           # out_dir/sheets
     curate_script: Path        # scripts/pipelines/tracking/curate_tracks.py
     render_script: Path        # scripts/pipelines/tracking/render_curation_sheets.py
 
     @classmethod
-    def default(cls, worktree_root, primary_root) -> "DantCurationPaths":
+    def default(cls, worktree_root, primary_root,
+                subject: str = "BG_046") -> "DantCurationPaths":
+        # Subject-general: every path is derived from `subject`, so BG_046 stays the
+        # default (backward-compatible) but any subject (e.g. BG_031) resolves cleanly.
         wt = Path(worktree_root)
         pr = Path(primary_root)
-        cache = wt / "data" / "cache" / "dant" / "BG_046"
-        out = wt / "FIGURES" / "tracking_dant" / "BG_046" / "curation"
+        cache = wt / "data" / "cache" / "dant" / subject
+        out = wt / "FIGURES" / "tracking_dant" / subject / "curation"
         tracking = wt / "scripts" / "pipelines" / "tracking"
         return cls(
+            subject=subject,
             worktree_root=wt,
             primary_root=pr,
             registry_in=cache / "dant_registry.csv",
             registry_curation=cache / "dant_registry_curation.csv",
-            raw_wf_root=pr / "data" / "unit_match" / "input" / "BG_046",
-            pkl_dir=pr / "data" / "pkls" / "BG_046",
+            raw_wf_root=pr / "data" / "unit_match" / "input" / subject,
+            pkl_dir=pr / "data" / "pkls" / subject,
             states_empty=cache / "states_empty",
             out_dir=out,
             cache_path=cache / "curation_features_dant.pkl",
@@ -97,7 +102,7 @@ def build_curate_cmd(python_exe, paths: DantCurationPaths,
     """argv for curate_tracks.py: biophysical-only, DANT out-dir, dant_uid column."""
     cmd = [
         str(python_exe), str(paths.curate_script),
-        "--subject", "BG_046",
+        "--subject", paths.subject,
         "--registry", str(paths.registry_curation),
         "--liberal-col", "dant_uid",
         "--raw-wf-root", str(paths.raw_wf_root),
@@ -119,7 +124,7 @@ def build_render_cmd(python_exe, paths: DantCurationPaths, tier: str,
     """argv for render_curation_sheets.py: one tier, DANT sheets dir, no pair scores."""
     cmd = [
         str(python_exe), str(paths.render_script),
-        "--subject", "BG_046",
+        "--subject", paths.subject,
         "--tracks", str(paths.out_dir / "curated_tracks.csv"),
         "--registry", str(paths.registry_curation),
         "--liberal-col", "dant_uid",
@@ -319,6 +324,8 @@ def step_render(paths: DantCurationPaths, tier: str,
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--subject", default="BG_046",
+                    help="subject id; selects all data + output paths (default BG_046)")
     ap.add_argument("--steps", default=",".join(STEPS),
                     help="comma list of steps to run; default all")
     ap.add_argument("--primary", type=Path, default=PRIMARY_DEFAULT,
@@ -331,15 +338,16 @@ def main(argv=None) -> int:
                     help="reuse an existing feature cache instead of rebuilding")
     args = ap.parse_args(argv)
     steps = parse_steps(args.steps)
-    paths = DantCurationPaths.default(WORKTREE_ROOT, args.primary)
-    print(f"DANT curation runner — steps={steps}\n  out_dir={paths.out_dir}", flush=True)
+    paths = DantCurationPaths.default(WORKTREE_ROOT, args.primary, subject=args.subject)
+    print(f"DANT curation runner (subject={args.subject}) - steps={steps}\n"
+          f"  out_dir={paths.out_dir}", flush=True)
 
     if "registry" in steps:
         step_registry(paths)
     if "curate" in steps:
         step_curate(paths, rebuild_cache=not args.no_rebuild_cache)
     if "validate" in steps:
-        step_validate(paths)
+        step_validate(paths, subj=args.subject)
     if "render" in steps:
         step_render(paths, "trusted", max_uids=args.trusted_max_uids)
         step_render(paths, "review", max_uids=args.review_max_uids)

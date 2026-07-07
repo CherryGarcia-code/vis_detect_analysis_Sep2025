@@ -33,8 +33,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _root = os.path.dirname(os.path.dirname(_script_dir))
-# Also add analysis_suite for loader/config
-_suite = os.path.join(_root, "analysis_suite")
 
 from visdetect.analysis.tf_labeling import (
     CLASSIFICATION_CSV, RASTER_CACHE_DIR,

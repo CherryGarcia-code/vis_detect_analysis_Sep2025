@@ -31,8 +31,8 @@ import _events_plot as E  # noqa: E402
 from visdetect.suite.plotting import setup_style  # noqa: E402
 from visdetect.analysis.config import OUTCOME_COLORS  # noqa: E402
 
-setup_style()
-SMALL, BIG = "#fdae6b", "#d94801"
+C.setup_talk_style()
+SMALL, BIG = C.CHANGE_COLORS["small"], C.CHANGE_COLORS["big"]   # canonical (config.CHANGE_SIZE_COLORS)
 H, M = OUTCOME_COLORS["Hit"], OUTCOME_COLORS["Miss"]
 # (subject, site label)
 ANIMALS = [("BG_046", "DMS"), ("BG_039", "DMS"), ("BG_031", "VMS")]
@@ -95,12 +95,12 @@ def main():
                          hit_minus_miss=round(oe, 4), big_minus_small=round(ce, 4)))
 
     fig.suptitle("Cross-animal STRIATUM replication — DMS (BG_046, BG_039) vs VMS (BG_031)",
-                 fontsize=13, y=0.995)
+                 fontsize=C.FS["suptitle"], y=0.995)
     fig.text(0.5, 0.005,
              "Population mean + bootstrap 95% CI across unit-sessions. Replication = BG_046 & BG_039 "
              "(both dorsal CP) agree; BG_031 (ventromedial CP) shown separately (never pooled with DMS). "
              "Cell-type proportions differ across animals (per-subject GMM); this is a population view.",
-             ha="center", fontsize=8, color="#555555", wrap=True)
+             ha="center", fontsize=C.FS["caption"], color=C.CAPTION_GREY, wrap=True)
 
     out = C.FIG_DIR.parent / "ws_xanimal_striatum.png"   # FIGURES/talk_substrate/ (cross-animal)
     fig.savefig(out, dpi=300, bbox_inches="tight"); plt.close(fig)

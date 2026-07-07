@@ -21,6 +21,7 @@ if str(REPO_ROOT / "src") not in sys.path:
 from visdetect.analysis import config as cfg                      # noqa: E402
 from visdetect.analysis.config import (                           # noqa: E402
     canonical_session_id, CELLTYPE_COLORS, STATE_LABEL_COLORS, OUTCOME_COLORS,
+    CHANGE_SIZE_COLORS, MODULATION_SIGN_COLORS, FA_SUBTYPE_COLORS,
 )
 
 SUBJECT = cfg.SUBJECT  # "BG_046"
@@ -29,6 +30,37 @@ FIG_DIR = REPO_ROOT / "FIGURES" / "talk_substrate" / SUBJECT
 CACHE_DIR = REPO_ROOT / "data" / "cache" / "talk_substrate"
 FIG_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── Shared palette & typography for ALL talk figures (single source of truth) ─────────────
+# Canonical config palettes are used where they exist (OUTCOME/FA_SUBTYPE/STATE/CELLTYPE and
+# now CHANGE_SIZE/MODULATION_SIGN); talk-specific greys/typography are defined here so every
+# figure this suite produces shares one colour + font logic.
+SIGN_COLORS = MODULATION_SIGN_COLORS          # {"up","down"} — held-out modulation sign
+CHANGE_COLORS = CHANGE_SIZE_COLORS            # {"small","big"} — change-size split
+TF_MINUS_GREY = ["#b8b8b8", "#606060"]        # non-responsive greys (light cond0 / dark cond1)
+CAPTION_GREY = "#555555"
+RTMATCH_PURPLE = "#7b3294"
+
+# Presentation typography — larger than defaults so text reads on a projected slide.
+FS = {"suptitle": 16, "title": 13, "label": 13, "tick": 11, "legend": 8, "caption": 11}
+
+# Legend style: auto-placed ("best") with a translucent white box so a legend that lands over
+# traces stays readable and visually separated instead of text-on-plot. Use:
+#   ax.legend(fontsize=C.FS["legend"], **C.LEGEND_KW)
+LEGEND_KW = dict(frameon=True, framealpha=0.72, loc="best")
+
+
+def setup_talk_style():
+    """setup_style() PLUS larger fonts for on-screen presentation. Call this instead of
+    setup_style() in every talk figure so the whole suite shares one (bigger) typography."""
+    import matplotlib as mpl
+    from visdetect.suite.plotting import setup_style
+    setup_style()
+    mpl.rcParams.update({
+        "axes.titlesize": FS["title"], "axes.labelsize": FS["label"],
+        "xtick.labelsize": FS["tick"], "ytick.labelsize": FS["tick"],
+        "legend.fontsize": FS["legend"], "figure.titlesize": FS["suptitle"],
+    })
 
 # GMM cell-type stats (threshold line for Fig A); produced by
 # scripts/analysis/build_waveform_celltype_labels.py
@@ -186,6 +218,43 @@ _ISI_FILES = {"BG_046": "bg046_isi_features.csv", "BG_039": "isi_features_BG_039
 def isi_features_path(subject: str = SUBJECT):
     """Path to the per-subject ISI-feature CSV (handles BG_046's legacy bg046_ name)."""
     return CACHE_DIR / _ISI_FILES[subject]
+
+
+# ── TF-responsive registries (Khilkevich-Lohse GLM replication) ───────────────
+# data/cache/tf_responsive/<subj>_tf_responsive.csv, resp_log2 = the call (C1 corr>0.2
+# AND C2 CV p<0.01). Coverage = the 3 STRIATUM mice only (BG_046/039 DMS, BG_031 VMS);
+# BG_038 (cortex) has NO registry. Join per README: subject + canonical(session_date) + unit.
+# ⚠️ NOT movement-controlled (first-pass GLM); don't pool DMS with VMS.
+TF_SUBJECTS = ["BG_046", "BG_039", "BG_031"]
+
+
+def has_tf_registry(subject: str) -> bool:
+    fn = subject.lower().replace("_", "") + "_tf_responsive.csv"
+    return os.path.exists(os.path.join(cfg.ROOT, "data", "cache", "tf_responsive", fn))
+
+
+def load_tf_responsive(subject: str):
+    """Per-unit TF-responsiveness registry for `subject` (raises if none — 3 striatum mice only)."""
+    import pandas as pd
+    fn = subject.lower().replace("_", "") + "_tf_responsive.csv"
+    return pd.read_csv(os.path.join(cfg.ROOT, "data", "cache", "tf_responsive", fn))
+
+
+def tf_responsive_masks(cache, subject: str):
+    """(resp_mask, nonresp_mask) over a cache's unit rows, joining the TF registry on
+    canonical(session) + unit(=cluster_id). Units absent from the registry are in NEITHER
+    mask (so they're dropped from a TF split, not silently counted as non-responsive).
+    canonicalize BOTH sides (leading-zero-day / 6-digit / '_v2' footgun — see README)."""
+    import numpy as np
+    reg = load_tf_responsive(subject)
+    lut = {(canonical_session_id(str(r.session_date)), int(r.unit)): bool(r.resp_log2)
+           for r in reg.itertuples()}
+    sess = cache["unit_meta_session"].astype(str)
+    cid = cache["unit_meta_cluster_id"].astype(int)
+    call = [lut.get((canonical_session_id(sess[i]), int(cid[i])), None) for i in range(len(sess))]
+    resp = np.array([c is True for c in call])
+    nonresp = np.array([c is False for c in call])
+    return resp, nonresp
 
 
 # Recording-site label per subject — single source for figure titles/captions (FIX E:

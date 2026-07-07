@@ -40,9 +40,9 @@ GO_SET = {1.25, 1.35, 1.5, 2.0, 4.0}
 MIN_TRIALS = 15
 
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CACHE_DIR = os.path.join(_REPO, "analysis_suite", "cache", "state_neural_explore")
+CACHE_DIR = os.path.join(_REPO, "data", "cache", "state_labeling", "state_neural_explore")
 OUT = f"state_labeler/{SUBJECT}"
-STATS_CSV = os.path.join(_REPO, "analysis_suite", "figures", "state_labeler", SUBJECT,
+STATS_CSV = os.path.join(_REPO, "FIGURES", "state_labeler", SUBJECT,
                          "explore4_partial_rt_stats.csv")
 
 

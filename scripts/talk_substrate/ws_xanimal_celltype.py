@@ -28,8 +28,8 @@ import _events_plot as E  # noqa: E402
 from visdetect.suite.plotting import setup_style  # noqa: E402
 from visdetect.analysis.waveform_celltype import classify_celltype  # noqa: E402
 
-setup_style()
-NARROW_C, BROAD_C = "#e74c3c", "#3498db"
+C.setup_talk_style()
+NARROW_C, BROAD_C = C.CELLTYPE_COLORS["Narrow (FSI)"], C.CELLTYPE_COLORS["Broad (MSN/Proj)"]
 T2P_FILES = {"BG_046": "bg046_waveform_t2p.csv", "BG_039": "waveform_t2p_BG_039.csv",
              "BG_031": "waveform_t2p_BG_031.csv", "BG_038": "waveform_t2p_BG_038.csv"}
 # region group -> (subjects, narrow gloss, broad gloss)
@@ -83,20 +83,20 @@ def main():
                 rows_out.append(dict(group=name, event=ev, celltype=gloss, n=nU,
                                      peak_z=round(pk, 3), peak_t=round(pt, 3)))
             if ri == 0:
-                ax.set_title(name, fontsize=10)
+                ax.set_title(name, fontsize=C.FS["title"])
             if ci == 0:
                 ax.set_ylabel(f"{rlabel}\nz (shared baseline)")
             else:
                 ax.set_ylabel("")
-            ax.legend(frameon=False, fontsize=7, loc="upper left")
+            ax.legend(frameon=False, fontsize=C.FS["legend"], loc="upper left")
 
     fig.suptitle(f"Cross-region cell types on a COMMON width cutoff ({THR:.2f} ms) — "
-                 "narrow vs broad by region", fontsize=13, y=0.99)
+                 "narrow vs broad by region", fontsize=C.FS["suptitle"], y=0.99)
     fig.text(0.5, 0.005,
              f"Single pooled-GMM width cutoff {THR:.2f} ms applied to ALL units (so narrow/broad "
              "are comparable across animals). Gloss: striatum narrow=FSI/broad=SPN; cortex "
              "narrow=FS/broad=pyramidal. Bands = bootstrap 95% CI across unit-sessions.",
-             ha="center", fontsize=8, color="#555555", wrap=True)
+             ha="center", fontsize=C.FS["caption"], color=C.CAPTION_GREY, wrap=True)
     out = C.FIG_DIR.parent / "ws_xanimal_celltype.png"
     fig.savefig(out, dpi=300, bbox_inches="tight"); plt.close(fig)
     print(f"[fig] wrote {out}")

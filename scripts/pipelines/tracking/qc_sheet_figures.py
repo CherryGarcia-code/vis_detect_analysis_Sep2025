@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from matplotlib import gridspec
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Rectangle
@@ -33,6 +34,20 @@ setup_style()
 # tracking-QC filter, see spec §3.4). Light grey distinguishes from the
 # dimmed-trace grey (0.7) used for trimmed-but-not-Unknown sessions.
 STAGE_COLORS_LOCAL = {**STAGE_COLORS, "Unknown": "#bbbbbb"}
+
+
+def _shade_ramp(base_hex: str, t: float) -> tuple:
+    """Same-hue light->dark shade of `base_hex`, keyed by chronological fraction
+    t in [0,1]: t=0 (earliest session) = light tint, t=1 (latest) = dark shade.
+
+    Used to grade per-session PSTH traces by recording order so an
+    earlier/later shift in the response reads directly off the overlay.
+    """
+    base = np.array(mcolors.to_rgb(base_hex))
+    light = base + (1.0 - base) * 0.62   # 62% toward white  (early)
+    dark = base * 0.55                   # 45% toward black  (late)
+    col = light + (dark - light) * float(np.clip(t, 0.0, 1.0))
+    return tuple(np.clip(col, 0.0, 1.0))
 
 # Maps the PSTH series keys used in this module to the canonical event names
 # in EVENT_RESPONSIVENESS_WINDOWS. Used by the baseline-scalar helpers below
@@ -291,16 +306,35 @@ def _psth_matrix(uid: UIDIntermediate, key: str) -> Optional[tuple]:
     """
     rows, centers, stages, n_trials = [], None, [], []
     for rec in uid.sessions:
-        psth, c, n = rec.psths.get(key, (None, None, 0))
-        if psth is None:
+        vals = rec.psths.get(key)
+        if not vals or vals[0] is None:
             continue
-        rows.append(psth)
-        centers = c
+        rows.append(vals[0])
+        centers = vals[1]
         stages.append(rec.stage)
-        n_trials.append(n)
+        n_trials.append(vals[2])
     if not rows:
         return None
     return np.vstack(rows), centers, stages, n_trials
+
+
+def _psth_sem_matrix(uid: UIDIntermediate, key: str) -> Optional[tuple]:
+    """Stack per-session across-trial SEM rows aligned to `_psth_matrix`'s row
+    filter (sessions where this key has a PSTH). Returns (sem_matrix, centers)
+    or None. SEM is present only when the record was built with with_sem=True;
+    missing/`<2`-trial sessions contribute a NaN/zero row so alignment holds.
+    """
+    rows, centers = [], None
+    for rec in uid.sessions:
+        vals = rec.psths.get(key)
+        if not vals or vals[0] is None:
+            continue
+        sem = vals[3] if len(vals) > 3 else None
+        rows.append(sem if sem is not None else np.full_like(vals[0], np.nan))
+        centers = vals[1]
+    if not rows:
+        return None
+    return np.vstack(rows), centers
 
 
 def _per_event_baseline_scalar(mat: np.ndarray,
@@ -334,7 +368,9 @@ def _shared_baseline_scalar(uid: UIDIntermediate) -> float:
     rows: List[np.ndarray] = []
     centers: Optional[np.ndarray] = None
     for r in uid.sessions:
-        psth, c, _n = r.psths.get("baseline_on", (None, None, 0))
+        vals = r.psths.get("baseline_on")
+        psth = vals[0] if vals else None
+        c = vals[1] if vals else None
         if psth is not None:
             rows.append(psth)
             if centers is None:
@@ -375,22 +411,38 @@ def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str,
         ax.set_title(title, fontsize=10)
         return
 
+    from scipy.ndimage import gaussian_filter1d
     mat, centers, _stages, _ = data
-    mat_sub = mat - float(baseline_scalar)
-    # Symmetric vmax from absolute-value 95th percentile, with a floor so
-    # near-zero-modulation cells don't get a degenerate scale.
-    vmax = max(float(np.percentile(np.abs(mat_sub), 95)), 0.5)
-    ax.imshow(mat_sub, aspect="auto", origin="upper", cmap="RdBu_r",
-              extent=[centers[0], centers[-1], mat_sub.shape[0], 0],
-              vmin=-vmax, vmax=vmax)
+    centers = np.asarray(centers, dtype=float)
+    # (1) Smooth each session row (sigma ~= 25 ms) so single-unit per-bin Poisson
+    #     noise doesn't dominate; (2) z-score to a SHARED pre-event baseline
+    #     (mean+SD pooled over pre-0 bins across all sessions) so the noise scale is
+    #     divided out and modulation reads clearly regardless of firing rate.
+    bin_ms = (centers[1] - centers[0]) * 1000.0 if len(centers) > 1 else 25.0
+    mat_s = gaussian_filter1d(mat, max(25.0 / bin_ms, 0.5), axis=1)
+    base = centers < 0
+    if not base.any():
+        base = np.ones_like(centers, dtype=bool)
+    b = mat_s[:, base]
+    mu, sd = float(b.mean()), float(b.std())
+    if sd < 1e-6:
+        sd = 1.0
+    matz = (mat_s - mu) / sd
+    vmax = float(np.clip(np.percentile(np.abs(matz), 95), 2.0, 6.0))
+    # bilinear: takes the hard edge off the pixels without gaussian's heavy
+    # cross-session blur (which smeared the few discrete session-rows into one
+    # continuous field). Rows stay distinguishable; time reads smooth.
+    ax.imshow(matz, aspect="auto", origin="upper", cmap="RdBu_r",
+              extent=[centers[0], centers[-1], matz.shape[0], 0],
+              vmin=-vmax, vmax=vmax, interpolation="bilinear")
     ax.axvline(0, color="0.3", linewidth=0.8, alpha=0.7)
-    ax.set_title(title, fontsize=10)
-    ax.set_xlabel("time (s)"); ax.set_ylabel("session #")
-    # Inline ±vmax annotation so reviewers can calibrate the color scale.
-    ax.text(0.98, 0.02, f"±{vmax:.1f} Hz",
-            transform=ax.transAxes, fontsize=7, color="0.3",
+    ax.set_title(title, fontsize=12)
+    ax.set_xlabel("time (s)", fontsize=11); ax.set_ylabel("session #", fontsize=11)
+    ax.tick_params(labelsize=9)
+    ax.text(0.98, 0.02, f"±{vmax:.1f} z  (25 ms smooth, shared baseline)",
+            transform=ax.transAxes, fontsize=8.5, color="0.3",
             ha="right", va="bottom",
-            bbox=dict(facecolor="white", edgecolor="none", alpha=0.7, pad=1))
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.75, pad=1))
 
     if dropped_indices:
         # Build uid_idx -> heatmap_row_idx mapping using the same filter as
@@ -398,7 +450,8 @@ def _draw_heatmap(ax, uid: UIDIntermediate, key: str, title: str,
         heatmap_row = 0
         uid_to_row = {}
         for uid_idx, rec in enumerate(uid.sessions):
-            psth, _c, _n = rec.psths.get(key, (None, None, 0))
+            vals = rec.psths.get(key)
+            psth = vals[0] if vals else None
             if psth is None:
                 continue
             uid_to_row[uid_idx] = heatmap_row
@@ -428,13 +481,16 @@ def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
                         *, baseline_scalar: float = 0.0,
                         data: Optional[tuple] = None,
                         miss_data: Optional[Dict[str, Optional[tuple]]] = None) -> None:
-    """Render L vs E stage-mean PSTH traces into `ax` as a normal (white) plot,
-    baseline-subtracted to match the heatmap above. `baseline_scalar` is
-    subtracted from each stage-mean trace before plotting; 0 leaves traces
-    unchanged.
+    """Render the per-session PSTH overlay into `ax`, baseline-subtracted to
+    match the heatmap above. Each session is one trace, graded light(earliest)
+    ->dark(latest) by recording order and shaded with its own 95% CI band
+    (mean ± 1.96·SEM across that session's trials), so the earlier/later shift
+    encoded in the heatmap reads directly off the lines. A bold stage-mean line
+    anchors the aggregate. `baseline_scalar` is subtracted before plotting.
 
     miss_keys (optional): list of keys whose stage-mean traces to overlay as
-    dashed lines for hit/miss comparison (e.g. ["change_on_big_miss"]).
+    dashed aggregate lines for hit/miss comparison (kept aggregate-only so the
+    per-session hit story stays legible).
 
     data : pre-built result of _psth_matrix(uid, key); computed here if None.
     miss_data : pre-built dict mapping each miss key to its _psth_matrix result;
@@ -448,18 +504,50 @@ def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
         ax.set_axis_off()
         return
 
-    mat, centers, stages, _ = data
+    mat, centers, stages, n_trials = data
+    sem_data = _psth_sem_matrix(uid, key)
+    sem_mat = sem_data[0] if sem_data is not None else None
+    n_sess = mat.shape[0]
+    smat = mat - float(baseline_scalar)
+
+    # ── Per-session traces: graded light(earliest)->dark(latest) by recording
+    #    order, each with its own 95% CI (mean ± 1.96·SEM across that session's
+    #    trials). This is the per-session view of the heatmap directly above.
+    for i in range(n_sess):
+        t = i / (n_sess - 1) if n_sess > 1 else 1.0
+        col = _shade_ramp(STAGE_COLORS_LOCAL.get(stages[i], "#888888"), t)
+        y = smat[i]
+        if sem_mat is not None and n_trials[i] >= 2:
+            se = sem_mat[i]
+            if np.all(np.isfinite(se)):
+                ax.fill_between(centers, y - 1.96 * se, y + 1.96 * se,
+                                color=col, alpha=0.10, linewidth=0, zorder=1)
+        ax.plot(centers, y, color=col, linewidth=1.1, alpha=0.9, zorder=2)
+
+    # ── Bold stage-mean anchor(s) (white halo so they pop over the graded
+    #    session lines). Stage order: canonical stages first, then extras (Unknown).
+    present: List[str] = []
+    for s in stages:
+        if s not in present:
+            present.append(s)
+    ordered = [s for s in STAGE_ORDER if s in present] + \
+              [s for s in present if s not in STAGE_ORDER]
     has_label = False
-    for st in STAGE_ORDER:
+    for st in ordered:
         mask = np.array([s == st for s in stages])
-        if mask.sum() == 0:
+        if not mask.any():
             continue
-        label_solid = f"{st} hit" if miss_keys else st
-        stage_mean = mat[mask].mean(axis=0) - float(baseline_scalar)
-        ax.plot(centers, stage_mean, color=STAGE_COLORS_LOCAL[st],
-                linewidth=1.2, label=label_solid)
+        stage_mean = smat[mask].mean(axis=0)
+        ax.plot(centers, stage_mean, color="white", linewidth=3.6,
+                zorder=3.5, solid_capstyle="round")
+        ax.plot(centers, stage_mean, color=STAGE_COLORS_LOCAL.get(st, "#888888"),
+                linewidth=2.2, zorder=4, solid_capstyle="round",
+                label=f"{st} (n={int(mask.sum())})")
         has_label = True
 
+    # ── Optional miss overlay: aggregate stage-mean only (dashed). Not labelled
+    #    per stage — one "miss (dashed)" proxy keeps the legend compact.
+    drew_miss = False
     if miss_keys:
         for mk in miss_keys:
             mdata = (miss_data or {}).get(mk) if miss_data else None
@@ -468,24 +556,38 @@ def _draw_psth_summary(ax, uid: UIDIntermediate, key: str,
             if mdata is None:
                 continue
             mmat, mcenters, mstages, _ = mdata
-            for st in STAGE_ORDER:
+            mpresent: List[str] = []
+            for s in mstages:
+                if s not in mpresent:
+                    mpresent.append(s)
+            mordered = [s for s in STAGE_ORDER if s in mpresent] + \
+                       [s for s in mpresent if s not in STAGE_ORDER]
+            for st in mordered:
                 mask = np.array([s == st for s in mstages])
-                if mask.sum() == 0:
+                if not mask.any():
                     continue
-                stage_mean = mmat[mask].mean(axis=0) - float(baseline_scalar)
-                ax.plot(mcenters, stage_mean,
-                        color=STAGE_COLORS_LOCAL[st], linewidth=1.0,
-                        linestyle="--", alpha=0.7,
-                        label=f"{st} miss")
-                has_label = True
+                mm = (mmat[mask] - float(baseline_scalar)).mean(axis=0)
+                ax.plot(mcenters, mm,
+                        color=STAGE_COLORS_LOCAL.get(st, "#888888"), linewidth=1.6,
+                        linestyle="--", alpha=0.9, zorder=3)
+                drew_miss = True
+    if drew_miss:
+        ax.plot([], [], color="0.4", linewidth=1.6, linestyle="--",
+                label="miss (dashed)")
+        has_label = True
 
     ax.axvline(0, color="0.5", linewidth=0.7)
     ax.axhline(0, color="0.7", linewidth=0.5, alpha=0.8, zorder=0)
-    ax.set_xlabel("time (s)")
-    ax.set_ylabel("Hz (rel. baseline)")
-    ax.tick_params(labelsize=8)
+    ax.set_xlabel("time (s)", fontsize=11)
+    ax.set_ylabel("Hz (rel. baseline)", fontsize=11)
+    ax.tick_params(labelsize=10)
+    if n_sess > 1:
+        ax.text(0.02, 0.02, f"per session 1→{n_sess}: light→dark   band = 95% CI",
+                transform=ax.transAxes, fontsize=7.5, color="0.35",
+                ha="left", va="bottom")
     if has_label:
-        ax.legend(loc="upper right", fontsize=6 if miss_keys else 7, frameon=False)
+        ax.legend(loc="upper left", fontsize=9, frameon=True, framealpha=0.78,
+                  facecolor="white", edgecolor="none")
 
 
 def render_page2(uid: UIDIntermediate, isi_score: float, depth_std: float,

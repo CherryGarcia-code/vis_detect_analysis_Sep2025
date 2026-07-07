@@ -251,6 +251,19 @@ CHANGE_SIZES: List[float]  = sorted(ALL_GO_CHANGE_SIZES)   # [1.25, 1.35, 1.5, 2
 CHANGE_SIZE_LABELS: List[str] = [str(cs) for cs in CHANGE_SIZES]
 CHANGE_SIZE_POSITIONS: List[int] = list(range(len(CHANGE_SIZES)))  # equidistant
 
+# Small (1.25-1.5x) vs big (2-4x) change-size split colours — the SMALL/BIG orange ramp
+# used across change-detection figures (previously hardcoded per-script; canonical here).
+CHANGE_SIZE_COLORS: Dict[str, str] = {
+    "small": "#fdae6b",   # light orange — small change (1.25-1.5x)
+    "big":   "#d94801",   # dark orange  — big change (2-4x)
+}
+
+# Up- vs down-modulation split colours (held-out modulation sign in PSTHs).
+MODULATION_SIGN_COLORS: Dict[str, str] = {
+    "up":   "#d73027",   # red  — up-modulated
+    "down": "#4575b4",   # blue — down-modulated
+}
+
 # =====================================================================
 # Event alignment windows (alias to constants module name)
 # =====================================================================

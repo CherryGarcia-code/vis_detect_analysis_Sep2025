@@ -48,9 +48,14 @@ def main():
     ap.add_argument("--input-dir", default="data/cache/dant/BG_046/input")
     ap.add_argument("--um-registry", default=DEFAULT_UM)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--subject", default="BG_046", help="subject label for titles / default figdir")
+    ap.add_argument("--figdir", default=None,
+                    help="output dir for figures + summary_stats.json "
+                         "(default FIGURES/tracking_dant/<subject>)")
     args = ap.parse_args()
     rng = np.random.default_rng(args.seed)
-    os.makedirs(FIGDIR, exist_ok=True)
+    figdir = args.figdir or os.path.join("FIGURES", "tracking_dant", args.subject)
+    os.makedirs(figdir, exist_ok=True)
 
     dant = pd.read_csv(args.dant_registry, dtype={"session": str})
     dant["session"] = dant["session"].str.zfill(8)
@@ -120,9 +125,9 @@ def main():
                 fontsize=8, bbox=dict(boxstyle="round", fc="white", ec="0.6", alpha=0.9))
     ax.set_xlabel("Tracked length (# sessions)")
     ax.set_ylabel("Fraction of tracked neurons ≥ k sessions")
-    ax.set_title("BG_046 cross-session tracking: survival")
+    ax.set_title(f"{args.subject} cross-session tracking: survival")
     ax.legend(); ax.set_ylim(0, 1); fig.tight_layout()
-    fig.savefig(os.path.join(FIGDIR, "survival_comparison.png"), dpi=200)
+    fig.savefig(os.path.join(figdir,"survival_comparison.png"), dpi=200)
     plt.close(fig)
 
     # --- Held-out ISI-fingerprint AUC ---
@@ -183,12 +188,12 @@ def main():
         ax.set_xlabel("ISI-histogram correlation"); ax.set_ylabel("density")
         ax.set_title(f"Held-out ISI fingerprint (AUC = {auc:.3f})")
         ax.legend(); fig.tight_layout()
-        fig.savefig(os.path.join(FIGDIR, "isi_auc.png"), dpi=200)
+        fig.savefig(os.path.join(figdir,"isi_auc.png"), dpi=200)
         plt.close(fig)
     else:
         summary["heldout_isi_auc"] = None
 
-    with open(os.path.join(FIGDIR, "summary_stats.json"), "w") as f:
+    with open(os.path.join(figdir,"summary_stats.json"), "w") as f:
         json.dump(summary, f, indent=2)
     print(json.dumps(summary, indent=2))
 

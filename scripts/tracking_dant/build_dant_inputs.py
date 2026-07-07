@@ -18,8 +18,15 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import adapter  # noqa: E402
 
+# _subject_paths.session_pkl resolves the pkl for BOTH naming schemes: BG_046 tokens
+# are bare dates needing a {subject}_ prefix, whereas BG_031 tokens are ALREADY
+# fully-prefixed (BG_031_050325) so a naive f"{subject}_{sdir}.pkl" double-prefixes.
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipelines", "tracking"))
+from _subject_paths import session_pkl  # noqa: E402
+
 from visdetect.core.session import load_session  # noqa: E402
-from visdetect.analysis.config import parse_session_date  # noqa: E402
+from visdetect.analysis.config import session_date_key  # noqa: E402
 
 PRIMARY = "E:/python_analysis/git_repos/vis_detect_analysis_Sep2025"
 DEFAULT_UM_INPUT = os.path.join(PRIMARY, "data", "unit_match", "input", "BG_046")
@@ -58,7 +65,11 @@ def main():
 
     sessions = [d for d in os.listdir(args.um_input)
                 if os.path.isdir(os.path.join(args.um_input, d, "RawWaveforms"))]
-    sessions = sorted(sessions, key=parse_session_date)
+    # session_date_key (not parse_session_date): BG_046 tokens are bare dates but
+    # every other subject (e.g. BG_031_050325) is subject-prefixed, which int()-based
+    # parse_session_date cannot parse. Secondary key on the raw token makes same-day
+    # recordings (e.g. 19052025 vs 19052025_b) deterministically ordered.
+    sessions = sorted(sessions, key=lambda s: (session_date_key(s), s))
     drop = {s.strip() for s in args.drop_sessions.split(",") if s.strip()}
     dropped = [s for s in sessions if s in drop]
     sessions = [s for s in sessions if s not in drop]
@@ -84,10 +95,10 @@ def main():
             raise ValueError(f"channel_positions for session {sdir} differ ({kind} mismatch vs session 1: "
                              f"{chan_pos.shape} vs {ref_channel_pos.shape}); pooled geometry ambiguous.")
 
-        pkl_path = os.path.join(args.pkl_dir, f"{args.subject}_{sdir}.pkl")
-        if not os.path.exists(pkl_path):
-            raise FileNotFoundError(f"missing pkl for session {sdir}: {pkl_path}")
-        sess = load_session(pkl_path)
+        pkl_path = session_pkl(args.subject, sdir, args.pkl_dir)
+        if pkl_path is None or not os.path.exists(pkl_path):
+            raise FileNotFoundError(f"missing pkl for session {sdir} under {args.pkl_dir}")
+        sess = load_session(str(pkl_path))
         spike_map = {int(c.cluster_id): np.asarray(c.spike_times) for c in sess.clusters}
 
         ks_ids = _ks_ids_for_session(spath)

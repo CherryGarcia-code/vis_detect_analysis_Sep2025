@@ -25,7 +25,7 @@ import _common as C  # noqa: E402
 from visdetect.suite.plotting import setup_style  # noqa: E402
 from visdetect.analysis.waveform_celltype import classify_celltype  # noqa: E402
 
-setup_style()
+C.setup_talk_style()
 REGION = {"BG_046": "DMS", "BG_039": "DMS", "BG_031": "VMS", "BG_038": "Cortex(ref)"}
 AUC_READY = 0.70
 
@@ -70,7 +70,7 @@ def main():
     ax0.axhline(AUC_READY, color="green", lw=1.0, ls="--", label="ready (0.70)")
     ax0.set_xticks(x); ax0.set_xticklabels([f"{r.animal}\n{r.region}" for r in df.itertuples()], fontsize=8)
     ax0.set_ylim(0.45, 0.95); ax0.set_ylabel("separation AUC (narrow vs broad)")
-    ax0.set_title("Rate-independent split (CV2) vs the rate confound", fontsize=10)
+    ax0.set_title("Rate-independent split (CV2) vs the rate confound", fontsize=C.FS["title"])
     ax0.legend(frameon=False, fontsize=7, loc="upper left")
     # panel 2: delta-BIC (log)
     ax1 = fig.add_subplot(gs[1])
@@ -78,7 +78,7 @@ def main():
     ax1.set_yscale("log")
     ax1.set_xticks(x); ax1.set_xticklabels([r.animal.replace("BG_", "") for r in df.itertuples()], fontsize=8)
     ax1.set_ylabel("width GMM ΔBIC (2 vs 1 comp, log)")
-    ax1.set_title("Width bimodality", fontsize=10)
+    ax1.set_title("Width bimodality", fontsize=C.FS["title"])
     # panel 3: verdict
     ax2 = fig.add_subplot(gs[2]); ax2.axis("off")
     best = df.loc[df["cv2_auc"].idxmax()]
@@ -98,12 +98,12 @@ def main():
             " partial) -> identity needs OPTOTAGGING."]
     ax2.text(0.0, 1.0, "\n".join(txt), va="top", ha="left", fontsize=8.6, family="monospace")
 
-    fig.suptitle("Cell-type label validity across animals (one combined verdict)", fontsize=13, y=1.0)
+    fig.suptitle("Cell-type label validity across animals (one combined verdict)", fontsize=C.FS["suptitle"], y=1.0)
     fig.text(0.5, -0.03,
              "Groups labelled by the COMMON width cutoff. CV2 = rate-independent ISI irregularity; "
              "rate is the confound (width<->rate correlated). Width is bimodal everywhere, but the "
              "rate-independent confirmation is only moderate -> keep 'putative', motivate optotagging.",
-             ha="center", fontsize=8, color="#555555", wrap=True)
+             ha="center", fontsize=C.FS["caption"], color=C.CAPTION_GREY, wrap=True)
     out = C.FIG_DIR.parent / "ws_fixB_celltype_validity_combined.png"
     fig.savefig(out, dpi=300, bbox_inches="tight"); plt.close(fig)
     df.to_csv(C.FIG_DIR.parent / "ws_fixB_celltype_validity_combined.csv", index=False)

@@ -15,11 +15,11 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _common as C  # noqa: E402
 import _events_plot as E  # noqa: E402
-from visdetect.suite.plotting import setup_style  # noqa: E402
 from visdetect.analysis.config import STATE_LABEL_COLORS  # noqa: E402
 
-setup_style()
+C.setup_talk_style()
 STATES = ["Impulsive", "StimSens", "Disengaged"]
 CHANGE = [("Change_ON", f"state_{s}", STATE_LABEL_COLORS[s], s) for s in STATES]
 RESP = [("Hit", f"state_{s}", STATE_LABEL_COLORS[s], s) for s in STATES]
