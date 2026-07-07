@@ -29,7 +29,7 @@
 #SBATCH -N 1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH -t 0-08:00
+#SBATCH -t 0-12:00   # raised from 08:00: large sessions (e.g. BG_012's 191-unit days) extract in ~8h+ and were hitting the wall
 #SBATCH -p cpu
 #SBATCH --mem=96G
 
