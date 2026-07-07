@@ -34,7 +34,12 @@ from visdetect.analysis.state_labeling import render_tag_figure
 def resolve_sessions(args):
     """Session-name list, source chosen by what's available for the subject."""
     if args.sessions:
-        names = [str(s) for s in args.sessions]
+        sess_args = [str(s) for s in args.sessions]
+        if any(s.lower() == "all" for s in sess_args):
+            names = list_pkl_sessions()
+            print(f"session source: --sessions all => pkls on disk for {SUBJECT} ({len(names)} sessions)")
+        else:
+            names = sess_args
     elif os.path.exists(STAGING_MANIFEST_PATH):
         manifest = load_staging_manifest(qc_only=True)
         names = [str(r["session_name"]) for _, r in manifest.iterrows()]
@@ -72,8 +77,8 @@ def main():
     ap.add_argument("--out-dir", default=os.path.join("data", "cache", "state_tags", SUBJECT))
     ap.add_argument("--fig-dir", default=os.path.join("figures", "state_labeler", SUBJECT))
     ap.add_argument("--confidence", type=float, default=STATE_CONFIDENCE_THRESHOLD)
-    ap.add_argument("--sessions", nargs="*", default=None,
-                    help="explicit session names; overrides the manifest/pkl source")
+    ap.add_argument("--sessions", nargs="*", default=None, 
+                    help="explicit session names; overrides the manifest/pkl source. Use 'all' to include every session on disk")
     ap.add_argument("--limit", type=int, default=None,
                     help="cap to N sessions (evenly spread across the chronological list)")
     ap.add_argument("--figures", action="store_true",
