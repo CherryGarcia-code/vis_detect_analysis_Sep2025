@@ -142,8 +142,9 @@ def build_field_tensor(session, unit_ids: List[int], unit_bin_index: np.ndarray,
                        outcome_filter: Optional[set] = None):
     """Aggregate the per-unit tensor into a (trials × time × anatomical-bin) field.
 
-    Each field bin = SUM of member units' Hz (the local MUA-analog). Units with
-    bin index < 0 (e.g. off-grid / no depth) are dropped.
+    Each field bin = SUM of member units' Hz (the local MUA-analog). Units whose
+    bin index is outside [0, n_bins_anat) are dropped. Pass -1 (not NaN) for
+    off-grid / no-depth units — an int-cast NaN is garbage.
     """
     per_unit, bin_centers, valid = _build_population_tensor(
         session, list(unit_ids), event_name=event_name, window=window,
