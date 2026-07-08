@@ -186,3 +186,15 @@ def audit_shift_vs_um_offset(match_free_um: Dict[str, float],
     return {"n": int(len(shared)),
             "median_abs_diff_um": float(np.median(diffs)),
             "max_abs_diff_um": float(diffs.max())}
+
+
+from collections import Counter                                      # noqa: E402
+
+
+def select_dominant_signature(sig_by_session: Dict[str, str]
+                              ) -> Tuple[str, List[str]]:
+    """Spec §3 rule: pick the chanmap signature covering the most sessions."""
+    counts = Counter(sig_by_session.values())
+    chosen = max(counts, key=lambda s: (counts[s], s))
+    sessions = [k for k, v in sig_by_session.items() if v == chosen]
+    return chosen, sessions

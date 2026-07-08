@@ -148,3 +148,10 @@ def test_audit_shift_vs_um_offset_empty_and_nan_filtering():
     # a NaN UM offset is filtered out -> no shared finite session -> n == 0
     rep = pf.audit_shift_vs_um_offset({"01072025": 5.0}, {"01072025": float("nan")})
     assert rep["n"] == 0
+
+
+def test_select_dominant_signature():
+    sig = {"01072025": "aaa", "02072025": "aaa", "03072025": "bbb"}
+    chosen, sessions = pf.select_dominant_signature(sig)
+    assert chosen == "aaa"
+    assert sorted(sessions) == ["01072025", "02072025"]
