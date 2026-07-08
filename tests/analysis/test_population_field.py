@@ -34,3 +34,30 @@ def test_robust_unit_depth_zero_amplitude_is_nan():
     mw = np.zeros((82, 3))
     pos = np.array([[0.0, 0.0], [0.0, 100.0], [0.0, 200.0]])
     assert np.isnan(pf.robust_unit_depth(mw, pos))
+
+
+def test_fingerprint_pools_all_channels():
+    # one unit, ptp = 4 on the channel at y=1560 -> that bin gets >=4
+    pos = _np2_positions()
+    y_edges = pf.depth_bin_edges(pos, 60.0)
+    mw = np.zeros((82, pos.shape[0]))
+    chan = int(np.argmin(np.abs(pos[:, 1] - 1560)))
+    mw[:, chan] = np.linspace(-2.0, 2.0, 82)  # ptp = 4
+    fp = pf.amplitude_depth_fingerprint([mw], pos, y_edges)
+    assert fp.shape == (len(y_edges) - 1,)
+    target_bin = np.clip(np.searchsorted(y_edges, pos[chan, 1]) - 1, 0, len(y_edges) - 2)
+    assert fp[target_bin] == pytest.approx(4.0)
+
+
+def test_estimate_shift_recovers_known_roll():
+    rng = np.random.default_rng(0)
+    ref = np.abs(rng.normal(size=40))
+    mov = np.roll(ref, 3); mov[:3] = 0.0     # shifted 3 bins deeper
+    shift, corr = pf.estimate_shift_bins(ref, mov, max_lag_bins=10)
+    assert shift == -3          # mov must be rolled by -3 to align onto ref
+    # estimate_shift_bins zeroes the |lag| edge bins on alignment (verbatim from
+    # diagnose_intersession_drift.estimate_shift). On a length-40 signal that drops
+    # 3 bins -- here including ref[39]~1.49 -- so peak corr saturates at ~0.886, not
+    # >0.99 (>0.99 is unreachable for this impl even at size=200). Strong-alignment
+    # sanity check kept, threshold set to the value the verbatim impl actually attains.
+    assert corr > 0.85

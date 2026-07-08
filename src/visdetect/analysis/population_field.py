@@ -35,3 +35,41 @@ def robust_unit_depth(mean_waveform: np.ndarray,
     if not np.isfinite(total) or total <= 0:
         return float("nan")
     return float((w * y).sum() / total)
+
+
+def amplitude_depth_fingerprint(unit_waveforms: List[np.ndarray],
+                                channel_positions: np.ndarray,
+                                y_edges: np.ndarray) -> np.ndarray:
+    """Pool every channel's ptp of every unit into its depth bin (whole-probe)."""
+    y = np.asarray(channel_positions, float)[:, 1]
+    n_bins = len(y_edges) - 1
+    chan_bin = np.clip(np.searchsorted(y_edges, y) - 1, 0, n_bins - 1)
+    profile = np.zeros(n_bins, float)
+    for mw in unit_waveforms:
+        ptp = mw.max(axis=0) - mw.min(axis=0)       # (n_chan,)
+        np.add.at(profile, chan_bin, ptp)
+    return profile
+
+
+def estimate_shift_bins(ref: np.ndarray, mov: np.ndarray,
+                        max_lag_bins: int) -> Tuple[int, float]:
+    """Rigid bin shift aligning ``mov`` onto ``ref`` + peak normalized corr.
+
+    Lifted from scripts/pipelines/tracking/diagnose_intersession_drift.py::estimate_shift.
+    """
+    ref = ref - ref.mean()
+    mov = mov - mov.mean()
+    denom = np.sqrt((ref ** 2).sum() * (mov ** 2).sum())
+    if denom < 1e-9:
+        return 0, 0.0
+    best_lag, best_c = 0, -np.inf
+    for lag in range(-max_lag_bins, max_lag_bins + 1):
+        shifted = np.roll(mov, lag)
+        if lag > 0:
+            shifted[:lag] = 0
+        elif lag < 0:
+            shifted[lag:] = 0
+        c = float((ref * shifted).sum() / denom)
+        if c > best_c:
+            best_c, best_lag = c, lag
+    return best_lag, best_c
