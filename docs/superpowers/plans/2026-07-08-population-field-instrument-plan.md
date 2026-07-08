@@ -205,7 +205,7 @@ def test_estimate_shift_recovers_known_roll():
     mov = np.roll(ref, 3); mov[:3] = 0.0     # shifted 3 bins deeper
     shift, corr = pf.estimate_shift_bins(ref, mov, max_lag_bins=10)
     assert shift == -3          # mov must be rolled by -3 to align onto ref
-    assert corr > 0.99
+    assert corr > 0.85   # edge-zeroing caps corr well below 1 at short lengths (verbatim impl ~0.886 at len 40)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -614,7 +614,7 @@ git commit -m "feat(population-field): registration audit metrics"
 - Consumes: everything above; `visdetect.analysis.config.load_staging_manifest`, `canonical_session_id`, `session_date_key`; `visdetect.anatomy.channel_geometry.chanmap_signature`.
 - Produces:
   - Library: `select_dominant_signature(sig_by_session: Dict[str, str]) -> Tuple[str, List[str]]` — the signature with the most sessions and its session list (spec §3 multi-signature rule).
-  - Script: `scripts/population_field/build_field.py --subject BG_046 [--event Baseline_ON] [--depth-bin-um 60]` → writes `data/cache/population_field/<SUBJ>/registration.csv` (session, shift_um, corr, n_units), `audit.json`, and per-(event) `field_tensor_<event>.npz` (arrays + `bin_centers`, `field_bin_meta`).
+  - Script: `scripts/population_field/build_field.py --subject BG_046 [--depth-bin-um 60]` → writes `data/cache/population_field/<SUBJ>/registration.csv` (session, shift_um, corr, n_units) + `audit.json`. Field-tensor caching is **deferred to Plan 2** (analysis layers build tensors on demand via the tested `build_field_tensor` + `registration.csv`).
 
 - [ ] **Step 1: Write the failing test (library helper only — the script is integration)**
 
@@ -750,7 +750,7 @@ git commit -m "feat(population-field): per-subject driver (dominant signature + 
 
 - [ ] **Step 6: Golden-path run (real data — run where data/ is present; NOT over X:)**
 
-Run: `py scripts/population_field/build_field.py --subject BG_046 --event Baseline_ON`
+Run: `py scripts/population_field/build_field.py --subject BG_046`
 Expected: prints an `AUDIT` block with `max_abs_shift_um` ≈ 0 (spec: BG_046 whole-probe drift ~0) and `min_fingerprint_corr` ≳ 0.5; writes `data/cache/population_field/BG_046/registration.csv` + `audit.json`. **Gate:** if `max_abs_shift_um` is large or `min_fingerprint_corr` is low, STOP and investigate before trusting the grid (spec Component 0).
 
 ---
