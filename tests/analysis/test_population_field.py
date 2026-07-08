@@ -109,3 +109,26 @@ def test_build_field_tensor_sums_units_into_bins():
     assert valid2 == valid
     np.testing.assert_allclose(field[:, :, 0], per_unit[:, :, :3].sum(axis=2))
     np.testing.assert_allclose(field[:, :, 1], per_unit[:, :, 3:].sum(axis=2))
+
+
+def test_fingerprint_corr_identical_is_one():
+    a = np.array([1.0, 2.0, 3.0, 2.0, 1.0])
+    assert pf.fingerprint_corr(a, a) == pytest.approx(1.0)
+
+
+def test_peak_vs_centroid_depth():
+    mw = np.zeros((82, 3))
+    mw[:, 1] = np.linspace(-1, 1, 82)     # single dominant channel at index 1
+    pos = np.array([[0.0, 0.0], [0.0, 100.0], [0.0, 200.0]])
+    peak_d, cent_d = pf.peak_vs_centroid_depth(mw, pos)
+    assert peak_d == pytest.approx(100.0)
+    assert cent_d == pytest.approx(100.0)
+
+
+def test_audit_shift_vs_um_offset():
+    mf = {"01072025": 0.0, "02072025": 60.0, "03072025": 0.0}
+    um = {"01072025": 0.0, "02072025": 45.0}          # only 2 shared
+    rep = pf.audit_shift_vs_um_offset(mf, um)
+    assert rep["n"] == 2
+    assert rep["max_abs_diff_um"] == pytest.approx(15.0)
+    assert rep["median_abs_diff_um"] == pytest.approx(7.5)

@@ -155,3 +155,34 @@ def build_field_tensor(session, unit_ids: List[int], unit_bin_index: np.ndarray,
         if 0 <= b < n_bins_anat:
             field[:, :, b] += per_unit[:, :, u]
     return field, bin_centers, valid
+
+
+from visdetect.analysis.tracking_qc import extract_peak_channel      # noqa: E402
+
+
+def fingerprint_corr(a: np.ndarray, b: np.ndarray) -> float:
+    a = np.asarray(a, float); b = np.asarray(b, float)
+    if a.std() < 1e-12 or b.std() < 1e-12:
+        return float("nan")
+    return float(np.corrcoef(a, b)[0, 1])
+
+
+def peak_vs_centroid_depth(mean_waveform: np.ndarray,
+                           channel_positions: np.ndarray) -> Tuple[float, float]:
+    y = np.asarray(channel_positions, float)[:, 1]
+    peak_chan = extract_peak_channel(mean_waveform)
+    return float(y[peak_chan]), robust_unit_depth(mean_waveform, channel_positions)
+
+
+def audit_shift_vs_um_offset(match_free_um: Dict[str, float],
+                             um_offset_um: Dict[str, float]) -> Dict[str, float]:
+    """Compare match-free registration to the UM-anchored offset on shared sessions."""
+    shared = [s for s in match_free_um if s in um_offset_um
+              and np.isfinite(um_offset_um[s]) and np.isfinite(match_free_um[s])]
+    if not shared:
+        return {"n": 0, "median_abs_diff_um": float("nan"),
+                "max_abs_diff_um": float("nan")}
+    diffs = np.array([abs(match_free_um[s] - um_offset_um[s]) for s in shared])
+    return {"n": int(len(shared)),
+            "median_abs_diff_um": float(np.median(diffs)),
+            "max_abs_diff_um": float(diffs.max())}
