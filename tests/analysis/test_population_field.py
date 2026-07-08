@@ -61,3 +61,18 @@ def test_estimate_shift_recovers_known_roll():
     # >0.99 (>0.99 is unreachable for this impl even at size=200). Strong-alignment
     # sanity check kept, threshold set to the value the verbatim impl actually attains.
     assert corr > 0.85
+
+
+def test_session_shift_um_recovers_60um(tmp_path):
+    # Build two fake sessions' fingerprints on a shared axis, one shifted +2 bins.
+    pos = _np2_positions()
+    y_edges = pf.depth_bin_edges(pos, 60.0)
+    ref_fp = np.abs(np.sin(np.linspace(0, 6, len(y_edges) - 1))) + 0.1
+    mov_fp = np.roll(ref_fp, 2); mov_fp[:2] = 0.0
+    shifts = pf.session_shift_um(
+        {"01072025": ref_fp, "02072025": mov_fp},
+        ref_session="01072025", depth_bin_um=60.0, max_lag_um=300.0,
+    )
+    assert shifts["01072025"][0] == pytest.approx(0.0)
+    # mov is 2 bins deeper -> needs -2 bins to align -> reported deeper shift = +120 um
+    assert shifts["02072025"][0] == pytest.approx(120.0)

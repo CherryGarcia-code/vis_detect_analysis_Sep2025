@@ -73,3 +73,40 @@ def estimate_shift_bins(ref: np.ndarray, mov: np.ndarray,
         if c > best_c:
             best_c, best_lag = c, lag
     return best_lag, best_c
+
+
+from visdetect.analysis.tracking_qc import (          # noqa: E402
+    load_raw_mean_waveform, load_channel_positions,
+)
+
+
+def session_fingerprint_from_root(raw_wf_root, session_name: str,
+                                  unit_ids: List[int],
+                                  y_edges: np.ndarray) -> np.ndarray:
+    """Whole-probe amplitude-depth fingerprint for one session's good+stable units."""
+    pos = load_channel_positions(raw_wf_root, session_name)
+    if pos is None:
+        return np.zeros(len(y_edges) - 1, float)
+    wfs = []
+    for uid in unit_ids:
+        mw = load_raw_mean_waveform(raw_wf_root, session_name, int(uid))
+        if mw is not None:
+            wfs.append(mw)
+    return amplitude_depth_fingerprint(wfs, pos, y_edges)
+
+
+def session_shift_um(fingerprints: Dict[str, np.ndarray], ref_session: str,
+                     depth_bin_um: float = DEPTH_BIN_UM,
+                     max_lag_um: float = REG_MAX_LAG_UM
+                     ) -> Dict[str, Tuple[float, float]]:
+    """Per-session rigid registration shift (µm) + corr vs the reference session.
+
+    Positive shift_um ⇒ that session's landscape sits deeper than the reference.
+    """
+    ref = fingerprints[ref_session]
+    max_lag_bins = int(round(max_lag_um / depth_bin_um))
+    out: Dict[str, Tuple[float, float]] = {}
+    for sess, mov in fingerprints.items():
+        lag, corr = estimate_shift_bins(ref, mov, max_lag_bins)
+        out[sess] = (-lag * depth_bin_um, corr)   # deeper session -> positive shift
+    return out
