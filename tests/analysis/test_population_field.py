@@ -1,6 +1,8 @@
 import numpy as np
 import pytest
 from visdetect.analysis import population_field as pf
+from visdetect.analysis.utils import build_population_tensor
+from visdetect.utils.synthetic import make_synthetic_session
 
 
 def _np2_positions():
@@ -92,3 +94,18 @@ def test_unit_field_index_and_count():
     assert pf.n_field_bins(y_edges, n_shanks=4) == 4 * n_depth
     # below range clips to depth bin 0
     assert pf.unit_field_index(y_edges[0] - 999, shank=0, y_edges=y_edges) == 0
+
+
+def test_build_field_tensor_sums_units_into_bins():
+    sess = make_synthetic_session(n_trials=40, n_clusters=6, seed=1)
+    uids = [c.cluster_id for c in sess.clusters]
+    unit_bin_index = np.array([0, 0, 0, 1, 1, 1])   # first 3 -> bin 0, last 3 -> bin 1
+    per_unit, bc, valid = build_population_tensor(
+        sess, uids, event_name="Baseline_ON", window=(-0.5, 1.0), bin_size=0.025)
+    field, bc2, valid2 = pf.build_field_tensor(
+        sess, uids, unit_bin_index, n_bins_anat=2,
+        event_name="Baseline_ON", window=(-0.5, 1.0), bin_size=0.025)
+    assert field.shape == (per_unit.shape[0], per_unit.shape[1], 2)
+    assert valid2 == valid
+    np.testing.assert_allclose(field[:, :, 0], per_unit[:, :, :3].sum(axis=2))
+    np.testing.assert_allclose(field[:, :, 1], per_unit[:, :, 3:].sum(axis=2))

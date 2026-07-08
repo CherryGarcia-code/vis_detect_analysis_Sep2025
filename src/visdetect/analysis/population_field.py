@@ -129,3 +129,29 @@ def unit_field_index(registered_depth_um: float, shank: int,
                             0, n_depth - 1))
     s = int(np.clip(shank, 0, n_shanks - 1))
     return s * n_depth + depth_bin
+
+
+from visdetect.analysis.utils import build_population_tensor as _build_population_tensor  # noqa: E402
+from visdetect.analysis.constants import DEFAULT_BIN_SIZE                                  # noqa: E402
+
+
+def build_field_tensor(session, unit_ids: List[int], unit_bin_index: np.ndarray,
+                       n_bins_anat: int, event_name: str = "Change_ON",
+                       window: Tuple[float, float] = (-1.0, 1.5),
+                       bin_size: float = DEFAULT_BIN_SIZE,
+                       outcome_filter: Optional[set] = None):
+    """Aggregate the per-unit tensor into a (trials × time × anatomical-bin) field.
+
+    Each field bin = SUM of member units' Hz (the local MUA-analog). Units with
+    bin index < 0 (e.g. off-grid / no depth) are dropped.
+    """
+    per_unit, bin_centers, valid = _build_population_tensor(
+        session, list(unit_ids), event_name=event_name, window=window,
+        bin_size=bin_size, outcome_filter=outcome_filter)
+    field = np.zeros((per_unit.shape[0], per_unit.shape[1], n_bins_anat), float)
+    idx = np.asarray(unit_bin_index, int)
+    for u in range(per_unit.shape[2]):
+        b = idx[u]
+        if 0 <= b < n_bins_anat:
+            field[:, :, b] += per_unit[:, :, u]
+    return field, bin_centers, valid
