@@ -17,3 +17,20 @@ def test_depth_bin_edges_cover_active_band():
     assert edges[0] <= pos[:, 1].min()
     assert edges[-1] >= pos[:, 1].max()
     assert np.allclose(np.diff(edges), 60.0)
+
+
+def test_robust_unit_depth_weighted_centroid():
+    # 3 channels at y = 0, 100, 200; ptp concentrated as 1:2:1 -> centroid = 100
+    n_samp = 82
+    mw = np.zeros((n_samp, 3))
+    mw[:, 0] = np.linspace(-0.5, 0.5, n_samp)   # ptp 1
+    mw[:, 1] = np.linspace(-1.0, 1.0, n_samp)   # ptp 2
+    mw[:, 2] = np.linspace(-0.5, 0.5, n_samp)   # ptp 1
+    pos = np.array([[0.0, 0.0], [0.0, 100.0], [0.0, 200.0]])
+    assert pf.robust_unit_depth(mw, pos) == pytest.approx(100.0)
+
+
+def test_robust_unit_depth_zero_amplitude_is_nan():
+    mw = np.zeros((82, 3))
+    pos = np.array([[0.0, 0.0], [0.0, 100.0], [0.0, 200.0]])
+    assert np.isnan(pf.robust_unit_depth(mw, pos))

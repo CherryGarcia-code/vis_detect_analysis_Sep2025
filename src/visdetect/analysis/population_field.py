@@ -23,3 +23,15 @@ def depth_bin_edges(channel_positions: np.ndarray,
     lo = np.floor(y.min() / depth_bin_um) * depth_bin_um
     hi = np.ceil(y.max() / depth_bin_um) * depth_bin_um
     return np.arange(lo, hi + depth_bin_um, depth_bin_um)
+
+
+def robust_unit_depth(mean_waveform: np.ndarray,
+                      channel_positions: np.ndarray) -> float:
+    """Amplitude(ptp)-weighted centroid of channel depth. NaN if no amplitude."""
+    ptp = mean_waveform.max(axis=0) - mean_waveform.min(axis=0)   # (n_chan,)
+    y = np.asarray(channel_positions, float)[:, 1]
+    w = np.asarray(ptp, float)
+    total = w.sum()
+    if not np.isfinite(total) or total <= 0:
+        return float("nan")
+    return float((w * y).sum() / total)
