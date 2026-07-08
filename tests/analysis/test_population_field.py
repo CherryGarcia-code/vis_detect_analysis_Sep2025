@@ -132,3 +132,19 @@ def test_audit_shift_vs_um_offset():
     assert rep["n"] == 2
     assert rep["max_abs_diff_um"] == pytest.approx(15.0)
     assert rep["median_abs_diff_um"] == pytest.approx(7.5)
+
+
+def test_fingerprint_corr_degenerate_is_nan():
+    # constant/zero-variance fingerprint -> std ~ 0 -> NaN (leakage-safe guard)
+    assert np.isnan(pf.fingerprint_corr(np.ones(5), np.arange(5.0)))
+    assert np.isnan(pf.fingerprint_corr(np.arange(5.0), np.zeros(5)))
+
+
+def test_audit_shift_vs_um_offset_empty_and_nan_filtering():
+    empty = pf.audit_shift_vs_um_offset({}, {})
+    assert empty["n"] == 0
+    assert np.isnan(empty["median_abs_diff_um"])
+    assert np.isnan(empty["max_abs_diff_um"])
+    # a NaN UM offset is filtered out -> no shared finite session -> n == 0
+    rep = pf.audit_shift_vs_um_offset({"01072025": 5.0}, {"01072025": float("nan")})
+    assert rep["n"] == 0
