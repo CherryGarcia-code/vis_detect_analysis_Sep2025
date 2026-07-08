@@ -110,3 +110,22 @@ def session_shift_um(fingerprints: Dict[str, np.ndarray], ref_session: str,
         lag, corr = estimate_shift_bins(ref, mov, max_lag_bins)
         out[sess] = (-lag * depth_bin_um, corr)   # deeper session -> positive shift
     return out
+
+
+def registered_depth(raw_depth_um: float, shift_um: float) -> float:
+    """Depth on the common registered axis: subtract the session's rigid shift."""
+    return float(raw_depth_um) - float(shift_um)
+
+
+def n_field_bins(y_edges: np.ndarray, n_shanks: int = 4) -> int:
+    return int(n_shanks * (len(y_edges) - 1))
+
+
+def unit_field_index(registered_depth_um: float, shank: int,
+                     y_edges: np.ndarray, n_shanks: int = 4) -> int:
+    """Flattened shank×depth bin index; depth clipped into the grid range."""
+    n_depth = len(y_edges) - 1
+    depth_bin = int(np.clip(np.searchsorted(y_edges, registered_depth_um) - 1,
+                            0, n_depth - 1))
+    s = int(np.clip(shank, 0, n_shanks - 1))
+    return s * n_depth + depth_bin

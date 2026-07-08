@@ -76,3 +76,19 @@ def test_session_shift_um_recovers_60um(tmp_path):
     assert shifts["01072025"][0] == pytest.approx(0.0)
     # mov is 2 bins deeper -> needs -2 bins to align -> reported deeper shift = +120 um
     assert shifts["02072025"][0] == pytest.approx(120.0)
+
+
+def test_registered_depth_subtracts_shift():
+    assert pf.registered_depth(1800.0, 120.0) == pytest.approx(1680.0)
+
+
+def test_unit_field_index_and_count():
+    pos = _np2_positions()
+    y_edges = pf.depth_bin_edges(pos, 60.0)
+    n_depth = len(y_edges) - 1
+    # shank 2, depth in bin 0 -> index = 2 * n_depth + 0
+    idx = pf.unit_field_index(y_edges[0] + 1.0, shank=2, y_edges=y_edges, n_shanks=4)
+    assert idx == 2 * n_depth
+    assert pf.n_field_bins(y_edges, n_shanks=4) == 4 * n_depth
+    # below range clips to depth bin 0
+    assert pf.unit_field_index(y_edges[0] - 999, shank=0, y_edges=y_edges) == 0
