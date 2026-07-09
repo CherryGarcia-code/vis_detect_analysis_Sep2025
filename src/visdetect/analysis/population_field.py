@@ -12,8 +12,14 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 # New constants (flagged for user confirmation — Global Constraints).
-DEPTH_BIN_UM: float = 60.0
+DEPTH_BIN_UM: float = 60.0          # analysis grid depth bin
 REG_MAX_LAG_UM: float = 300.0
+# Registration uses a FINE, SMOOTHED fingerprint decoupled from the coarse grid
+# (matches the proven diagnose_intersession_drift recipe: 10 um bins, sigma=2).
+# A coarse/spiky profile makes the cross-session correlation argmax jitter, which
+# consecutive-pair chaining then accumulates into large spurious shifts.
+REG_BIN_UM: float = 10.0
+REG_SMOOTH_BINS: int = 2
 
 
 def depth_bin_edges(channel_positions: np.ndarray,
@@ -23,6 +29,22 @@ def depth_bin_edges(channel_positions: np.ndarray,
     lo = np.floor(y.min() / depth_bin_um) * depth_bin_um
     hi = np.ceil(y.max() / depth_bin_um) * depth_bin_um
     return np.arange(lo, hi + depth_bin_um, depth_bin_um)
+
+
+def registration_y_edges(channel_positions: np.ndarray,
+                         bin_um: float = REG_BIN_UM) -> np.ndarray:
+    """Fine depth-bin edges for the REGISTRATION fingerprint, matching the proven
+    diagnose_intersession_drift construction: pad ONE bin below y.min and TWO above
+    y.max (``arange(y.min-bin, y.max+2*bin, bin)``).
+
+    The padding/offset is load-bearing, NOT cosmetic: a tight ``[floor(min),
+    ceil(max)]`` axis (as ``depth_bin_edges`` gives) aliases against the ~15 um
+    NP2.0 row pitch, and on low-correlation yield-transition session pairs a
+    spurious far-lag correlation peak then beats lag 0 — empirically railing our
+    registration at 270-630 um where this construction gets 0 (== diagnose).
+    """
+    y = np.asarray(channel_positions, float)[:, 1]
+    return np.arange(y.min() - bin_um, y.max() + 2.0 * bin_um, bin_um)
 
 
 def robust_unit_depth(mean_waveform: np.ndarray,
@@ -57,6 +79,23 @@ def amplitude_depth_fingerprint(unit_waveforms: List[np.ndarray],
         ptp = mw.max(axis=0) - mw.min(axis=0)       # (n_chan,)
         np.add.at(profile, chan_bin, ptp)
     return profile
+
+
+def smooth_fingerprint(profile: np.ndarray,
+                       n_bins: int = REG_SMOOTH_BINS) -> np.ndarray:
+    """Gaussian-smooth an amplitude-depth fingerprint (sigma = ``n_bins`` bins).
+
+    Turns the spiky per-unit profile into a smooth density so cross-session
+    correlation is stable — not jittered by which exact units are present, the
+    failure that (unsmoothed, on the coarse grid) railed registration. Lifted from
+    scripts/pipelines/tracking/diagnose_intersession_drift.py::smooth.
+    """
+    profile = np.asarray(profile, float)
+    if n_bins <= 0:
+        return profile
+    k = np.exp(-0.5 * (np.arange(-3 * n_bins, 3 * n_bins + 1) / n_bins) ** 2)
+    k /= k.sum()
+    return np.convolve(profile, k, mode="same")
 
 
 def estimate_shift_bins(ref: np.ndarray, mov: np.ndarray,

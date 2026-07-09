@@ -72,19 +72,21 @@ def main():
     if not kept:
         raise SystemExit(f"no sessions with pkls under data/pkls/{args.subject}")
 
-    # common depth grid from the chronologically-first kept (pkl-present) session
+    # geometry from the chronologically-first kept (pkl-present) session
+    # (same chanmap signature across all kept sessions)
     ref = kept[0]
     ref_pos = load_channel_positions(root, ref)
-    y_edges = pf.depth_bin_edges(ref_pos, args.depth_bin_um)
 
-    # per-session fingerprints + match-free registration
-    fps, n_units = {}, {}
+    # match-free registration on a FINE, SMOOTHED amplitude-depth fingerprint
+    # (REG_BIN_UM, decoupled from the coarse args.depth_bin_um analysis grid), then
+    # consecutive-pair chaining anchored at the LATEST (highest-yield) session.
+    reg_y_edges = pf.registration_y_edges(ref_pos)
+    reg_fps, n_units = {}, {}
     for s in kept:
         n_units[s] = len(good_ids[s])
-        fps[s] = pf.session_fingerprint_from_root(root, s, good_ids[s], y_edges)
-    # consecutive-pair chaining anchored at the LATEST (highest-yield) session --
-    # robust to the yield/shape drift that rails a single-early-reference correlation.
-    shifts = pf.session_shift_um_chained(fps, kept, args.depth_bin_um, pf.REG_MAX_LAG_UM)
+        fp = pf.session_fingerprint_from_root(root, s, good_ids[s], reg_y_edges)
+        reg_fps[s] = pf.smooth_fingerprint(fp, pf.REG_SMOOTH_BINS)
+    shifts = pf.session_shift_um_chained(reg_fps, kept, pf.REG_BIN_UM, pf.REG_MAX_LAG_UM)
 
     # audit check (d): per-unit peak-channel vs amplitude-centroid depth agreement
     # (re-loads waveforms; local + one-time, keeps the tested library fn unchanged)

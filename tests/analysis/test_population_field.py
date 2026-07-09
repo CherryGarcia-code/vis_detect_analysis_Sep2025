@@ -199,3 +199,49 @@ def test_session_shift_um_chained_recovers_consecutive_and_anchors_latest():
     assert out["d2"][0] == pytest.approx(-120.0)         # 2 bins (120um) shallower than anchor
     assert out["d1"][0] == pytest.approx(-240.0)         # 4 bins (240um) shallower than anchor
     assert out["d2"][1] > 0.7 and out["d1"][1] > 0.7   # healthy consecutive corr (edge-zeroing caps it at short lengths)
+
+
+def test_smooth_fingerprint_spreads_spike_preserves_mass():
+    p = np.zeros(21); p[10] = 1.0
+    s = pf.smooth_fingerprint(p, n_bins=2)
+    assert s[10] < 1.0                       # peak reduced (spread out)
+    assert s[9] > 0 and s[11] > 0            # spread to neighbours
+    assert s.sum() == pytest.approx(1.0)     # normalized gaussian -> mass preserved
+    assert int(np.argmax(s)) == 10           # centre unchanged (no position shift)
+
+
+def test_registration_robust_to_yield_growth_when_fine_and_smoothed():
+    # Same anatomical density envelope, growing yield (few -> many units): the SET of
+    # active bins changes but there is NO position shift. Fine (10um) + smoothed
+    # fingerprints must register to ~0 -- the failure the coarse (60um) unsmoothed
+    # grid hit, railing at 300-540um on real BG_046.
+    rng = np.random.default_rng(0)
+    n_bins = 70
+    centres = np.linspace(0.0, 1.0, n_bins)
+    envelope = np.exp(-0.5 * ((centres - 0.5) / 0.15) ** 2)
+    envelope /= envelope.sum()
+
+    def sample_fp(n_units):
+        fp = np.zeros(n_bins)
+        for b in rng.choice(n_bins, size=n_units, p=envelope):
+            fp[b] += rng.uniform(0.5, 1.5)               # each unit's amplitude
+        return pf.smooth_fingerprint(fp, n_bins=2)
+
+    order = ["d1", "d2", "d3", "d4"]
+    fps = {s: sample_fp(y) for s, y in zip(order, [40, 90, 170, 260])}
+    out = pf.session_shift_um_chained(fps, order, depth_bin_um=10.0, max_lag_um=300.0)
+    assert out["d4"] == (0.0, 1.0)                        # latest anchor
+    assert max(abs(out[s][0]) for s in order) <= 30.0    # ~0 despite 6.5x yield growth
+
+
+def test_registration_y_edges_pads_and_differs_from_tight_grid():
+    # The registration axis must PAD (1 bin below min, 2 above max) -- diagnose's
+    # construction. A tight [floor(min), ceil(max)] axis (depth_bin_edges) aliases
+    # against the ~15um row pitch and rails registration; this is the real bug fix.
+    pos = _np2_positions()                       # y 1500..2200 at 15 um pitch
+    edges = pf.registration_y_edges(pos, bin_um=10.0)
+    y = pos[:, 1]
+    assert np.allclose(edges, np.arange(y.min() - 10.0, y.max() + 20.0, 10.0))
+    assert edges[0] < y.min() and edges[-1] > y.max()        # padded both sides
+    tight = pf.depth_bin_edges(pos, 10.0)
+    assert len(edges) != len(tight) or not np.allclose(edges, tight)   # NOT the tight grid
