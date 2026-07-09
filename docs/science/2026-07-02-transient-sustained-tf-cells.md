@@ -7,6 +7,14 @@ carry the change-detection and lick-related signals; the transient cells do not.
 This is robust to firing-rate/cell-type yield bias, pseudoreplication, and region
 pooling. A follow-up state analysis was **null** (see §7).
 
+**Follow-up (2026-07-07).** With a locally-recomputed *continuous* kernel width, the
+transient/sustained identity is shown to be a **spectrum** (a skewed unimodal
+continuum, not two discrete classes; the hard threshold here is a convenient cut on
+it), and the temporal-width axis is **orthogonal** to the narrow/broad FSI/SPN
+spike-waveform axis (width predicts coupling controlling for trough-to-peak and
+firing rate). Both adversarially verified (0/6 lenses refuted). See the companion
+`docs/science/2026-07-07-transient-sustained-spectrum-celltype.md`.
+
 **Status.** Independently reproduced and adversarially verified (6-agent review,
 Jul 2 2026): every headline number below was re-derived from the cached data.
 Verdict PASS for §§2–6; the state claim (§7) was retracted as a firing-rate
