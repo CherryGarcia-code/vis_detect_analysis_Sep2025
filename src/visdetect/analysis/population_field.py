@@ -12,8 +12,14 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 # New constants (flagged for user confirmation — Global Constraints).
-DEPTH_BIN_UM: float = 60.0
+DEPTH_BIN_UM: float = 60.0          # analysis grid depth bin
 REG_MAX_LAG_UM: float = 300.0
+# Registration uses a FINE, SMOOTHED fingerprint decoupled from the coarse grid
+# (matches the proven diagnose_intersession_drift recipe: 10 um bins, sigma=2).
+# A coarse/spiky profile makes the cross-session correlation argmax jitter, which
+# consecutive-pair chaining then accumulates into large spurious shifts.
+REG_BIN_UM: float = 10.0
+REG_SMOOTH_BINS: int = 2
 
 
 def depth_bin_edges(channel_positions: np.ndarray,
@@ -25,16 +31,40 @@ def depth_bin_edges(channel_positions: np.ndarray,
     return np.arange(lo, hi + depth_bin_um, depth_bin_um)
 
 
-def robust_unit_depth(mean_waveform: np.ndarray,
-                      channel_positions: np.ndarray) -> float:
-    """Amplitude(ptp)-weighted centroid of channel depth. NaN if no amplitude."""
-    ptp = mean_waveform.max(axis=0) - mean_waveform.min(axis=0)   # (n_chan,)
+def registration_y_edges(channel_positions: np.ndarray,
+                         bin_um: float = REG_BIN_UM) -> np.ndarray:
+    """Fine depth-bin edges for the REGISTRATION fingerprint, matching the proven
+    diagnose_intersession_drift construction: pad ONE bin below y.min and TWO above
+    y.max (``arange(y.min-bin, y.max+2*bin, bin)``).
+
+    The padding/offset is load-bearing, NOT cosmetic: a tight ``[floor(min),
+    ceil(max)]`` axis (as ``depth_bin_edges`` gives) aliases against the ~15 um
+    NP2.0 row pitch, and on low-correlation yield-transition session pairs a
+    spurious far-lag correlation peak then beats lag 0 — empirically railing our
+    registration at 270-630 um where this construction gets 0 (== diagnose).
+    """
     y = np.asarray(channel_positions, float)[:, 1]
-    w = np.asarray(ptp, float)
-    total = w.sum()
-    if not np.isfinite(total) or total <= 0:
+    return np.arange(y.min() - bin_um, y.max() + 2.0 * bin_um, bin_um)
+
+
+def robust_unit_depth(mean_waveform: np.ndarray,
+                      channel_positions: np.ndarray,
+                      ptp_frac: float = 0.5) -> float:
+    """Amplitude(ptp)-weighted centroid of channel depth over the FOOTPRINT only.
+
+    Only channels whose ptp is >= ``ptp_frac`` * the peak ptp contribute; the
+    hundreds of near-zero-ptp noise channels (which would otherwise drag the
+    centroid toward the probe centre — a 119 µm bias measured on real BG_046) are
+    excluded. NaN if no amplitude.
+    """
+    ptp = np.asarray(mean_waveform.max(axis=0) - mean_waveform.min(axis=0), float)
+    maxptp = ptp.max() if ptp.size else 0.0
+    if not np.isfinite(maxptp) or maxptp <= 0:
         return float("nan")
-    return float((w * y).sum() / total)
+    y = np.asarray(channel_positions, float)[:, 1]
+    mask = ptp >= ptp_frac * maxptp
+    w = ptp[mask]
+    return float((w * y[mask]).sum() / w.sum())
 
 
 def amplitude_depth_fingerprint(unit_waveforms: List[np.ndarray],
@@ -49,6 +79,23 @@ def amplitude_depth_fingerprint(unit_waveforms: List[np.ndarray],
         ptp = mw.max(axis=0) - mw.min(axis=0)       # (n_chan,)
         np.add.at(profile, chan_bin, ptp)
     return profile
+
+
+def smooth_fingerprint(profile: np.ndarray,
+                       n_bins: int = REG_SMOOTH_BINS) -> np.ndarray:
+    """Gaussian-smooth an amplitude-depth fingerprint (sigma = ``n_bins`` bins).
+
+    Turns the spiky per-unit profile into a smooth density so cross-session
+    correlation is stable — not jittered by which exact units are present, the
+    failure that (unsmoothed, on the coarse grid) railed registration. Lifted from
+    scripts/pipelines/tracking/diagnose_intersession_drift.py::smooth.
+    """
+    profile = np.asarray(profile, float)
+    if n_bins <= 0:
+        return profile
+    k = np.exp(-0.5 * (np.arange(-3 * n_bins, 3 * n_bins + 1) / n_bins) ** 2)
+    k /= k.sum()
+    return np.convolve(profile, k, mode="same")
 
 
 def estimate_shift_bins(ref: np.ndarray, mov: np.ndarray,
@@ -109,6 +156,42 @@ def session_shift_um(fingerprints: Dict[str, np.ndarray], ref_session: str,
     for sess, mov in fingerprints.items():
         lag, corr = estimate_shift_bins(ref, mov, max_lag_bins)
         out[sess] = (-lag * depth_bin_um, corr)   # deeper session -> positive shift
+    return out
+
+
+def session_shift_um_chained(fingerprints: Dict[str, np.ndarray],
+                             sessions_chronological: List[str],
+                             depth_bin_um: float = DEPTH_BIN_UM,
+                             max_lag_um: float = REG_MAX_LAG_UM
+                             ) -> Dict[str, Tuple[float, float]]:
+    """Per-session registration shift (µm) via CONSECUTIVE-pair chaining, anchored
+    at the LATEST session (shift 0), walking backward to the earliest.
+
+    Adjacent sessions have similar unit yield, so their amplitude-depth fingerprints
+    match in SHAPE. A single distant reference does not: its shape drifts as yield
+    grows (few→many units), and raw correlation then misreads that shape mismatch as
+    a position shift (the failure that railed ``session_shift_um`` at ±300 µm on real
+    BG_046 data, where the true whole-probe drift is ~0). Each session's shift is the
+    cumulative sum of consecutive rigid steps back to the anchor; the returned corr is
+    the CONSECUTIVE-pair correlation for that session's link (1.0 for the anchor) — a
+    per-session confidence to gate on.
+
+    ``sessions_chronological`` must be ordered earliest→latest.
+    Positive shift_um ⇒ that session's landscape sits deeper than the latest anchor.
+    """
+    order = list(sessions_chronological)
+    if not order:
+        return {}
+    max_lag_bins = int(round(max_lag_um / depth_bin_um))
+    anchor = order[-1]
+    out: Dict[str, Tuple[float, float]] = {anchor: (0.0, 1.0)}
+    cum = 0.0
+    for i in range(len(order) - 2, -1, -1):
+        earlier, later = order[i], order[i + 1]
+        lag, corr = estimate_shift_bins(fingerprints[later], fingerprints[earlier],
+                                        max_lag_bins)
+        cum += -lag * depth_bin_um     # deeper 'earlier' vs 'later' -> +; accumulate to anchor
+        out[earlier] = (cum, corr)
     return out
 
 
