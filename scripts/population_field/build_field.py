@@ -82,7 +82,9 @@ def main():
     for s in kept:
         n_units[s] = len(good_ids[s])
         fps[s] = pf.session_fingerprint_from_root(root, s, good_ids[s], y_edges)
-    shifts = pf.session_shift_um(fps, ref, args.depth_bin_um, pf.REG_MAX_LAG_UM)
+    # consecutive-pair chaining anchored at the LATEST (highest-yield) session --
+    # robust to the yield/shape drift that rails a single-early-reference correlation.
+    shifts = pf.session_shift_um_chained(fps, kept, args.depth_bin_um, pf.REG_MAX_LAG_UM)
 
     # audit check (d): per-unit peak-channel vs amplitude-centroid depth agreement
     # (re-loads waveforms; local + one-time, keeps the tested library fn unchanged)

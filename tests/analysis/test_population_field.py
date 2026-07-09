@@ -155,3 +155,47 @@ def test_select_dominant_signature():
     chosen, sessions = pf.select_dominant_signature(sig)
     assert chosen == "aaa"
     assert sorted(sessions) == ["01072025", "02072025"]
+
+
+# ── Plan 1.5 hardening: noise-robust depth + consecutive-pair chained registration ──
+
+def test_robust_unit_depth_rejects_noise_channels():
+    # Strong unit on ONE channel + tiny noise on many far channels spread across the
+    # whole probe. The old all-channel ptp-centroid is dragged toward the probe centre
+    # (~1790 um); the footprint-restricted version must stay at the peak (~1680 um).
+    n_samp, n_chan = 82, 40
+    y = np.linspace(1500.0, 2200.0, n_chan)
+    pos = np.column_stack([np.zeros(n_chan), y])
+    peak = 10
+    mw = np.zeros((n_samp, n_chan))
+    for c in range(n_chan):
+        mw[:, c] = np.linspace(-0.025, 0.025, n_samp)   # ptp 0.05 (noise) on every channel
+    mw[:, peak] = np.linspace(-0.5, 0.5, n_samp)         # ptp 1.0 (unit) on the peak channel
+    d = pf.robust_unit_depth(mw, pos)
+    assert abs(d - y[peak]) <= (y[1] - y[0])   # within one channel pitch of the true peak
+    assert d < 1750.0                          # ~1790 under the old all-channel version -> FAIL
+
+
+def test_session_shift_um_chained_zero_when_no_drift():
+    fp = np.abs(np.sin(np.linspace(0, 6, 12))) + 0.1
+    order = ["23062025", "24062025", "25062025"]          # earliest -> latest
+    fps = {s: fp.copy() for s in order}
+    out = pf.session_shift_um_chained(fps, order, depth_bin_um=60.0, max_lag_um=300.0)
+    assert out["25062025"] == (0.0, 1.0)                  # latest session is the anchor
+    for s in order:
+        assert out[s][0] == pytest.approx(0.0)            # identical -> no drift
+        assert out[s][1] > 0.99                           # high consecutive-pair corr
+
+
+def test_session_shift_um_chained_recovers_consecutive_and_anchors_latest():
+    base = np.abs(np.sin(np.linspace(0, 6, 20))) + 0.1
+    A = base.copy()
+    B = np.roll(base, 2); B[:2] = 0.0                     # +2 bins deeper than A
+    C = np.roll(base, 4); C[:4] = 0.0                     # +2 bins deeper than B
+    order = ["d1", "d2", "d3"]                            # A, B, C  (earliest -> latest)
+    fps = {"d1": A, "d2": B, "d3": C}
+    out = pf.session_shift_um_chained(fps, order, depth_bin_um=60.0, max_lag_um=300.0)
+    assert out["d3"] == (0.0, 1.0)                        # latest = anchor
+    assert out["d2"][0] == pytest.approx(-120.0)         # 2 bins (120um) shallower than anchor
+    assert out["d1"][0] == pytest.approx(-240.0)         # 4 bins (240um) shallower than anchor
+    assert out["d2"][1] > 0.7 and out["d1"][1] > 0.7   # healthy consecutive corr (edge-zeroing caps it at short lengths)
