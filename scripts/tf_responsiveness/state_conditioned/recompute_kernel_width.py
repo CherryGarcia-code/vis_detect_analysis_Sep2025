@@ -73,6 +73,8 @@ def _pulse_width(y, d, cfg, fast, slow):
     ti, win, bs = d.trial_index, cfg.pulse_eval_win, cfg.bin_s
     if fast.size > PULSE_CAP:
         fast = np.sort(np.random.default_rng(0).choice(fast, PULSE_CAP, replace=False))
+    if slow.size > PULSE_CAP:  # subsample slow symmetrically so the contrast noise matches
+        slow = np.sort(np.random.default_rng(1).choice(slow, PULSE_CAP, replace=False))
     tax, a_fast = tf_pulse_peth(y, d.bin_edges, fast, win, bs, trial_index=ti)
     _, a_slow = tf_pulse_peth(y, d.bin_edges, slow, win, bs, trial_index=ti)
     contrast = (a_fast - a_slow) / bs
@@ -114,7 +116,7 @@ def _process_session(task):
                 if K is None or not np.any(np.isfinite(K)):
                     n_skip += 1
                     continue
-                kvecs[f"u{uid}"] = np.asarray(K, float)
+                kvecs[f"{sess}_u{uid}"] = np.asarray(K, float)  # session-scoped: cluster ids recur across sessions
                 pf, ps = _pulse_width(y, d, cfg, fast, slow)
                 rows.append(dict(
                     subject=subj, session=sess, unit=uid, n_spikes=int(r["n_spikes"]),
@@ -177,7 +179,8 @@ def main(n_workers=DEFAULT_WORKERS):
             errors.append((res["subj"], res["sess"], res["err"]))
         kvecs_by_subj.setdefault(res["subj"], {}).update(res["kvecs"])
 
-    lags = _lag_offsets(_cfg("log2").kern["tf"], 0.05) * 0.05
+    cfg0 = _cfg("log2")
+    lags = _lag_offsets(cfg0.kern["tf"], cfg0.bin_s) * cfg0.bin_s
     for subj, kv in kvecs_by_subj.items():
         if kv:
             npz = Path(REPO) / f"data/cache/tf_glm_bg046/kernel_vectors_{subj}.npz"
@@ -196,6 +199,14 @@ def main(n_workers=DEFAULT_WORKERS):
         print(f"\n{len(errors)} SESSION ERROR(S):", flush=True)
         for subj, sess, err in errors:
             print(f"  {subj}/{sess}: {err.splitlines()[0]}", flush=True)
+
+    # Completeness (the fidelity gate below would pass at 100% even on a partial run).
+    n_req_total = sum(r["n_req"] for r in results)
+    n_skip_total = sum(r["n_skip_cell"] for r in results)
+    n_vec_total = sum(len(kv) for kv in kvecs_by_subj.values())
+    print(f"COMPLETENESS: {len(df)} CSV rows + {n_vec_total} kernel vectors from "
+          f"{n_req_total} requested cells ({n_skip_total} skipped, {len(errors)} session errors)",
+          flush=True)
 
     # ── VALIDATION GATE ────────────────────────────────────────────────
     ok = np.isclose(df.grid_fwhm, df.kernel_fwhm_registry, atol=1e-9) if len(df) else np.array([])
