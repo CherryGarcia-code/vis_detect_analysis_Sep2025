@@ -111,17 +111,42 @@ def main():
             lines.append(f"    {wc:9s} x {wf:11s} n={len(q):3d}  {meds}")
 
     # ── independence: does width predict coupling controlling for t2p? ──
-    lines.append("INDEPENDENCE (mixedlm outcome ~ width + t2p, session RE): width beta | t2p beta")
+    # Two models per outcome: mixedlm (session RE) AND a cluster-robust OLS
+    # (cluster on session) as a convergence-robust cross-check. The mixedlm session
+    # RE variance is ~0 here (it warns / may not converge), so the cluster-robust OLS
+    # is the model to prefer when a convergence flag fires — write BOTH so the
+    # deliverable is self-documenting. Coupling metrics are raw-Hz Δfiring; the
+    # width→coupling MAGNITUDE is established elsewhere — this test isolates the
+    # width-vs-t2p INDEPENDENCE (t2p ns while width wins ⇒ FR-confounding is not
+    # driving it).
+    lines.append("INDEPENDENCE (outcome ~ width + t2p, standardized): width beta | t2p beta")
+    lines.append("  metrics are raw-Hz Δfiring; MAGNITUDE established elsewhere — this isolates width-vs-t2p independence")
+    lines.append("  mixedlm=session random-intercept; OLS=cluster-robust (cluster on session, prefer if mixedlm non-converged)")
     for col in OUTCOMES:
         m = d.dropna(subset=[col, WIDTH, "t2p_ms"]).copy()
         m["w"] = (m[WIDTH] - m[WIDTH].mean()) / m[WIDTH].std()
         m["t"] = (m.t2p_ms - m.t2p_ms.mean()) / m.t2p_ms.std()
         try:
             fit = smf.mixedlm(f"{col} ~ w + t", m, groups=m["session"]).fit(reml=False)
-            lines.append(f"  [{col}] width b={fit.params['w']:+.3f} p={fit.pvalues['w']:.2e} | "
-                         f"t2p b={fit.params['t']:+.3f} p={fit.pvalues['t']:.2e}")
+            conv = getattr(fit, "converged", True)
+            flag = "" if conv else "  [!] mixedlm did NOT converge (RE var~0) → prefer OLS below"
+            lines.append(f"  [{col}] mixedlm width b={fit.params['w']:+.3f} p={fit.pvalues['w']:.2e} | "
+                         f"t2p b={fit.params['t']:+.3f} p={fit.pvalues['t']:.2e}{flag}")
         except Exception as e:
             lines.append(f"  [{col}] mixedlm failed: {e}")
+        try:
+            ols = smf.ols(f"{col} ~ w + t", m).fit(cov_type="cluster",
+                                                   cov_kwds={"groups": m["session"]})
+            lines.append(f"  [{col}] OLS(cl) width b={ols.params['w']:+.3f} p={ols.pvalues['w']:.2e} | "
+                         f"t2p b={ols.params['t']:+.3f} p={ols.pvalues['t']:.2e}  n={len(m)}")
+        except Exception as e:
+            lines.append(f"  [{col}] cluster-robust OLS failed: {e}")
+
+    # ── caveats (make the deliverable self-documenting) ──
+    n_fsi = int((lab.celltype == "FSI").sum()); n_spn = int((lab.celltype == "SPN").sum())
+    lines.append(f"YIELD-BIAS CAVEAT: FSI:SPN = {n_fsi}:{n_spn} in the labeled sample — narrow cells are")
+    lines.append("  OVER-SAMPLED; do NOT read population fractions as biology. The within-sample t2p↔width")
+    lines.append("  relationship + the independence test (which don't depend on the FSI/SPN marginal) are what matter.")
 
     # ── figure ──
     fig = plt.figure(figsize=(18, 10))
