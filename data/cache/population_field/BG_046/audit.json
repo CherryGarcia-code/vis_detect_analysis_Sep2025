@@ -1,0 +1,9 @@
+{
+  "subject": "BG_046",
+  "signature": "ea45e15ac6c9d028",
+  "n_sessions": 42,
+  "max_abs_shift_um": 0.0,
+  "min_fingerprint_corr": 0.5107693934076981,
+  "peak_vs_centroid_median_um": 5.026393114308576,
+  "peak_vs_centroid_max_um": 281.61735582065853
+}
