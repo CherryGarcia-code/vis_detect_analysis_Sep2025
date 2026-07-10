@@ -40,6 +40,18 @@ COARSE_NAME = {
 _OUTLINE = (0.55, 0.55, 0.55)
 
 
+def _chanmap_session_counts(atlas_csv) -> dict:
+    """Map chanmap_signature -> #sessions from the sibling <subj>_session_signatures.csv
+    (written next to the channel atlas by build_channel_atlas). {} if not found."""
+    sig_path = str(atlas_csv).replace("_channel_atlas.csv", "_session_signatures.csv")
+    if not os.path.exists(sig_path):
+        return {}
+    s = pd.read_csv(sig_path)
+    if "chanmap_signature" not in s.columns:
+        return {}
+    return s.groupby("chanmap_signature").size().to_dict()
+
+
 def dominant_region_label(ch) -> str:
     """Readable label for where the bank sits: the dominant coarse region, plus a
     secondary if the probe straddles regions (e.g. 'cortex/WM'). Used in titles so
@@ -100,8 +112,29 @@ def plot_sites_on_atlas(subject: str, atlas_csv, tracks_json, out_png,
     ap_um = float(ch["ccf_ap"].median())
     cm = CoordMap(coords, pia_dv_um(art))
 
-    shanks = sorted(ch["shank"].unique())
-    shank_colors = {s: plt.cm.viridis(t) for s, t in zip(shanks, np.linspace(0.05, 0.9, len(shanks)))}
+    # categorical colouring: by probe shank (default) or by channel map (--color-by chanmap),
+    # the latter reveals the distinct bank configurations recorded across sessions.
+    if color_by == "chanmap" and "chanmap_signature" in ch.columns:
+        order = (ch.groupby("chanmap_signature")["ccf_dv"].median()
+                 .sort_values(ascending=False).index.tolist())   # deepest bank first
+        counts = _chanmap_session_counts(atlas_csv)
+        pal = plt.get_cmap("Set2")(np.linspace(0, 1, 8))
+        cat_colors = {sig: pal[i % 8] for i, sig in enumerate(order)}
+        cat_series = ch["chanmap_signature"]
+        legend_title = "channel map"
+        legend_items = []
+        for i, sig in enumerate(order):
+            dv = ch.loc[ch["chanmap_signature"] == sig, "ccf_dv"]
+            lab = f"map {i + 1}: DV {dv.min():.0f}–{dv.max():.0f}µm"
+            if sig in counts:
+                lab += f" ({counts[sig]} sess)"
+            legend_items.append((cat_colors[sig], lab))
+    else:
+        cats = sorted(ch["shank"].unique())
+        cat_colors = {s: plt.cm.viridis(t) for s, t in zip(cats, np.linspace(0.05, 0.9, len(cats)))}
+        cat_series = ch["shank"]
+        legend_title = "probe shank"
+        legend_items = [(cat_colors[s], f"shank {s}") for s in cats]
 
     fig = plt.figure(figsize=(13, 6.2), layout="constrained")
     gs = fig.add_gridspec(1, 2, width_ratios=[1.25, 1.0])
@@ -132,7 +165,7 @@ def plot_sites_on_atlas(subject: str, atlas_csv, tracks_json, out_png,
             ax.scatter(cm.x(ch.ccf_ml), cm.y(ch.ccf_dv), c=values, cmap=cmap, norm=norm, **sc_kw)
         else:
             ax.scatter(cm.x(ch.ccf_ml), cm.y(ch.ccf_dv),
-                       c=[shank_colors[s] for s in ch["shank"]], **sc_kw)
+                       c=[cat_colors[v] for v in cat_series], **sc_kw)
         if zoom:
             ax.set_xlim(xlo, xhi); ax.set_ylim(yhi, ylo)
             ax.set_title("B. Striatum zoom — recording sites", fontweight="bold", fontsize=12)
@@ -154,8 +187,8 @@ def plot_sites_on_atlas(subject: str, atlas_csv, tracks_json, out_png,
         cb.set_label(value_label, fontsize=9)
     else:
         handles = [Line2D([0], [0], marker="o", ls="", mec="white", mew=0.3,
-                          mfc=shank_colors[s], label=f"shank {s}") for s in shanks]
-        axB.legend(handles=handles, title="probe shank", loc="upper right",
+                          mfc=c, label=lab) for c, lab in legend_items]
+        axB.legend(handles=handles, title=legend_title, loc="upper right",
                    frameon=False, fontsize=8, title_fontsize=8)
 
     hemi = art.hemisphere
@@ -174,15 +207,20 @@ def main():
     ap.add_argument("--coords", choices=["ccf", "stereotaxic"], default="ccf",
                     help="ccf (raw Allen microns; default) or stereotaxic "
                          "(Bregma-referenced mm, ML flipped so anatomical left is on the left)")
+    ap.add_argument("--color-by", choices=["shank", "chanmap"], default="shank",
+                    help="colour sites by probe shank (default) or by channel map "
+                         "(reveals the distinct bank configurations recorded across sessions)")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     args.anatomy_dir = args.anatomy_dir or os.path.join("data", "anatomy", args.subject)
     atlas_csv = os.path.join(args.anatomy_dir, f"{args.subject}_channel_atlas.csv")
     tracks = os.path.join(args.anatomy_dir, f"{args.subject}_shank_tracks.json")
-    suffix = "_stereotaxic" if args.coords == "stereotaxic" else ""
+    suffix = ("_stereotaxic" if args.coords == "stereotaxic" else "") + \
+             ("_bychanmap" if args.color_by == "chanmap" else "")
     out = args.out or os.path.join("FIGURES", "anatomy", args.subject,
                                    f"{args.subject}_sites_on_atlas{suffix}.png")
-    plot_sites_on_atlas(args.subject, atlas_csv, tracks, out, coords=args.coords)
+    plot_sites_on_atlas(args.subject, atlas_csv, tracks, out, coords=args.coords,
+                        color_by=args.color_by)
     print(f"wrote {out}")
 
 
