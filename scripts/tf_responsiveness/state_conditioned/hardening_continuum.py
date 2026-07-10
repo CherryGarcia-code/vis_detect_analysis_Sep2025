@@ -145,10 +145,17 @@ def tracked_collapse(d):
     mem["unit"] = mem["ks_unit_id"].astype(int)
     mem = mem[["date_key", "unit", "um_uid"]].drop_duplicates(["date_key", "unit"])
     dd = d[d.subject == "BG_046"].copy()
-    dd["date_key"] = [_norm_date(str(s).split("BG_046_", 1)[-1]) for s in dd.session]
-    dd = dd.merge(mem, on=["date_key", "unit"], how="inner")
     if not len(dd):
-        return None
+        return None                       # no BG_046 responsive cells — nothing to collapse
+    dd["date_key"] = [_norm_date(str(s).split("BG_046_", 1)[-1]) for s in dd.session]
+    n_cand = len(dd)
+    dd = dd.merge(mem, on=["date_key", "unit"], how="inner")
+    # coverage guard: BG_046 candidates AND a present members file but 0 matches
+    # means a date_key mismatch (_norm_date leading-zero DAY) silently masquerading
+    # as "no consensus overlap". The consensus cohort is documented to overlap.
+    assert len(dd), (
+        f"tracked_collapse: {n_cand} BG_046 responsive cells matched 0/{len(mem)} "
+        "consensus members despite a present members file — date_key mismatch?")
     agg = dd.groupby("um_uid").agg(
         interp_fwhm=(WIDTH, "mean"),
         change_on=("change_on", "mean"), hit_ramp=("hit_ramp", "mean"),

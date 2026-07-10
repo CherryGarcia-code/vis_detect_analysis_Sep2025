@@ -1,17 +1,20 @@
 """Single-neuron exemplars of the transient <-> sustained extremes.
 
-Shows the actual GLM TF kernel (each neuron's deconvolved response to an isolated
-TF pulse) for a few clean cells at each end of the width axis: SUSTAINED cells whose
-response stays elevated for hundreds of ms, and TRANSIENT cells whose response is a
-brief blip. These are real individual neurons -- the continuum is not just a
-population-average effect.
+Shows the actual GLM TF kernel (each neuron's deconvolved response to a unit change
+in the continuous temporal-frequency signal -- the FIR impulse response, NOT a
+discrete fast/slow pulse) for a few clean cells at each end of the width axis:
+SUSTAINED cells whose response stays elevated for hundreds of ms, and TRANSIENT cells
+whose response is a brief blip. These are real individual neurons -- the continuum is
+not just a population-average effect.
 
-Why the GLM kernel and not the raw pulse PETH: the fast pulses come every ~50 ms, so
-the raw pulse-triggered average is the impulse response convolved with the dense
-pulse train (smeared) and is weak per cell (~0.05 z). The GLM deconvolves that, so
-the single-cell response duration is visible in the kernel. For contrast, each panel
-also overlays the cell's raw fast-pulse PETH (thin grey, sign-aligned) so you can see
-it is muddier than the kernel.
+Why the GLM kernel and not the raw pulse PETH: the grating's TF fluctuates every
+~50 ms around baseline (log2 ~ N(0, 0.25 octave)), so a fast pulse is never isolated
+-- a raw fast-pulse-triggered average mixes the response to that pulse with the
+correlated neighbouring fluctuations (stimulus autocorrelation), which smears it, and
+is weak per cell (~0.05 z). The GLM regresses the spike train against the WHOLE
+continuous TF timeseries and deconvolves, so the single-cell response duration is
+visible in the kernel. For contrast, each panel overlays the cell's raw fast-pulse
+PETH (thin grey, sign-aligned) so you can see it is muddier than the kernel.
 
 Exemplars are picked programmatically (reproducible): among "clean" cells (kernel
 peak, TF-selectivity, and spike count all above median) the 3 broadest and 3
@@ -121,14 +124,14 @@ def main():
                 raw = gaussian_filter1d(raw, 1.3)
                 rp = np.nanmax(np.abs(raw)) or 1.0
                 ax.plot(tp, raw / rp * pk, color="0.55", lw=1.0, alpha=0.8, zorder=1,
-                        label="raw pulse PETH (scaled)")
+                        label="raw fast-pulse PETH (scaled)")
             ax.set_xlim(0, 1.45)
             ax.set_title(f"{tag}  fwhm={r[WIDTH]:.3f}s\n{r.subject} {r.session.split('_',2)[-1]} u{int(r.unit)}",
                          fontsize=10, color=col, fontweight="bold")
             if ci == 0:
                 ax.set_ylabel("GLM TF kernel\n(sign-aligned)", fontsize=11)
             if ri == 1:
-                ax.set_xlabel("lag from TF pulse (s)", fontsize=11)
+                ax.set_xlabel("lag from TF change (s)", fontsize=11)
             if ri == 0 and ci == 2:
                 ax.legend(frameon=False, fontsize=8, loc="upper right")
             for sp in ("top", "right"):
@@ -138,16 +141,17 @@ def main():
                          f"c1_r={r.c1_r_log2:.2f} kpeak={r.kpeak:.4f}")
 
     fig.suptitle("Real single neurons at the transient↔sustained extremes — GLM TF kernel "
-                 "(each cell's deconvolved response to a TF pulse)\n"
+                 "(each cell's deconvolved response to a unit change in temporal frequency)\n"
                  "TOP: SUSTAINED (response stays elevated ~0.4–0.7 s)   BOTTOM: TRANSIENT (a brief blip). "
                  "Grey = the same cell's raw fast-pulse PETH (muddier per cell).",
                  fontsize=12, y=1.01)
     for ext in ("png", "pdf"):
         fig.savefig(OUT / f"exemplar_kernels_continuum.{ext}", dpi=175, bbox_inches="tight")
     plt.close(fig)
-    lines += ["", "GLM kernel = deconvolved impulse response (the clean single-cell TF-pulse response);",
-              "grey raw pulse PETH is weak/smeared per cell (dense 50ms pulses) — the reason we use the kernel.",
-              "Exemplars = 3 broadest + 3 narrowest fwhm among clean cells (kpeak/c1/spikes > median)."]
+    lines += ["", "GLM kernel = deconvolved response to a unit change in the continuous TF signal;",
+              "grey raw fast-pulse PETH is weak/smeared per cell (stimulus autocorrelation + weak signal)",
+              "— the reason we read duration off the kernel. Exemplars = 3 broadest + 3 narrowest fwhm",
+              "among clean cells (kpeak/c1/spikes > median)."]
     (OUT / "exemplar_kernels_continuum_stats.txt").write_text("\n".join(lines), encoding="utf-8")
     print(f"wrote {OUT}/exemplar_kernels_continuum.png (+.pdf, +_stats.txt)")
     for s in lines:

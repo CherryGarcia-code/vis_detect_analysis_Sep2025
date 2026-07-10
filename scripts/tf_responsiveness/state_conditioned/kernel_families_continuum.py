@@ -1,11 +1,11 @@
 """What the transient -> sustained continuum IS: the deconvolved GLM TF kernel per
 width bin.
 
-The raw fast-TF-pulse PSTH does NOT separate by kernel width, because the fast
-pulses come in a dense ~50 ms train, so the pulse-triggered average is the cell's
-impulse response CONVOLVED with the pulse-train structure (which smears the temporal
-width) -- and because `interp_fwhm` is a GLM-DECONVOLVED quantity the raw average
-can't recover. This figure plots the thing the width axis is actually defined on:
+The raw fast-TF-pulse PSTH does NOT separate by kernel width, because the grating's
+TF fluctuates every ~50 ms around baseline so a fast pulse is never isolated: the
+pulse-triggered average mixes the cell's response with the correlated neighbouring
+fluctuations (stimulus autocorrelation), which smears the temporal width -- and
+because `interp_fwhm` is a GLM-DECONVOLVED quantity the raw average can't recover. This figure plots the thing the width axis is actually defined on:
 the per-cell GLM TF FIR kernel (the deconvolved impulse response), averaged per width
 bin. It shows the narrow -> broad (transient -> sustained) progression directly, and
 that the progression is SMOOTH (a continuum), not two discrete shapes.
@@ -97,6 +97,9 @@ def main():
     d["kkey"] = list(zip(d.session.astype(str), d.unit.astype(int)))
     d["hasK"] = d.kkey.map(lambda k: k in kmap)
     d = d[d.hasK & np.isfinite(d[WIDTH])].reset_index(drop=True)
+    assert len(d) > 0, (
+        "kernel_families: 0 responsive cells have a cached GLM kernel — "
+        "kernel_vectors_{subj}.npz missing/empty or a (session, unit) key mismatch.")
     K = np.vstack([_prep(kmap[k]) for k in d.kkey])          # latency-aligned, peak-norm, sign-aligned
     w = d[WIDTH].to_numpy(float)
     bin_s = float(lags[1] - lags[0])

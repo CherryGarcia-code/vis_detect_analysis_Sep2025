@@ -126,6 +126,9 @@ def main():
     d = load_width_metrics()
     cells = attach_stage(d)
     n_join = int(cells.stage2.notna().sum())
+    assert n_join > 0, (
+        "learning_continuum: staging-manifest stage join matched 0 cells — check "
+        "manifest session_name keys against the width-cache SUBJ_DDMMYYYY dates.")
     cells = cells.dropna(subset=["stage2"]).copy()
 
     OUT.mkdir(parents=True, exist_ok=True)

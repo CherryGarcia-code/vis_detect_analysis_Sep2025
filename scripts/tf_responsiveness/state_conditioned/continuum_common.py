@@ -30,9 +30,6 @@ def _cmap():
     return matplotlib.colormaps["viridis"]
 
 
-WIDTH_CMAP = None  # lazily set in plotting code via _cmap() to avoid import at load
-
-
 def load_width_metrics() -> pd.DataFrame:
     """One row per responsive cell: continuous width + coupling metrics (from
     kernel_width_continuous.csv) joined to registry TF selectivity c1_r_log2."""
@@ -47,6 +44,14 @@ def load_width_metrics() -> pd.DataFrame:
     reg["unit"] = reg["unit"].astype(int)
     d["unit"] = d["unit"].astype(int)
     d = d.merge(reg, on=["subject", "session", "unit"], how="left")
+    # coverage guard: a (subject, session, unit) key mismatch — e.g. the
+    # canonical_session_id footgun where an int64 session drops the leading-zero
+    # DAY — would silently null the registry join. Coverage is ~100% today (both
+    # keys are strings); assert it never quietly collapses.
+    frac = float(d["c1_r_log2"].notna().mean()) if len(d) else 0.0
+    assert frac >= 0.5, (
+        f"load_width_metrics: registry c1_r_log2 join matched only {frac:.0%} of "
+        f"{len(d)} cells — likely a (subject, session, unit) key mismatch.")
     d["region"] = d["subject"].map(REGION)
     return d
 
