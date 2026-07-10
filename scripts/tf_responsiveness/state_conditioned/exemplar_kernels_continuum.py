@@ -69,8 +69,8 @@ def main():
     d["kpeak"] = d.kkey.map(lambda k: float(np.max(np.abs(kmap[k]))))
     clean = d[(d.kpeak > d.kpeak.median()) & (d.c1_r_log2 > d.c1_r_log2.median()) &
               (d.n_spikes > 2000) & (d.kernel_peak_t_registry.between(0.0, 0.70))]
-    sus = clean.nlargest(3, WIDTH)
-    tra = clean.nsmallest(3, WIDTH)
+    sus = clean[clean[WIDTH] > 0.35].nlargest(3, "kpeak")   # broad + strongest kernels
+    tra = clean[clean[WIDTH] < 0.09].nlargest(3, "kpeak")   # narrow + strongest kernels
 
     # raw pulse PETHs for the same cells (sign-aligned) for the grey overlay
     Z = {k: v for k, v in np.load(NPZ, allow_pickle=True).items()}
@@ -98,14 +98,19 @@ def main():
             ax.plot(lags, K, color=col, lw=2.4, zorder=3)
             # half-max marker + CONTIGUOUS FWHM shading (walk out from the peak, not
             # first-to-last crossing — else a noisy far-off wiggle shades the whole axis)
+            # FWHM at the TRUE (sub-bin) interp_fwhm centred on the peak, + a half-max
+            # double-arrow bracket + label (visible even when fwhm < one 50ms bin, which
+            # a walk-out-from-peak span cannot show)
             half = pk / 2.0
-            ax.axhline(half, color="0.6", lw=0.8, ls=":")
-            ip = int(np.argmax(K)); lo, hi = ip, ip
-            while lo > 0 and K[lo - 1] >= half:
-                lo -= 1
-            while hi < len(K) - 1 and K[hi + 1] >= half:
-                hi += 1
-            ax.axvspan(lags[lo], lags[hi], color=col, alpha=0.14, zorder=0)
+            ip = int(np.argmax(K)); pk_lag = float(lags[ip])
+            w_fw = float(r[WIDTH])
+            x0, x1 = pk_lag - w_fw / 2, pk_lag + w_fw / 2
+            ax.axvspan(x0, x1, color=col, alpha=0.18, zorder=0)
+            ax.annotate("", xy=(x1, half), xytext=(x0, half),
+                        arrowprops=dict(arrowstyle="<->", color=col, lw=1.6))
+            ax.text(pk_lag, half * 1.2, f"fwhm={w_fw:.3f}s", color=col, fontsize=8.5,
+                    ha="center", va="bottom", fontweight="bold")
+            ax.axhline(half, color="0.7", lw=0.6, ls=":")
             ax.axhline(0, color="0.85", lw=0.8)
             # raw pulse PETH overlay (grey, sign-aligned, smoothed, scaled to the kernel peak)
             key3 = (str(r.subject), str(r.session), int(r.unit))
