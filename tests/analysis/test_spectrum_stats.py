@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from visdetect.analysis.spectrum_stats import (
     gmm_delta_bic, bimodality_coefficient, silverman_bootstrap,
-    dip_test, segmented_vs_linear,
+    dip_test, segmented_vs_linear, fit_compare_distributions,
 )
 
 def test_gmm_delta_bic_positive_for_bimodal():
@@ -43,3 +43,27 @@ def test_segmented_no_gain_on_linear_data():
     x = np.linspace(0, 1, 200)
     y = 2.0 * x + rng.normal(0, 0.02, 200)
     assert segmented_vs_linear(x, y)["delta_bic"] < 6  # no meaningful breakpoint gain
+
+
+def test_fit_compare_lognormal_data_picks_lognorm():
+    rng = np.random.default_rng(10)
+    x = np.exp(rng.normal(-2.0, 0.5, 3000))          # true lognormal, positive
+    out = fit_compare_distributions(x)
+    assert out["best_aic"] == "lognorm"
+    assert set(out["families"]) == {"lognorm", "gamma", "norm"}
+    # log-transform symmetrises a lognormal (near-zero skew), the Buzsaki signature
+    assert abs(out["skew_log"]) < abs(out["skew_linear"])
+    for fam in out["families"].values():                # every family reports the keys
+        assert set(fam) >= {"aic", "bic", "ks_stat", "ks_p", "params", "loglik"}
+
+
+def test_fit_compare_gamma_data_picks_gamma():
+    rng = np.random.default_rng(11)
+    x = rng.gamma(shape=2.0, scale=0.05, size=3000)    # true gamma, positive
+    out = fit_compare_distributions(x)
+    assert out["best_aic"] == "gamma"
+
+
+def test_fit_compare_handles_tiny_and_nonpositive():
+    out = fit_compare_distributions(np.array([np.nan, -1.0, 0.0, 3.0]))
+    assert out["families"] == {} and out["n"] <= 1     # <10 positive finite -> no fit

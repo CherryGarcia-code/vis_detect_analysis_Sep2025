@@ -113,3 +113,47 @@ def segmented_vs_linear(x, y, n_grid: int = 40) -> dict:
     return {"breakpoint": bp, "bic_linear": float(bic_lin),
             "bic_segmented": float(bic_seg), "delta_bic": float(bic_lin - bic_seg),
             "slope_lo": slope_lo, "slope_hi": slope_hi}
+
+
+def fit_compare_distributions(x, families=("lognorm", "gamma", "norm")) -> dict:
+    """MLE-fit candidate distributions to positive data and rank them by AIC.
+
+    For a right-skewed, heavy-tailed quantity (e.g. the transient->sustained kernel
+    width interp_fwhm), the natural question -- echoing Buzsaki & Mizuseki 2014's
+    "log-dynamic brain" -- is whether it is LOGNORMAL (a log-transform symmetrises it)
+    or merely gamma/otherwise skewed. Fits lognorm and gamma with floc=0 (they have
+    positive support) and norm unconstrained, via scipy MLE; reports per-family
+    loglik, AIC, BIC and a Kolmogorov-Smirnov gof, plus the AIC-best family and the
+    skew of x vs log(x) (skew_log << skew_linear is the lognormal fingerprint).
+
+    All three families here have 2 free parameters, so the AIC ranking reduces to the
+    log-likelihood ranking; AIC/BIC are still reported so the gaps are interpretable.
+
+    Returns {n, skew_linear, skew_log, best_aic, families:{name:{params, loglik, k,
+    aic, bic, ks_stat, ks_p}}}. families is empty (best_aic None) if fewer than 10
+    positive finite values are supplied.
+    """
+    x = _clean(x)
+    x = x[x > 0]                                   # lognorm/gamma need positive support
+    out = {"n": int(x.size), "skew_linear": float("nan"), "skew_log": float("nan"),
+           "best_aic": None, "families": {}}
+    if x.size < 10:
+        return out
+    out["skew_linear"] = float(stats.skew(x))
+    out["skew_log"] = float(stats.skew(np.log(x)))
+    n = x.size
+    for fam in families:
+        dist = getattr(stats, fam)
+        # floc=0 pins the location for the positive-support families (fit only shape
+        # + scale), so all three candidates fit exactly 2 free parameters.
+        params = dist.fit(x, floc=0.0) if fam in ("lognorm", "gamma") else dist.fit(x)
+        k = len(params) - (1 if fam in ("lognorm", "gamma") else 0)
+        ll = float(np.sum(dist.logpdf(x, *params)))
+        ks = stats.kstest(x, fam, args=params)
+        out["families"][fam] = {
+            "params": [float(p) for p in params], "loglik": ll, "k": int(k),
+            "aic": float(2 * k - 2 * ll), "bic": float(k * np.log(n) - 2 * ll),
+            "ks_stat": float(ks.statistic), "ks_p": float(ks.pvalue),
+        }
+    out["best_aic"] = min(out["families"], key=lambda f: out["families"][f]["aic"])
+    return out
