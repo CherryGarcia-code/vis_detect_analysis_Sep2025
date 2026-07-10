@@ -228,3 +228,42 @@ Figures + `_stats`: `FIGURES/tf_glm_bg046/{spectrum_vs_classes,width_vs_waveform
 > results survive an adversarial multi-lens verification; the one honest nuance is
 > that in DMS the waveform axis carries a little coupling signal too, though duration
 > dominates."
+
+---
+
+## 8. Continuum figure set (2026-07-09)
+
+Because the identity is a **spectrum**, the earlier transient/sustained figures
+(which used a hard class split) were re-rendered on the **continuous width axis**,
+*added alongside* the originals. Scripts in
+`scripts/tf_responsiveness/state_conditioned/`; figures in
+`FIGURES/tf_glm_bg046/*_continuum/`. Shared helper `continuum_common.py`
+(`load_width_metrics`, `binned_trend` = decile mean ± bootstrap-CI + monotonic trend +
+Spearman, `width_bin_assign`). Representation throughout: decile-binned tuning curves
++ trend, and — where the originals had PSTHs — **width-binned PSTH families** (5
+equal-count bins on the viridis gradient, with 95% CI shading) instead of two class
+means.
+
+- **`kernel_families_continuum`** — *what the axis IS.* The cached GLM TF kernels per
+  width bin, sign- and latency-aligned + peak-normalised: narrow bins are sharp
+  (transient), broad bins prolonged (sustained), and the five bins **morph smoothly**
+  (a continuum, not two shapes). Illustrative-by-construction (bins are defined on the
+  kernel FWHM) — shown because the raw pulse PSTH does *not* reveal the width (dense
+  50 ms-pulse convolution + the fact that the FWHM is a GLM-deconvolved quantity).
+- **`core_metrics_continuum`** — TF selectivity, baseline rate, and Change/Hit/FA
+  coupling as decile tuning-curves vs width; every segmented-vs-linear ΔBIC negative
+  (graded, not stepped).
+- **`heatmap_continuum`** — all 520 cells (incl. the 106 intermediates) ordered by
+  continuous width; pulse / Change / FA heatmaps + width-binned PSTH families. The
+  **fast-pulse** panel is **sign-aligned** (≈49% suppression-type flipped) so the
+  population response is coherent (a signed mean cancels exc vs supp).
+- **`hardening_continuum`** — the width→coupling relationship survives session
+  random-intercept regression (cluster-robust OLS on non-convergence), a per-session
+  Spearman sign test, and the tracked-unit collapse.
+- **`learning_continuum`** — within-stage width→coupling holds in both Learning and
+  Expert (drift-robust); per-session slope vs d′ (drift-confounded, caveated).
+- **`fa_lick_continuum`** — pre-lick ramp rises with width (ρ=+0.34); width-ordered FA
+  heatmap + FA PSTH family; % lick-responsive rises across width bins (63→87%).
+
+Prerequisite: `rebuild_peth_traces_all.py` (parallel, all 520 cells incl.
+intermediates → `data/cache/tf_glm_bg046/peth_traces_all.npz`). All cache-based/local.
