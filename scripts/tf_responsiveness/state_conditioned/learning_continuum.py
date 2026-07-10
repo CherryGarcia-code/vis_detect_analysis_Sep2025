@@ -73,6 +73,12 @@ def attach_stage(cells):
     for subj in cells.subject.unique():
         man = pd.read_csv(f"{REPO}/data/{subj}_staging_manifest.csv", dtype={"session_name": str})
         man = man[~man.qc_fail.astype(bool)]
+        # One BG_031 date (19052025) appears TWICE in the manifest (a base session +
+        # a "_b" re-recording, both keyed by the same session_name/date). Without this
+        # de-dup the stage-join matches that session's cells to both rows and
+        # double-counts them (520 -> 527). The two rows are identical in stage/d',
+        # so keeping the first is safe.
+        man = man.drop_duplicates(subset="session_name", keep="first")
         man["stage2"] = man["stage"].replace({"Naive": "Learning"})
         man["order"] = man["date"].map(_pdate)
         man = man.sort_values("order").reset_index(drop=True)
