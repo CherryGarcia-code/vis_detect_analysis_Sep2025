@@ -177,22 +177,29 @@ def main():
             ax.axhline(0, color="0.85", lw=0.8)
             # raw pulse PETH overlay (grey, sign-aligned, smoothed, scaled to the kernel peak)
             key3 = (str(r.subject), str(r.session), int(r.unit))
-            if key3 in prow:
-                raw = Z["mat_pulse"][prow[key3]]
-                raw = raw * ksign          # KERNEL's sign — never the trace's own (circular)
-                raw = gaussian_filter1d(raw, 1.3)
+            # Grey = the RAW (model-free) fast-pulse PETH. Prefer the exemplar CI cache: it
+            # is computed over the FULL kernel lag range (to 1.45 s), whereas the shared
+            # peth_traces cache stops at 0.8 s and would leave the grey trace stopping short
+            # of the coloured one. Fall back to the shared cache if the CI cache is absent.
+            gkey = f"{r.session}_u{int(r.unit)}"
+            have_g = pci is not None and f"{gkey}_point" in pci.files
+            if have_g or key3 in prow:
+                if have_g:
+                    gt = np.asarray(pci["t_pulse"], float)
+                    raw = gaussian_filter1d(np.asarray(pci[f"{gkey}_point"], float), 1.3)
+                else:                       # fallback: shorter shared cache
+                    gt = tp
+                    raw = gaussian_filter1d(Z["mat_pulse"][prow[key3]] * ksign, 1.3)
                 rp = np.nanmax(np.abs(raw)) or 1.0
-                gscale = pk / rp           # grey is scaled onto the kernel's peak
-                # 95% CI on the grey trace — a TRIAL bootstrap (same resampling unit as the
-                # kernel's CI, and correct because the ~56 pulses inside a trial are NOT
-                # independent). Same sign + display smoothing + scaling as the line above.
-                gkey = f"{r.session}_u{int(r.unit)}"
-                if pci is not None and f"{gkey}_lo" in pci.files:
+                gscale = pk / rp            # grey is scaled onto the kernel's peak
+                # 95% CI — a TRIAL bootstrap (same resampling unit as the kernel's CI, and
+                # correct because the ~56 pulses inside a trial are NOT independent).
+                if have_g and f"{gkey}_lo" in pci.files:
                     glo = gaussian_filter1d(np.asarray(pci[f"{gkey}_lo"], float), 1.3) * gscale
                     ghi = gaussian_filter1d(np.asarray(pci[f"{gkey}_hi"], float), 1.3) * gscale
-                    ax.fill_between(tp, glo, ghi, color="0.55", alpha=0.16, lw=0, zorder=0,
+                    ax.fill_between(gt, glo, ghi, color="0.55", alpha=0.16, lw=0, zorder=0,
                                     label="raw PETH 95% CI (trial bootstrap)")
-                ax.plot(tp, raw * gscale, color="0.45", lw=1.1, alpha=0.9, zorder=1,
+                ax.plot(gt, raw * gscale, color="0.45", lw=1.1, alpha=0.9, zorder=1,
                         label="raw fast-pulse PETH (scaled)")
             ax.set_xlim(0, 1.45)
             # Keep the KERNEL (the estimand) in focus. The raw-PETH CI is far wider — that
@@ -222,13 +229,14 @@ def main():
                          f"c1_r={r.c1_r_log2:.2f} kpeak={r.kpeak:.4f}{band_txt}")
 
     band_note = "Shaded band = 95% CI (trial bootstrap, 200×). " if any_band else ""
-    fig.suptitle("Real single neurons at the transient↔sustained extremes — GLM TF kernel "
-                 "(each cell's deconvolved response to a unit change in temporal frequency)\n"
-                 "TOP: SUSTAINED (stays elevated ~0.4–0.7 s)   BOTTOM: TRANSIENT (a brief blip).\n"
-                 f"{band_note}Grey = the same cell's RAW (model-free) fast-pulse PETH + its 95% CI — "
-                 "it TRACKS the kernel (shape r=+0.82) but is far less precise (wider band): "
-                 "independent corroboration, and why the GLM is the better estimator.",
-                 fontsize=12, y=1.01)
+    fig.suptitle(
+        "Real single neurons at the transient↔sustained extremes\n"
+        "GLM TF kernel = each cell's deconvolved response to a unit change in temporal frequency."
+        "   TOP: SUSTAINED (stays elevated ~0.4–0.7 s)   BOTTOM: TRANSIENT (a brief blip)\n"
+        f"{band_note}Grey = the same cell's RAW (model-free) fast-pulse PETH + its 95% CI: it "
+        "tracks the kernel (shape r=+0.82) but is far less precise —\nindependent corroboration, "
+        "and why the GLM is the better estimator.",
+        fontsize=10.5, y=1.015)
     for ext in ("png", "pdf"):
         fig.savefig(OUT / f"exemplar_kernels_continuum.{ext}", dpi=175, bbox_inches="tight")
     plt.close(fig)

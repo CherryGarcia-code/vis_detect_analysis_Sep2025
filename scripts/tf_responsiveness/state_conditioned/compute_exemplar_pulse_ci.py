@@ -53,6 +53,11 @@ from visdetect.analysis.tf_glm_data import session_trial_regressors   # noqa: E4
 from visdetect.analysis.align import align_spikes_to_events           # noqa: E402
 
 B_BOOT = 200
+# Longer window than the shared cache's ALIGN["pulse"] = (-0.4, 0.8): the GLM kernel runs
+# to lag 1.45 s, so a 0.8 s PETH would leave the grey trace stopping short of the coloured
+# one. Recomputing 6 cells over the full range costs minutes (a full-cache rebuild would
+# cost ~1 h), so the exemplar figure gets its grey trace + CI from HERE, not from the cache.
+PULSE_WIN = (-0.4, 1.45)
 OUT = Path(REPO) / "data/cache/tf_glm_bg046/exemplar_pulse_ci.npz"
 
 
@@ -70,19 +75,39 @@ def _boot_cell(task):
     bi = np.clip(bi, 0, len(d.trial_index) - 1)
     ptrial = np.asarray(d.trial_index, int)[bi]
 
-    win, base = ALIGN["pulse"]
+    _, base = ALIGN["pulse"]          # same baseline window; LONGER display window
+    win = PULSE_WIN
     binned, t = align_spikes_to_events(_spikes(s, int(uid)), list(fast), window=win, bin_size=BIN)
     binned = np.asarray(binned, float)
+    t = np.asarray(t, float)
+
+    # ⚠️ CENSOR LAGS THAT RUN PAST THE CHANGE EVENT. Fast pulses live in the BASELINE
+    # period, and align_spikes_to_events does NOT clip at trial boundaries — so a long
+    # window around a pulse late in the baseline runs straight into the change stimulus
+    # and the lick, and their (large) responses contaminate the long lags. Unmasked, that
+    # made even TRANSIENT cells look like they had a sustained raw response. For each
+    # pulse, keep only lags that stay BEFORE that trial's change (or, on trials with no
+    # change, before the trial ends); everything later becomes NaN and is dropped from the
+    # per-lag mean. n therefore falls with lag — that is honest, not a bug.
+    tr_end = {int(k): float(np.max(np.asarray(d.bin_edges, float)[np.asarray(d.trial_index) == k]))
+              for k in np.unique(d.trial_index)}
+    cut = np.array([
+        float(trials[k].change_time) if np.isfinite(getattr(trials[k], "change_time", np.nan))
+        else tr_end[int(k)]
+        for k in range(len(trials))], float)
+    max_lag = cut[ptrial] - fast                      # seconds of usable lag per pulse
+    binned = np.where(t[None, :] < max_lag[:, None], binned, np.nan)
+    n_at_lag = np.sum(np.isfinite(binned), axis=0)
 
     # baseline normalisation constants — from the FULL data, held fixed across bootstraps
     bmask = (t >= base[0]) & (t < base[1])
     bvals = binned[:, bmask].ravel()
-    mu, sd = float(bvals.mean()), float(bvals.std())
+    mu, sd = float(np.nanmean(bvals)), float(np.nanstd(bvals))
     if not np.isfinite(sd) or sd < 1e-6:
         sd = max(mu, 1.0)
 
-    def _z(rows):
-        return (gaussian_filter1d(binned[rows].mean(0), SIG) - mu) / sd * sign
+    def _z(rows):                       # NaN-aware: lags past the change are censored
+        return (gaussian_filter1d(np.nanmean(binned[rows], axis=0), SIG) - mu) / sd * sign
 
     tids = np.unique(ptrial)
     rows_by = {int(x): np.where(ptrial == x)[0] for x in tids}
@@ -97,7 +122,7 @@ def _boot_cell(task):
     del s
     gc.collect()
     return (f"{sess}_u{int(uid)}", np.asarray(t, float), point, lo, hi,
-            int(fast.size), int(tids.size))
+            int(fast.size), int(tids.size), n_at_lag)
 
 
 def main(workers=6):
@@ -119,14 +144,14 @@ def main(workers=6):
     save = {}
     with ProcessPoolExecutor(max_workers=min(workers, len(tasks))) as ex:
         for fut in as_completed([ex.submit(_boot_cell, t) for t in tasks]):
-            key, t, point, lo, hi, npulse, ntrial = fut.result()
+            key, t, point, lo, hi, npulse, ntrial, n_at_lag = fut.result()
             save[f"{key}_lo"], save[f"{key}_hi"] = lo, hi
             save[f"{key}_point"] = point
+            save[f"{key}_n"] = n_at_lag
             save["t_pulse"] = t
-            ip = int(np.argmax(np.abs(point)))
-            print(f"  {key}: {npulse} pulses / {ntrial} trials | peak {point[ip]:+.4f} "
-                  f"CI=[{lo[ip]:+.4f},{hi[ip]:+.4f}] excl0={not (lo[ip] <= 0 <= hi[ip])}",
-                  flush=True)
+            print(f"  {key}: {npulse} pulses / {ntrial} trials | pulses surviving the "
+                  f"change-censor: {n_at_lag[0]} at lag {t[0]:+.2f}s -> {n_at_lag[-1]} at "
+                  f"lag {t[-1]:+.2f}s", flush=True)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(OUT, **save)
     print(f"wrote {OUT}  ({len(save)//3} cells, B={B_BOOT}, trial bootstrap)", flush=True)
