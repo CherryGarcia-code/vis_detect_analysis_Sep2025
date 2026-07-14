@@ -29,6 +29,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from representative_cells import REPO, _spikes, load_session, get_event_times_by_trial  # noqa: E402
 from transient_vs_sustained import load_cells, TCOL, SCOL, NARROW, BROAD      # noqa: E402
+from heatmap_continuum import _kernel_sign, _join_width                        # noqa: E402
 from matplotlib.colors import TwoSlopeNorm                                    # noqa: E402
 from visdetect.analysis.align import align_spikes_to_events                   # noqa: E402
 from visdetect.analysis.tf_glm import TFGLMConfig, assemble_design, pulse_times_from_tf  # noqa: E402
@@ -53,8 +54,12 @@ MIN_EV = 5
 # the GLM kernel's only ~55% of the time = near chance). All pulses costs ~9 s/cell
 # and buys sqrt(41309/600) ~ 8x SNR.
 PULSE_CAP = None
-OUT = Path("E:/python_analysis/git_repos/vd_tf_bg046/FIGURES/tf_glm_bg046/heatmap_transient_sustained")
-CACHE = OUT / "peth_traces.npz"
+OUT = Path(REPO) / "FIGURES/tf_glm_bg046/heatmap_transient_sustained"   # was a stale
+# `vd_tf_bg046` path from the old repo — re-running wrote nothing where anyone looked.
+CACHE = OUT / "peth_traces.npz"          # legacy per-figure cache (only build() writes it)
+# The shared cache already holds ALL 520 responsive cells over the SAME windows/BIN/SIG,
+# rebuilt with ALL ~41k fast pulses. Read it instead of rebuilding (~1 h) here.
+SHARED_CACHE = Path(REPO) / "data/cache/tf_glm_bg046/peth_traces_all.npz"
 _RNG = np.random.default_rng(42)
 
 
@@ -143,7 +148,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
-    D = build(force=a.force)
+    if SHARED_CACHE.exists() and not a.force:
+        D = {k: v for k, v in np.load(SHARED_CACHE, allow_pickle=True).items()}
+    else:
+        D = build(force=a.force)
     OUT.mkdir(parents=True, exist_ok=True)
     try:
         from visdetect.viz.plotting import set_style
@@ -152,17 +160,28 @@ def main():
         pass
     plt.rcParams.update({"font.size": 11})
 
+    # the shared cache carries all 520 cells; this figure is the 2-CLASS view
+    cls_all = D["meta_cls"].astype(str)
+    keep = np.isin(cls_all, ("transient", "sustained"))
+    D = {k: (v[keep] if (k.startswith("mat_") or k.startswith("meta_")) else v)
+         for k, v in D.items()}
     cls = D["meta_cls"].astype(str)
-    # order: transient block then sustained block; within block by fast-pulse peak time
-    tp = D["t_pulse"]
-    peak_t = np.full(len(cls), np.nan)
-    for i, row in enumerate(D["mat_pulse"]):
-        if np.isfinite(row).any():
-            peak_t[i] = tp[np.nanargmax(row)]
+
+    # SIGN-ALIGN the pulse traces by the GLM KERNEL (independent of this PETH). Signing
+    # on the trace's own post-pulse window is circular: it flips each cell's own noise
+    # positive, fabricating a pre-pulse rise and an identical bump on every cell.
+    psign = _kernel_sign(D)
+    D["mat_pulse"] = D["mat_pulse"] * psign[:, None]
+
+    # ORDER: transient block, then sustained block; WITHIN a block by kernel WIDTH.
+    # (It used to sort by each cell's OWN fast-pulse peak latency — circular: sorting a
+    # noise-dominated trace by its own peak ALWAYS manufactures a diagonal, which is what
+    # the old "every cell is TF-locked / latency tiling" impression actually was.)
+    width = _join_width(D)
     order = []
     for c in ("transient", "sustained"):
         idx = np.where(cls == c)[0]
-        idx = idx[np.argsort(np.nan_to_num(peak_t[idx], nan=1e9))]
+        idx = idx[np.argsort(np.nan_to_num(width[idx], nan=1e9))]
         order.append(idx)
     n_tr = len(order[0])
     order = np.concatenate(order)
@@ -187,10 +206,11 @@ def main():
         t = D[f"t_{k}"]
         M = D[f"mat_{k}"][order].copy()
         peaknorm = (k == "pulse")
-        if peaknorm:
-            pk = np.nanmax(np.abs(M), axis=1, keepdims=True)
-            pk[~np.isfinite(pk) | (pk < 1e-9)] = 1.0
-            M = M / pk
+        # ⚠️ NO PEAK-NORMALISATION any more. Dividing each cell by its OWN peak is
+        # circular: it rescales that cell's largest noise excursion up to 1.0, so every
+        # cell — signal or not — is drawn with a full-amplitude "response". The pulse is
+        # already sign-aligned by the GLM kernel and stays on the baseline-z scale, with a
+        # robust percentile colour range (same treatment as heatmap_continuum).
         # ── top panel ────────────────────────────────────────────────
         axp = fig.add_subplot(gs[0, j])
         if peaknorm:
@@ -226,8 +246,8 @@ def main():
         # ── heatmap ──────────────────────────────────────────────────
         axh = fig.add_subplot(gs[1, j])
         if peaknorm:
-            norm = None
-            imkw = dict(vmin=-1.0, vmax=1.0)
+            pmax = float(np.nanpercentile(np.abs(M), 97)) or 1.0
+            imkw = dict(norm=TwoSlopeNorm(vmin=-pmax, vcenter=0.0, vmax=pmax))
         else:
             # asymmetric TwoSlopeNorm: responses are mostly EXCITATORY (0..3),
             # only mild suppression (down to ~-1.5), so don't waste the deep-blue.
@@ -255,12 +275,14 @@ def main():
     cb2.set_label("change / FA:  z-score (per-unit, baseline)", fontsize=12)
     cb2.ax.tick_params(labelsize=10)
     cb1 = fig.colorbar(ims["pulse"], ax=fig.axes[1], fraction=0.05, pad=0.03)
-    cb1.set_label("pulse: peak-norm", fontsize=11)
+    cb1.set_label("pulse: sign-aligned z (suppression flipped +)", fontsize=10)
     cb1.ax.tick_params(labelsize=9)
     n_su = len(order) - n_tr
     fig.suptitle(f"TF-responsive cells by kernel width — transient (n={n_tr}) vs sustained (n={n_su})\n"
-                 "sustained cells carry the change- and lick-related signals; transient cells are near-pure fast sensory",
-                 fontsize=13.5, y=0.995)
+                 "sustained cells carry the change- and lick-related signals; transient cells are near-pure fast sensory\n"
+                 "pulse: ALL ~41k pulses/session, sign-aligned BY THE GLM KERNEL, rows sorted by kernel WIDTH "
+                 "(no peak-norm, no peak-latency sort — both were circular)",
+                 fontsize=12, y=0.995)
     for ext in ("png", "pdf"):
         fig.savefig(OUT / f"heatmap_transient_sustained.{ext}", dpi=170, bbox_inches="tight")
     plt.close(fig)
