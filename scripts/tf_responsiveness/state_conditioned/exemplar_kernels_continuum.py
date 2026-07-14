@@ -7,14 +7,30 @@ SUSTAINED cells whose response stays elevated for hundreds of ms, and TRANSIENT 
 whose response is a brief blip. These are real individual neurons -- the continuum is
 not just a population-average effect.
 
-Why the GLM kernel and not the raw pulse PETH: the grating's TF fluctuates every
-~50 ms around baseline (log2 ~ N(0, 0.25 octave)), so a fast pulse is never isolated
--- a raw fast-pulse-triggered average mixes the response to that pulse with the
-correlated neighbouring fluctuations (stimulus autocorrelation), which smears it, and
-is weak per cell (~0.05 z). The GLM regresses the spike train against the WHOLE
-continuous TF timeseries and deconvolves, so the single-cell response duration is
-visible in the kernel. For contrast, each panel overlays the cell's raw fast-pulse
-PETH (thin grey, sign-aligned) so you can see it is muddier than the kernel.
+Why the GLM kernel and not the raw pulse PETH. NOT because of stimulus autocorrelation
+-- an earlier version of this docstring said that and it was WRONG. The baseline TF is
+essentially WHITE noise (measured autocorrelation r ~ 0.000 at 50-200 ms lags), and the
+pulse-triggered average of the TF signal itself is a clean delta at t=0 with nothing
+before or after it. So the raw pulse-triggered average is not "smeared" by the stimulus.
+
+The real reasons the raw pulse PETH is a poor per-cell instrument are:
+  (1) SIGNAL-TO-NOISE — the per-pulse firing-rate modulation sits ~20x BELOW the
+      spiking noise, so a pulse-triggered average is noise-dominated;
+  (2) NO NUISANCE CONTROL — it does not regress out licks, movement, reward or
+      time-in-trial, which the GLM does; and
+  (3) (historically) only 600 of the ~41,000 fast pulses per session were used --
+      a cap that has since been removed.
+The GLM instead regresses the spike train against the WHOLE continuous TF timeseries
+with those nuisance regressors included, so it is a far more efficient estimator.
+
+⭐ ONCE ALL PULSES ARE USED, THE RAW PETH CORROBORATES THE KERNEL. With the 600-pulse
+cap removed the grey trace TRACKS each cell's kernel closely (mean shape correlation
+r = +0.82, median +0.86, 100% of cells positive — it was +0.14 / 66% under the cap).
+That is an INDEPENDENT, model-free confirmation that the kernel is measuring a real
+response, not a model artifact: the deconvolved kernel and the raw pulse-triggered
+average agree. The grey trace is flipped by the KERNEL's sign (never by its own
+post-window sign — that would be circular and would make even pure noise look like a
+response).
 
 Each kernel carries a 95% CI band (shaded) from a per-cell TRIAL BOOTSTRAP of the
 GLM refit (resample the cell's trials, refit the ridge-Poisson at the point-estimate
@@ -126,7 +142,12 @@ def main():
     for ri, (grp, col, tag) in enumerate([(sus, SUS_C, "SUSTAINED"), (tra, TRA_C, "TRANSIENT")]):
         for ci, (_, r) in enumerate(grp.iterrows()):
             ax = fig.add_subplot(gs[ri, ci])
-            K = gaussian_filter1d(_signed(kmap[r.kkey]), DISPLAY_SMOOTH)   # display smoothing
+            Kraw = np.asarray(kmap[r.kkey], float)
+            # the cell's excitation/suppression sign, from the KERNEL (same convention the
+            # CI bootstrap used). Reused below for the grey raw-PETH overlay so that trace
+            # is NOT flipped by its own post-window sign (which would be circular).
+            ksign = float(np.sign(Kraw[int(np.argmax(np.abs(Kraw)))]) or 1.0)
+            K = gaussian_filter1d(Kraw * ksign, DISPLAY_SMOOTH)   # display smoothing
             pk = K.max()
             half = pk / 2.0
             ip = int(np.argmax(K)); pk_lag = float(lags[ip])
@@ -156,8 +177,7 @@ def main():
             key3 = (str(r.subject), str(r.session), int(r.unit))
             if key3 in prow:
                 raw = Z["mat_pulse"][prow[key3]]
-                post = (tp >= 0) & (tp <= 0.4)
-                raw = raw * (np.sign(np.nanmean(raw[post])) or 1.0)
+                raw = raw * ksign          # KERNEL's sign — never the trace's own (circular)
                 raw = gaussian_filter1d(raw, 1.3)
                 rp = np.nanmax(np.abs(raw)) or 1.0
                 ax.plot(tp, raw / rp * pk, color="0.55", lw=1.0, alpha=0.8, zorder=1,
@@ -185,7 +205,8 @@ def main():
     fig.suptitle("Real single neurons at the transient↔sustained extremes — GLM TF kernel "
                  "(each cell's deconvolved response to a unit change in temporal frequency)\n"
                  "TOP: SUSTAINED (response stays elevated ~0.4–0.7 s)   BOTTOM: TRANSIENT (a brief blip). "
-                 f"{band_note}Grey = the same cell's raw fast-pulse PETH (muddier per cell).",
+                 f"{band_note}Grey = the same cell's RAW (model-free) fast-pulse PETH — it now TRACKS "
+                 "the kernel (mean shape r=+0.82), an independent corroboration.",
                  fontsize=12, y=1.01)
     for ext in ("png", "pdf"):
         fig.savefig(OUT / f"exemplar_kernels_continuum.{ext}", dpi=175, bbox_inches="tight")

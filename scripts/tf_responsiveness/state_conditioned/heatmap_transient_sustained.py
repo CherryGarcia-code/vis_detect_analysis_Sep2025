@@ -46,7 +46,13 @@ TITLES = {"pulse": "fast TF pulse", "change": "Change_ON (hit trials)", "fa": "F
 XLAB = {"pulse": "t from fast TF pulse (s)", "change": "t from Change_ON (s)",
         "fa": "t from FA lick (s)"}
 MIN_EV = 5
-PULSE_CAP = 600          # subsample fast pulses (thousands/session) — plenty for a mean PETH
+# Use ALL fast pulses (None = no cap). This was 600, which threw away ~98.5% of the
+# ~41k fast pulses in a session on the assumption that 600 was "plenty for a mean
+# PETH". It is not: the per-pulse response sits ~20x BELOW the spiking noise, so the
+# subsample left the raw pulse PETH noise-dominated (its post-window sign agreed with
+# the GLM kernel's only ~55% of the time = near chance). All pulses costs ~9 s/cell
+# and buys sqrt(41309/600) ~ 8x SNR.
+PULSE_CAP = None
 OUT = Path("E:/python_analysis/git_repos/vd_tf_bg046/FIGURES/tf_glm_bg046/heatmap_transient_sustained")
 CACHE = OUT / "peth_traces.npz"
 _RNG = np.random.default_rng(42)
@@ -97,7 +103,7 @@ def build(force=False):
         d = assemble_design(trials, cfg)
         fast, _slow = pulse_times_from_tf(d, cfg)
         fast = np.asarray(fast, float)
-        if fast.size > PULSE_CAP:
+        if PULSE_CAP is not None and fast.size > PULSE_CAP:
             fast = np.sort(_RNG.choice(fast, PULSE_CAP, replace=False))
         ev = {"pulse": fast,
               "change": _outcome_times(s, "Change_ON", "hit"),

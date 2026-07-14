@@ -78,7 +78,9 @@ def _process_session(task):
         # unlike str hash() (randomised by PYTHONHASHSEED) — so the pulse subsample
         # is reproducible.
         rng = np.random.default_rng(zlib.crc32(str(sess).encode()))
-        if fast.size > PULSE_CAP:
+        # PULSE_CAP is now None (use ALL ~41k fast pulses): the old 600-pulse subsample
+        # left the raw pulse PETH noise-dominated. Guard kept so a cap can be restored.
+        if PULSE_CAP is not None and fast.size > PULSE_CAP:
             fast = np.sort(rng.choice(fast, PULSE_CAP, replace=False))
         ev = {"pulse": fast,
               "change": _outcome_times(s, "Change_ON", "hit"),

@@ -17,12 +17,29 @@ showed kernel width is a GRADED axis, not two classes, so here:
     right-skewed) and the mean z-trace per bin is drawn along the viridis gradient,
     with 95% CI (+/-1.96 SEM) shading.
 
-FAST TF PULSE — SIGN-ALIGNED. ~half of TF-responsive cells are SUPPRESSION-type
-(fire less to a fast pulse; the GLM responsiveness is sign-agnostic), so a signed
-pop-mean cancels excitation against suppression. For the pulse panel ONLY we flip
-each cell to its own post-pulse response sign (suppression cells * -1) so the
-population response is coherent; the % flipped per bin is annotated. Change / FA are
-predominantly excitatory and are shown raw.
+FAST TF PULSE — SIGN-ALIGNED BY THE GLM KERNEL (not by the PETH itself).
+A sizeable minority of TF-responsive cells are SUPPRESSION-type (fire less to a fast
+pulse; GLM responsiveness is sign-agnostic), so a signed pop-mean cancels excitation
+against suppression and we must sign-align before averaging.
+
+⚠️ HOW **NOT** TO DO IT (a bug this figure used to have). The first version took each
+cell's sign from its OWN post-pulse (0, 0.4) s window and then averaged that same
+trace. That is circular (double-dipping), and it produced two artifacts:
+  * a SPURIOUS PRE-PULSE RISE — the traces appeared to climb ~150 ms BEFORE t=0. The
+    stimulus cannot cause this: the baseline TF is white noise (autocorrelation
+    r ~ 0.000 at 50-200 ms) and the pulse-triggered average of the TF itself is a
+    clean delta at t=0. The cause was that a smoothed PETH's pre- and post-pulse bins
+    are correlated across cells (r ~ +0.20), so choosing the sign on the post window
+    dragged the pre window positive too.
+  * an INFLATED RESPONSE — flipping each cell's own noise to be positive lifted the
+    population post-pulse mean ~7x (+0.0144 vs +0.0019 with an honest sign).
+FIX: take the sign from the GLM TF KERNEL (mean over the same 0-0.4 s lag window).
+The kernel is an independent estimator of the same quantity — fit on the full
+continuous TF regression with lick/movement/reward nuisances regressed out — so it is
+not derived from the trace being averaged. The suppression fraction it reports
+(~37%) is the honest one; the old PETH-derived "~49%" was a coin-flip on noise.
+
+Change / FA are predominantly excitatory and are shown raw (no sign-alignment).
 
 Per-panel colour scaling: change / FA on an asymmetric `TwoSlopeNorm(-1.5, 0, 3)`
 baseline-z (preserves magnitude); the sign-aligned pulse on a robust percentile-
@@ -49,7 +66,9 @@ from scipy.ndimage import gaussian_filter1d
 _HERE = str(Path(__file__).resolve().parent)
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
-from continuum_common import load_width_metrics, width_bin_assign, WIDTH, REPO, _cmap  # noqa: E402
+from continuum_common import (  # noqa: E402
+    load_width_metrics, width_bin_assign, WIDTH, REPO, MICE, _cmap,
+)
 
 NPZ = Path(REPO) / "data/cache/tf_glm_bg046/peth_traces_all.npz"
 OUT = Path(REPO) / "FIGURES/tf_glm_bg046/heatmap_continuum"
@@ -74,11 +93,33 @@ def _join_width(D):
     return w
 
 
-def _pulse_sign(M, t, win=PULSE_SIGN_WIN):
-    """Per-cell sign of the post-pulse deflection (+1 excitation / -1 suppression)."""
-    post = (t >= win[0]) & (t <= win[1])
-    s = np.sign(np.nanmean(M[:, post], axis=1))
-    s[~np.isfinite(s) | (s == 0)] = 1.0
+def _kernel_sign(D, win=PULSE_SIGN_WIN):
+    """Per-cell excitation(+1) / suppression(-1) sign taken from the GLM TF KERNEL.
+
+    NOT from the pulse PETH being averaged — deriving the sign from the same trace you
+    then average is circular and manufactures both a spurious pre-pulse rise and a ~7x
+    inflated response (see the module docstring). The kernel is an independent estimator
+    of the same sign, so this average is unbiased. Uses the kernel's mean over the SAME
+    (0, 0.4) s lag window the PETH is summarised on, so the two are comparable.
+    """
+    kmap = {}
+    for subj, _ in MICE:
+        f = Path(REPO) / f"data/cache/tf_glm_bg046/kernel_vectors_{subj}.npz"
+        if not f.exists():
+            continue
+        z = np.load(f, allow_pickle=True)
+        lags = np.asarray(z["lags"], float)
+        m = (lags >= win[0]) & (lags <= win[1])
+        for k in z.files:
+            if k in ("lags", "units"):
+                continue
+            sess, uid = k.rsplit("_u", 1)
+            kmap[(sess, int(uid))] = float(np.sign(np.asarray(z[k], float)[m].mean()) or 1.0)
+    s = np.array([kmap.get((str(D["meta_session"][i]), int(D["meta_unit"][i])), np.nan)
+                  for i in range(len(D["meta_unit"]))])
+    n_miss = int(np.sum(~np.isfinite(s)))
+    assert n_miss == 0, f"_kernel_sign: {n_miss} cells have no cached GLM kernel — key mismatch?"
+    s[s == 0] = 1.0
     return s
 
 
@@ -118,8 +159,9 @@ def main():
     bin_colors = cmap(np.linspace(0.08, 0.95, N_WIDTH_BINS))
     bin_counts = [int(np.sum(bin_idx == b)) for b in range(N_WIDTH_BINS)]
 
-    # sign-align the fast-pulse traces (flip suppression cells); track % flipped / bin
-    psign = _pulse_sign(D["mat_pulse"], D["t_pulse"])
+    # sign-align the fast-pulse traces (flip suppression cells); track % flipped / bin.
+    # Sign comes from the GLM KERNEL, NOT from this PETH (which would be circular).
+    psign = _kernel_sign(D)
     mat_signed = {"pulse": D["mat_pulse"] * psign[:, None],
                   "change": D["mat_change"], "fa": D["mat_fa"]}
     pct_flip_bin = [100.0 * np.mean(psign[bin_idx == b] < 0) if np.any(bin_idx == b) else 0.0
@@ -219,7 +261,8 @@ def main():
         f"TF-responsive cells ordered by CONTINUOUS kernel width (interp_fwhm, narrow top -> broad bottom) "
         f"— n={len(order)} cells, no transient/sustained blocks\n"
         f"all responsive cells incl. the {n_interm} intermediate-width cells; PSTH families = "
-        f"mean +/-95% CI per equal-count width bin; pulse sign-aligned ({pct_flip_all:.0f}% suppression flipped)",
+        f"mean +/-95% CI per equal-count width bin; pulse sign-aligned BY THE GLM KERNEL "
+        f"(independent of this PETH — {pct_flip_all:.0f}% suppression-type)",
         fontsize=12.5, y=0.998,
     )
     for ext in ("png", "pdf"):
@@ -245,8 +288,13 @@ def main():
                      f"   suppression-flipped (pulse) = {pct_flip_bin[b]:.0f}%")
     lines += [
         "",
-        f"FAST PULSE SIGN-ALIGNMENT: each cell flipped to its post-pulse sign over "
-        f"{PULSE_SIGN_WIN} s; {pct_flip_all:.1f}% of cells were suppression-type (flipped).",
+        f"FAST PULSE SIGN-ALIGNMENT: sign taken from the GLM TF KERNEL (mean over "
+        f"{PULSE_SIGN_WIN} s lags), NOT from this PETH — signing on the PETH's own "
+        f"post-window is circular and produced a spurious pre-pulse rise + a ~7x "
+        f"inflated response. {pct_flip_all:.1f}% of cells are suppression-type "
+        f"(the old PETH-derived figure said ~49%, which was a coin-flip on noise).",
+        "ALL fast pulses are now used (~41k/session; the old 600-pulse cap discarded "
+        "~98.5% of them and left the raw PETH noise-dominated).",
         "  (a signed pop-mean cancels exc vs supp -> the raw family looks flat; sign-",
         "   alignment makes the population pulse response coherent.)",
         "",

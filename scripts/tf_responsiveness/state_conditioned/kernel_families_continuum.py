@@ -1,11 +1,20 @@
 """What the transient -> sustained continuum IS: the deconvolved GLM TF kernel per
 width bin.
 
-The raw fast-TF-pulse PSTH does NOT separate by kernel width, because the grating's
-TF fluctuates every ~50 ms around baseline so a fast pulse is never isolated: the
-pulse-triggered average mixes the cell's response with the correlated neighbouring
-fluctuations (stimulus autocorrelation), which smears the temporal width -- and
-because `interp_fwhm` is a GLM-DECONVOLVED quantity the raw average can't recover. This figure plots the thing the width axis is actually defined on:
+⚠️ HISTORY (corrected Jul 2026). This figure used to say "the raw fast-TF-pulse PSTH
+does NOT separate by kernel width", and blamed stimulus autocorrelation. BOTH claims
+were WRONG. The baseline TF is essentially WHITE noise (measured autocorrelation
+r ~ 0.000 at 50-200 ms; the pulse-triggered average of the TF itself is a clean delta
+at t=0), so there is no smearing to blame. The raw PSTH failed to separate only because
+it was (a) built from 600 of the ~41,000 fast pulses per session, leaving it
+noise-dominated, and (b) sign-aligned CIRCULARLY (by each cell's own post-pulse window),
+which imposes an identical bump on every cell and destroys any width gradient.
+
+With all pulses and an honest (GLM-kernel) sign, the RAW PSTH **does** separate by
+width: Spearman(PETH's own fwhm, GLM interp_fwhm) = +0.43 (p=1e-24), and the raw
+per-cell trace tracks the kernel at mean r = +0.82. So this figure's kernel families
+are now CORROBORATED by the model-free average — the kernel is simply the cleaner,
+better-controlled estimator of the same thing. This figure plots the thing the width axis is actually defined on:
 the per-cell GLM TF FIR kernel (the deconvolved impulse response), averaged per width
 bin. It shows the narrow -> broad (transient -> sustained) progression directly, and
 that the progression is SMOOTH (a continuum), not two discrete shapes.
