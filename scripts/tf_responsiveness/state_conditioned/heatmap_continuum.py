@@ -59,8 +59,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
-from matplotlib.colors import TwoSlopeNorm, LogNorm
+from matplotlib.colors import TwoSlopeNorm, Normalize
 from matplotlib.cm import ScalarMappable
+from scipy.stats import rankdata
 from scipy.ndimage import gaussian_filter1d
 
 _HERE = str(Path(__file__).resolve().parent)
@@ -158,17 +159,26 @@ def main():
     cmap = _cmap()
     bin_counts = [int(np.sum(bin_idx == b)) for b in range(N_WIDTH_BINS)]
 
-    # ONE shared width->colour mapping, on a LOG scale, used by the strip, the colorbar
-    # AND the PSTH-family line colours. Two reasons it must be log and must be shared:
-    #  * width is LOGNORMAL (see width_logscale_distribution), so a LINEAR colour scale
-    #    crushes ~85% of cells (0.026-0.19 s) into one dark shade and only the top ~70
-    #    rows get any colour — the strip then carries no legible gradient;
-    #  * the line colours used to be evenly spaced in colormap space (linspace(0.08,
-    #    0.95)) while the strip coloured cells by TRUE width, so a bin-4 cell was drawn
-    #    green in the legend but dark blue in the strip. They now come from one mapping,
-    #    so a bin's line colour IS the strip colour of its cells.
-    wnorm = LogNorm(vmin=wmin, vmax=wmax)
-    bin_colors = [cmap(wnorm(float(np.median(w[bin_idx == b])))) for b in range(N_WIDTH_BINS)]
+    # ONE shared width->colour mapping — a QUANTILE (equal-count) scale — used by the
+    # strip, the colorbar AND the PSTH-family line colours. Why not linear, and why not
+    # even log:
+    #  * width is LOGNORMAL, so a LINEAR colour scale crushes ~85% of cells (0.026-0.19 s)
+    #    into one dark shade and the strip carries no legible gradient;
+    #  * a LOG scale fixes the strip, but the 5 EQUAL-COUNT bin medians then bunch in the
+    #    middle of the colormap (~0.26-0.68), so the PSTH families never reach yellow and
+    #    adjacent families are hard to tell apart;
+    #  * RANK is a strictly monotone function of width, so ordering is preserved exactly,
+    #    while the colours spread over the FULL colormap: the 5 bins land at 0.1/0.3/0.5/
+    #    0.7/0.9 (purple -> yellow). The colorbar ticks below still carry the TRUE width
+    #    values (unevenly spaced — so the skew stays visible).
+    # Because one mapping drives all three, a bin's line colour IS the strip colour of
+    # its cells (previously the lines were evenly spaced in cmap-space while the strip
+    # used true width, so a bin-4 cell was green in the legend but dark blue in the strip).
+    qrank = np.full(len(w), np.nan)
+    _fin = np.isfinite(w)
+    qrank[_fin] = rankdata(w[_fin], method="average") / int(_fin.sum())   # (0, 1]
+    q_sorted = qrank[order]
+    bin_colors = [cmap(float(np.nanmean(qrank[bin_idx == b]))) for b in range(N_WIDTH_BINS)]
 
     # sign-align the fast-pulse traces (flip suppression cells); track % flipped / bin.
     # Sign comes from the GLM KERNEL, NOT from this PETH (which would be circular).
@@ -239,8 +249,8 @@ def main():
         # continuous-width colour strip (viridis), narrow(top) -> broad(bottom),
         # matching the row order; end-labelled to remove any orientation ambiguity.
         strip = axh.inset_axes([-0.060, 0.0, 0.030, 1.0])
-        strip.imshow(w_sorted[:, None], aspect="auto", origin="upper",
-                     cmap=cmap, norm=wnorm, interpolation="nearest")   # shared LOG norm
+        strip.imshow(q_sorted[:, None], aspect="auto", origin="upper",   # shared QUANTILE scale
+                     cmap=cmap, vmin=0.0, vmax=1.0, interpolation="nearest")
         strip.set_xticks([]); strip.set_yticks([])
         if j == 0:
             strip.set_title("narrow", fontsize=9, pad=3)
@@ -260,13 +270,16 @@ def main():
     cbp.ax.tick_params(labelsize=9)
     # numeric continuous-width colorbar (far left) — INVERTED so narrow is at TOP,
     # matching the left strips and the heatmap row order.
-    sm = ScalarMappable(norm=wnorm, cmap=cmap)          # SAME log norm as the strips/lines
+    # SAME quantile scale as the strips and the PSTH line colours; ticks carry the TRUE
+    # width at each quantile (unevenly spaced — the lognormal skew stays visible).
+    sm = ScalarMappable(norm=Normalize(vmin=0.0, vmax=1.0), cmap=cmap)
     cbw = fig.colorbar(sm, ax=[hax["pulse"], hax["change"], hax["fa"]],
                        location="left", fraction=0.015, pad=0.07, aspect=40)
-    cbw.set_label("kernel width  interp_fwhm (s, LOG scale)  [narrow top]", fontsize=11)
-    ticks = [t for t in (0.03, 0.05, 0.1, 0.2, 0.4, 0.7) if wmin <= t <= wmax]
-    cbw.set_ticks(ticks)
-    cbw.set_ticklabels([f"{t:g}" for t in ticks])
+    cbw.set_label("kernel width  interp_fwhm (s)  —  equal-count (quantile) colour scale  "
+                  "[narrow top]", fontsize=10.5)
+    qticks = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    cbw.set_ticks(qticks)
+    cbw.set_ticklabels([f"{float(np.nanquantile(w, q)):.3f}" for q in qticks])
     cbw.ax.invert_yaxis()
     cbw.ax.tick_params(labelsize=9)
 
