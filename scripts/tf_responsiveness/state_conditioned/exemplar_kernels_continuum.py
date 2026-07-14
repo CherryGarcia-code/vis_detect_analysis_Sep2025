@@ -66,6 +66,7 @@ from continuum_common import load_width_metrics, WIDTH, REPO, MICE  # noqa: E402
 OUT = Path(REPO) / "FIGURES/tf_glm_bg046/exemplar_kernels_continuum"
 NPZ = Path(REPO) / "data/cache/tf_glm_bg046/peth_traces_all.npz"
 CI_NPZ = Path(REPO) / "data/cache/tf_glm_bg046/exemplar_kernel_ci.npz"
+PULSE_CI_NPZ = Path(REPO) / "data/cache/tf_glm_bg046/exemplar_pulse_ci.npz"  # grey-trace CI
 SUS_C = "#d94801"   # sustained
 TRA_C = "#3182bd"   # transient
 DISPLAY_SMOOTH = 0.7   # gaussian sigma (bins) for display; the CI band uses the SAME
@@ -119,6 +120,7 @@ def main():
     kmap, lags = _load_kernels()
     sus, tra = select_exemplars(d, kmap)
     cib = _load_ci()
+    pci = np.load(PULSE_CI_NPZ, allow_pickle=True) if PULSE_CI_NPZ.exists() else None
 
     # raw pulse PETHs for the same cells (sign-aligned) for the grey overlay
     Z = {k: v for k, v in np.load(NPZ, allow_pickle=True).items()}
@@ -180,9 +182,27 @@ def main():
                 raw = raw * ksign          # KERNEL's sign — never the trace's own (circular)
                 raw = gaussian_filter1d(raw, 1.3)
                 rp = np.nanmax(np.abs(raw)) or 1.0
-                ax.plot(tp, raw / rp * pk, color="0.55", lw=1.0, alpha=0.8, zorder=1,
+                gscale = pk / rp           # grey is scaled onto the kernel's peak
+                # 95% CI on the grey trace — a TRIAL bootstrap (same resampling unit as the
+                # kernel's CI, and correct because the ~56 pulses inside a trial are NOT
+                # independent). Same sign + display smoothing + scaling as the line above.
+                gkey = f"{r.session}_u{int(r.unit)}"
+                if pci is not None and f"{gkey}_lo" in pci.files:
+                    glo = gaussian_filter1d(np.asarray(pci[f"{gkey}_lo"], float), 1.3) * gscale
+                    ghi = gaussian_filter1d(np.asarray(pci[f"{gkey}_hi"], float), 1.3) * gscale
+                    ax.fill_between(tp, glo, ghi, color="0.55", alpha=0.16, lw=0, zorder=0,
+                                    label="raw PETH 95% CI (trial bootstrap)")
+                ax.plot(tp, raw * gscale, color="0.45", lw=1.1, alpha=0.9, zorder=1,
                         label="raw fast-pulse PETH (scaled)")
             ax.set_xlim(0, 1.45)
+            # Keep the KERNEL (the estimand) in focus. The raw-PETH CI is far wider — that
+            # IS the point (the GLM is the more precise estimator) — so autoscaling to it
+            # would squash the kernel. Scale y to the kernel + its own CI; the grey band
+            # simply clips at the edges.
+            ylo = float(min(K.min(), lo.min() if have_band else K.min()))
+            yhi = float(max(K.max(), hi.max() if have_band else K.max()))
+            pad = 0.22 * max(yhi - ylo, 1e-9)
+            ax.set_ylim(ylo - pad, yhi + pad)
             ax.set_title(f"{tag}  fwhm={r[WIDTH]:.3f}s\n{r.subject} {r.session.split('_',2)[-1]} u{int(r.unit)}",
                          fontsize=10, color=col, fontweight="bold")
             if ci == 0:
@@ -204,9 +224,10 @@ def main():
     band_note = "Shaded band = 95% CI (trial bootstrap, 200×). " if any_band else ""
     fig.suptitle("Real single neurons at the transient↔sustained extremes — GLM TF kernel "
                  "(each cell's deconvolved response to a unit change in temporal frequency)\n"
-                 "TOP: SUSTAINED (response stays elevated ~0.4–0.7 s)   BOTTOM: TRANSIENT (a brief blip). "
-                 f"{band_note}Grey = the same cell's RAW (model-free) fast-pulse PETH — it now TRACKS "
-                 "the kernel (mean shape r=+0.82), an independent corroboration.",
+                 "TOP: SUSTAINED (stays elevated ~0.4–0.7 s)   BOTTOM: TRANSIENT (a brief blip).\n"
+                 f"{band_note}Grey = the same cell's RAW (model-free) fast-pulse PETH + its 95% CI — "
+                 "it TRACKS the kernel (shape r=+0.82) but is far less precise (wider band): "
+                 "independent corroboration, and why the GLM is the better estimator.",
                  fontsize=12, y=1.01)
     for ext in ("png", "pdf"):
         fig.savefig(OUT / f"exemplar_kernels_continuum.{ext}", dpi=175, bbox_inches="tight")

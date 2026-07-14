@@ -59,7 +59,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
-from matplotlib.colors import TwoSlopeNorm, Normalize
+from matplotlib.colors import TwoSlopeNorm, LogNorm
 from matplotlib.cm import ScalarMappable
 from scipy.ndimage import gaussian_filter1d
 
@@ -156,8 +156,19 @@ def main():
     # 5 equal-count width bins (idx on ORIGINAL cell order; equal n, unequal width span)
     bin_idx, edges = width_bin_assign(w, n=N_WIDTH_BINS)
     cmap = _cmap()
-    bin_colors = cmap(np.linspace(0.08, 0.95, N_WIDTH_BINS))
     bin_counts = [int(np.sum(bin_idx == b)) for b in range(N_WIDTH_BINS)]
+
+    # ONE shared width->colour mapping, on a LOG scale, used by the strip, the colorbar
+    # AND the PSTH-family line colours. Two reasons it must be log and must be shared:
+    #  * width is LOGNORMAL (see width_logscale_distribution), so a LINEAR colour scale
+    #    crushes ~85% of cells (0.026-0.19 s) into one dark shade and only the top ~70
+    #    rows get any colour — the strip then carries no legible gradient;
+    #  * the line colours used to be evenly spaced in colormap space (linspace(0.08,
+    #    0.95)) while the strip coloured cells by TRUE width, so a bin-4 cell was drawn
+    #    green in the legend but dark blue in the strip. They now come from one mapping,
+    #    so a bin's line colour IS the strip colour of its cells.
+    wnorm = LogNorm(vmin=wmin, vmax=wmax)
+    bin_colors = [cmap(wnorm(float(np.median(w[bin_idx == b])))) for b in range(N_WIDTH_BINS)]
 
     # sign-align the fast-pulse traces (flip suppression cells); track % flipped / bin.
     # Sign comes from the GLM KERNEL, NOT from this PETH (which would be circular).
@@ -229,7 +240,7 @@ def main():
         # matching the row order; end-labelled to remove any orientation ambiguity.
         strip = axh.inset_axes([-0.060, 0.0, 0.030, 1.0])
         strip.imshow(w_sorted[:, None], aspect="auto", origin="upper",
-                     cmap=cmap, vmin=wmin, vmax=wmax, interpolation="nearest")
+                     cmap=cmap, norm=wnorm, interpolation="nearest")   # shared LOG norm
         strip.set_xticks([]); strip.set_yticks([])
         if j == 0:
             strip.set_title("narrow", fontsize=9, pad=3)
@@ -249,10 +260,13 @@ def main():
     cbp.ax.tick_params(labelsize=9)
     # numeric continuous-width colorbar (far left) — INVERTED so narrow is at TOP,
     # matching the left strips and the heatmap row order.
-    sm = ScalarMappable(norm=Normalize(vmin=wmin, vmax=wmax), cmap=cmap)
+    sm = ScalarMappable(norm=wnorm, cmap=cmap)          # SAME log norm as the strips/lines
     cbw = fig.colorbar(sm, ax=[hax["pulse"], hax["change"], hax["fa"]],
                        location="left", fraction=0.015, pad=0.07, aspect=40)
-    cbw.set_label("kernel width  interp_fwhm (s)  [narrow top]", fontsize=11)
+    cbw.set_label("kernel width  interp_fwhm (s, LOG scale)  [narrow top]", fontsize=11)
+    ticks = [t for t in (0.03, 0.05, 0.1, 0.2, 0.4, 0.7) if wmin <= t <= wmax]
+    cbw.set_ticks(ticks)
+    cbw.set_ticklabels([f"{t:g}" for t in ticks])
     cbw.ax.invert_yaxis()
     cbw.ax.tick_params(labelsize=9)
 
