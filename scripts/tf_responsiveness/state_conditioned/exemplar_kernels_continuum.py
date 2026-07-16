@@ -242,6 +242,19 @@ def main():
         "(background-cancelled): it tracks the kernel's shape but is far noisier —\nmodel-free "
         "corroboration, and why the deconvolving GLM is the better estimator.",
         fontsize=10.5, y=1.015)
+    # ⚠️ SELECTION DISCLOSURE, on the figure itself — it must travel with the image, because the
+    # image is what gets shown in talks. These are BEST-CASE cells (strongest/cleanest), chosen
+    # to illustrate what the two ends of the axis look like. They feed no statistic; the
+    # population support is the all-cell number, not this panel. Placed at the FOOT of the figure
+    # (the conventional place for a figure note) so it cannot collide with the suptitle.
+    # (plain-text marker, not an emoji — the figure font has no glyph for ⚠ and renders a box)
+    fig.text(0.5, -0.015,
+             "NOTE — Illustrative exemplars, deliberately BEST-CASE: filtered to above-median kernel "
+             "amplitude AND above-median TF selectivity AND >2000 spikes, then the 3 strongest of "
+             "each extreme.\nThey are the cleanest cells, NOT typical ones, and feed no statistic "
+             "— the population support for the width axis is the all-cell ρ "
+             "(width_continuum_summary / core_metrics_continuum), not this figure.",
+             ha="center", va="top", fontsize=8.4, color="#8c2d04")
     for ext in ("png", "pdf"):
         fig.savefig(OUT / f"exemplar_kernels_continuum.{ext}", dpi=175, bbox_inches="tight")
     plt.close(fig)

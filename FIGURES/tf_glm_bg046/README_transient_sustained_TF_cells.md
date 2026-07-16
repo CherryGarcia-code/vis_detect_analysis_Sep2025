@@ -33,7 +33,7 @@ GLM without those regressors), and does **not** depend on behavioural engagement
 | **Part I** | §§1–9 | The original **two-class** analysis + its figures. Still valid; now understood as a coarse slice. |
 | **Part II** | §§10–15 | The **continuum reframing** and all the newer figures. **This is the current framing.** |
 | ⭐ **Corrections** | §13a | **Read before quoting any pre-July number.** The bugs found in the raw-pulse panel, what survived, what didn't. |
-| ⭐ **Verification** | §13b | The GLM leakage test + the permutation null that close the loop. |
+| ⭐ **Verification** | §13b | The GLM leakage test, the permutation null, and the session-gate sweep that close the loop. |
 | ⭐ **The figure to show** | §13c | `width_continuum_summary/` — the clean, denoised summary. |
 | ⭐ **The reference** | §13d | The 11,078 **TF-unresponsive** cells as a baseline — and how they sharpen the claim. |
 | Reference | §§16–19 | Plain-language glossary · follow-up questions · how to reproduce · talk wording. |
@@ -377,7 +377,7 @@ always computed on the raw, unbinned data** (Spearman ρ) — so no result depen
 | Figure | What it shows | Headline numbers |
 |---|---|---|
 | **`kernel_families_continuum/`** | ⭐ **What the axis IS.** The average GLM kernel per width bin — sign-aligned, latency-aligned and peak-normalised. Narrow bins = a sharp spike-and-decay; broad bins = a prolonged elevation; **the morph between them is smooth.** | 520 cells, 5 bins (n=104 each), bin medians 0.061 → 0.078 → 0.106 → 0.155 → 0.239 s. *Honest caveat: illustrative-by-construction (the bins are defined on this kernel's width) — it shows what narrow/broad **mean** and that it's graded, it is not an independent test.* |
-| **`exemplar_kernels_continuum/`** | ⭐ **Real individual neurons** at each extreme, each with a **95 % confidence band**. | 3 sustained (fwhm 0.37–0.40 s) and 3 transient (0.083–0.090 s). Band = a **trial bootstrap**: resample the cell's trials, refit its GLM, ×200. **All 6 peak CIs exclude zero** → these single-cell shapes are reliable, not fitting artifacts. Grey overlay = the **model-free fast−slow pulse contrast** (see §13a) with its own bootstrap CI: it tracks the kernel's shape (transients blip and return; sustained stay up) but its CI is far wider — which is *why* we read duration off the GLM kernel. |
+| **`exemplar_kernels_continuum/`** | ⭐ **Real individual neurons** at each extreme, each with a **95 % confidence band**. | 3 sustained (fwhm 0.37–0.40 s) and 3 transient (0.083–0.090 s). Band = a **trial bootstrap**: resample the cell's trials, refit its GLM, ×200. **All 6 peak CIs exclude zero** → these single-cell shapes are reliable, not fitting artifacts. Grey overlay = the **model-free fast−slow pulse contrast** (see §13a) with its own bootstrap CI: it tracks the kernel's shape (transients blip and return; sustained stay up) but its CI is far wider — which is *why* we read duration off the GLM kernel. ⚠️ **The exemplars are deliberately BEST-CASE** (above-median kernel amplitude AND above-median TF selectivity AND >2000 spikes, then the 3 strongest of each extreme) — the cleanest cells, **not typical ones**. They feed **no statistic**; the population support is the all-cell ρ. This disclosure is now printed **on the figure itself**, because the figure is what travels into talks. |
 | **`core_metrics_continuum/`** | Every metric trended against continuous width. | Spearman ρ: **TF selectivity +0.324** (p=3.7×10⁻¹⁴), baseline rate +0.123 (0.005), **Change_ON +0.236** (4.9×10⁻⁸), Hit pre-lick +0.286 (3.0×10⁻¹¹, *not independent — §1*), **FA ramp +0.348** (2.7×10⁻¹⁶). Every segmented ΔBIC **negative** → graded. Holds in **both regions** (Change: DMS +0.22 / VMS +0.24; Hit: DMS +0.42 / VMS +0.21). |
 | **`heatmap_continuum/`** | All 520 cells ordered by continuous width (narrow top → broad bottom), three alignments + width-binned PSTH families. | The **width-binned PSTH families** (top row) carry the message: the broadest bin stays elevated post-pulse while the narrowest blips and decays. Must be **sign-aligned** (excitation/suppression otherwise cancel), and the sign is taken from the **GLM kernel**, not the PETH — see §13a. Suppression-type ≈ **30–40 %** (36.9 % at the 0–0.4 s kernel window), and is *less* common at the broad end (**23 % vs 42 %**). ⚠️ **The per-cell heatmap rows are inherently muddy** — sorting is exact (verified 520/520) but the *displayed* per-cell PETH is ~20× below spiking noise, so individual narrow-kernel rows can still look sustained. **Read the axis off `width_continuum_summary/` (§13c), not off individual rows.** |
 | **`fa_lick_continuum/`** | Pre-lick (impulsive-lick) ramp vs width. | ρ = **+0.34**, p = 1.7×10⁻¹⁵. % of cells that are lick-responsive **rises monotonically** across width bins: **63 → 62 → 70 → 85 → 87 %**; mean pre-lick ramp +0.036 → +0.183 z. |
@@ -487,6 +487,41 @@ Permute the **width label** across cells and recompute width→coupling. It must
 p_perm = 5×10⁻⁴ (the floor for 2000 permutations) in every case. The **within-mouse** column matters:
 it permutes only *inside* each animal, so the null cannot borrow the between-mouse/region difference —
 the effect is not a pooling artifact.
+
+---
+
+## 13b-iii. `diseng_sensitivity/` — the session gate is arbitrary, and demonstrably irrelevant
+
+**The concern.** `good_dates()` keeps a session only if **< 50 %** of its trials are Disengaged.
+**50 % is a round number somebody picked** — no SNR argument, no convergence criterion — yet
+**11 scripts call it**, so it silently decides which sessions → which cells → every headline.
+That is an unexamined researcher degree of freedom sitting under all the results.
+
+**The test.** Sweep the threshold and see whether the answer moves. Removing the gate entirely
+adds only **31 responsive cells (520 → 551, +6 %)**, so we refit exactly those with the identical
+code and swept a complete 551-cell table (each cell tagged with its session's %Disengaged, so
+every threshold is a pure subset).
+
+| threshold | n cells | Change_ON ρ | FA ramp ρ |
+|---|---|---|---|
+| 20 % (strict) | 469 | +0.253 | +0.348 |
+| **50 % (current)** | **520** | **+0.236** | **+0.348** |
+| 80 % | 545 | +0.229 | +0.328 |
+| **101 % (NO gate at all)** | **551** | **+0.230** | **+0.317** |
+
+**Verdict: ρ moves by 0.02–0.03 across the entire range** (Change_ON +0.229…+0.253; FA
++0.317…+0.348), every p < 1×10⁻⁷. **The 50 % cut is arbitrary but irrelevant — no headline
+depends on it.** Also surfaced, not hidden: `good_dates` keeps sessions with **no state-tag file
+unconditionally** (its `else` branch) at every threshold; only ~2 sessions are affected.
+
+> 🐛 **This check failed silently on its first run, and it is worth knowing why.** The width CSV
+> keys sessions by the FULL name (`BG_046_01072025`); the state-tag files key by the DATE alone
+> (`01072025.csv`). Looking up the full name missed **every** session → every cell got NaN → every
+> threshold kept all 551 → a **perfectly flat sweep that looked like a clean pass**. It was
+> vacuous. (Same family as the project's canonical session-id footgun.) The script now asserts
+> **>90 % coverage** and dies loudly rather than reporting a fake null. *A sensitivity check that
+> cannot fail is not a check* — always verify the thing you swept actually varied (here: n_cells
+> must change across thresholds; it now runs 469→551).
 
 ---
 
@@ -649,8 +684,10 @@ That axis is **independent of the classic FSI/SPN spike-shape classification** (
 *functional* property, not a cell type), holds in **both striatal regions**, is **stronger in
 the Expert stage**, survives firing-rate, yield-bias and pseudoreplication controls, is
 **invariant to behavioural engagement state**, goes **flat under a width-label permutation**
-(§13b-ii), and is **not** an artifact of change/lick variance leaking into the kernel — proven
-by refitting the GLM with those regressors removed (§13b-i).
+(§13b-ii), is **not** an artifact of change/lick variance leaking into the kernel — proven by
+refitting the GLM with those regressors removed (§13b-i) — and does **not** depend on the
+arbitrary 50 % session-engagement gate: ρ shifts by ≤0.03 from a strict gate to **no gate at
+all** (§13b-iii).
 
 **What we do *not* claim.** The raw fast-pulse *population response* panel did not survive
 scrutiny (§13a). The **model-free corroboration of the width axis is moderate** once leakage is
@@ -758,6 +795,7 @@ py scripts/tf_responsiveness/state_conditioned/hardening_continuum.py          #
 py scripts/tf_responsiveness/state_conditioned/learning_continuum.py           # §13
 py scripts/tf_responsiveness/state_conditioned/width_continuum_summary.py      # §13c ⭐ the figure to show
 py scripts/tf_responsiveness/state_conditioned/null_controls_continuum.py      # §13b-ii permutation null
+py scripts/tf_responsiveness/state_conditioned/diseng_sensitivity.py --workers 10  # §13b-iii session-gate sweep (refits 31 cells, ~5 min)
 
 # --- Part II: lognormal / log-scale ---
 py scripts/tf_responsiveness/state_conditioned/width_logscale_distribution.py     # §14

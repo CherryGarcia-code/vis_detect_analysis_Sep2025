@@ -1,0 +1,18 @@
+DISENG_MAX SENSITIVITY — does the width->coupling headline depend on the gate?
+==========================================================================
+A session is kept if %Disengaged < threshold. Sessions with NO state file are kept
+unconditionally (good_dates' `else` branch) at EVERY threshold — noted, not hidden.
+n cells with no state label: 0
+
+  thr= 20%  n_cells= 469  |  change_on: rho=+0.253 (p=2.9e-08)  |  fa_ramp: rho=+0.348 (p=7.7e-15)
+  thr= 30%  n_cells= 482  |  change_on: rho=+0.251 (p=2.5e-08)  |  fa_ramp: rho=+0.345 (p=7.0e-15)
+  thr= 40%  n_cells= 506  |  change_on: rho=+0.246 (p=2.0e-08)  |  fa_ramp: rho=+0.344 (p=1.6e-15)
+  thr= 50%  n_cells= 520  |  change_on: rho=+0.236 (p=4.9e-08)  |  fa_ramp: rho=+0.348 (p=2.7e-16)
+  thr= 60%  n_cells= 527  |  change_on: rho=+0.236 (p=4.0e-08)  |  fa_ramp: rho=+0.344 (p=4.0e-16)
+  thr= 70%  n_cells= 541  |  change_on: rho=+0.234 (p=3.9e-08)  |  fa_ramp: rho=+0.334 (p=1.4e-15)
+  thr= 80%  n_cells= 545  |  change_on: rho=+0.229 (p=6.4e-08)  |  fa_ramp: rho=+0.328 (p=3.7e-15)
+  thr=101%  n_cells= 551  |  change_on: rho=+0.230 (p=4.7e-08)  |  fa_ramp: rho=+0.317 (p=2.6e-14)
+
+VERDICT:
+  [change_on] rho range +0.229..+0.253 (spread 0.024); all p<0.05: True
+  [fa_ramp] rho range +0.317..+0.348 (spread 0.032); all p<0.05: True
