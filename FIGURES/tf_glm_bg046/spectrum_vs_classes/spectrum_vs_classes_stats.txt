@@ -1,0 +1,14 @@
+MODALITY (positive ΔBIC & low silverman-p & BC>0.555 => classes; else spectrum):
+  [interp_fwhm/pooled] n=520 ΔBIC=+242.3 silverman_p=0.310 dip_p=nan BC=0.528
+  [interp_fwhm/DMS] n=201 ΔBIC=+121.6 silverman_p=0.183 dip_p=nan BC=0.611
+  [interp_fwhm/VMS] n=319 ΔBIC=+125.2 silverman_p=0.410 dip_p=nan BC=0.537
+  [temporal_spread/pooled] n=520 ΔBIC=-11.2 silverman_p=0.430 dip_p=nan BC=0.319
+  [temporal_spread/DMS] n=201 ΔBIC=-12.3 silverman_p=0.350 dip_p=nan BC=0.383
+  [temporal_spread/VMS] n=319 ΔBIC=-10.5 silverman_p=0.487 dip_p=nan BC=0.288
+  [pulse_fwhm_all/pooled] n=520 ΔBIC=+234.6 silverman_p=0.193 dip_p=nan BC=0.612
+  [pulse_fwhm_all/DMS] n=201 ΔBIC=+83.4 silverman_p=0.113 dip_p=nan BC=0.659
+  [pulse_fwhm_all/VMS] n=319 ΔBIC=+139.4 silverman_p=0.317 dip_p=nan BC=0.589
+latency(peak_t) vs width(interp_fwhm): rho=+0.128 p=3.58e-03
+  [change_on] Spearman rho=+0.236 p=4.91e-08 | segmented ΔBIC(seg-vs-lin)=-7.6 breakpoint=0.139 (ΔBIC<=6 => graded continuum; >10 => threshold)
+  [hit_ramp] Spearman rho=+0.286 p=3.02e-11 | segmented ΔBIC(seg-vs-lin)=-11.8 breakpoint=0.153 (ΔBIC<=6 => graded continuum; >10 => threshold)
+  [fa_ramp] Spearman rho=+0.348 p=2.73e-16 | segmented ΔBIC(seg-vs-lin)=-12.1 breakpoint=0.209 (ΔBIC<=6 => graded continuum; >10 => threshold)

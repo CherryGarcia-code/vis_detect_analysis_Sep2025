@@ -24,7 +24,7 @@ broad-bin kernels are broader is illustrative-by-construction, not an independen
 result. What is informative is (a) what "narrow" vs "broad" LOOKS like, and (b) that
 the family morphs smoothly across bins (supporting the spectrum reading).
 
-Kernels are sign-aligned (dominant deflection made positive; ~half of TF-responsive
+Kernels are sign-aligned (dominant deflection made positive; ~30-40% of TF-responsive
 cells are suppression-type and the FWHM is sign-agnostic) and peak-normalised, so the
 families show SHAPE/DURATION independent of amplitude.
 

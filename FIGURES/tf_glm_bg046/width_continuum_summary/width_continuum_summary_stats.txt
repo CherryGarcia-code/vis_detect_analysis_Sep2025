@@ -1,0 +1,12 @@
+WIDTH-BINNED MEAN KERNEL (ridgeline) — PEAK-ALIGNED bin average, unit-peak scaled
+(illustrative average response shape; bins defined by each cell's own interp_fwhm)
+--------------------------------------------------------------
+  bin0 width 0.026-0.068s n=87: peak-aligned bin-mean fwhm=0.054s
+  bin1 width 0.068-0.082s n=86: peak-aligned bin-mean fwhm=0.064s
+  bin2 width 0.082-0.106s n=87: peak-aligned bin-mean fwhm=0.079s
+  bin3 width 0.106-0.145s n=86: peak-aligned bin-mean fwhm=0.093s
+  bin4 width 0.145-0.204s n=87: peak-aligned bin-mean fwhm=0.124s
+  bin5 width 0.204-0.691s n=87: peak-aligned bin-mean fwhm=0.243s
+
+width vs fa_ramp: Spearman rho=+0.348 p=2.73e-16 n=520
+width distribution: n=520 median=0.106s range 0.026-0.691s

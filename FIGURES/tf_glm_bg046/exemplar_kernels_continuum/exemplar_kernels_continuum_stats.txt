@@ -1,0 +1,15 @@
+Single-neuron exemplars: transient vs sustained GLM TF kernels
+
+  SUSTAINED BG_031 BG_031_240325 u15: fwhm=0.404s peak_t=0.40s c1_r=0.68 kpeak=0.0257 peak95CI=[+0.0171,+0.0305] excl0=True
+  SUSTAINED BG_039 BG_039_16052025 u948: fwhm=0.367s peak_t=0.30s c1_r=0.37 kpeak=0.0225 peak95CI=[+0.0154,+0.0260] excl0=True
+  SUSTAINED BG_046 BG_046_17092025 u561: fwhm=0.373s peak_t=0.50s c1_r=0.30 kpeak=0.0140 peak95CI=[+0.0075,+0.0166] excl0=True
+  TRANSIENT BG_031 BG_031_09052025 u368: fwhm=0.090s peak_t=0.20s c1_r=0.53 kpeak=0.1017 peak95CI=[+0.0586,+0.0919] excl0=True
+  TRANSIENT BG_031 BG_031_09042025 u365: fwhm=0.088s peak_t=0.20s c1_r=0.51 kpeak=0.0629 peak95CI=[+0.0352,+0.0558] excl0=True
+  TRANSIENT BG_031 BG_031_02042025 u388: fwhm=0.083s peak_t=0.20s c1_r=0.44 kpeak=0.0544 peak95CI=[+0.0280,+0.0500] excl0=True
+
+GLM kernel = deconvolved response to a unit change in the continuous TF signal;
+grey = model-free fast-slow pulse contrast, noisy per cell (weak per-pulse signal ~20x
+below spiking noise; TF is white noise, NOT autocorrelation) — the reason we read
+duration off the kernel. Exemplars = 3 broadest + 3 narrowest fwhm
+among clean cells (kpeak/c1/spikes > median).
+Shaded band = 95% CI from a per-cell trial bootstrap (compute_exemplar_ci.py).

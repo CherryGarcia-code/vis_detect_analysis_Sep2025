@@ -1,0 +1,18 @@
+Core transient/sustained metrics vs CONTINUOUS kernel width (interp_fwhm)
+n cells = 520 (finite width = 520) | DMS=201 VMS=319
+width median = 0.1056 s   [IQR 0.0733-0.1708]
+
+ΔBIC = segmented_vs_linear delta_bic = bic_linear - bic_segmented;
+  NEGATIVE => a straight/graded line beats a 2-piece threshold fit
+  (echoes the SPECTRUM result: width is graded, not two classes).
+
+[c1_r_log2 ] Spearman rho=+0.324 p=3.71e-14   segmented ΔBIC=  -10.9 (bp=0.079, slope +0.98->+0.35)
+[base_hz   ] Spearman rho=+0.123 p=5.00e-03   segmented ΔBIC=  -11.2 (bp=0.191, slope +27->+6.3)
+[change_on ] Spearman rho=+0.236 p=4.91e-08   segmented ΔBIC=   -7.6 (bp=0.139, slope +1->+8.6) [OUTCOME]
+[hit_ramp  ] Spearman rho=+0.286 p=3.02e-11   segmented ΔBIC=  -11.8 (bp=0.153, slope +16->+24) [OUTCOME]
+[fa_ramp   ] Spearman rho=+0.348 p=2.73e-16   segmented ΔBIC=  -12.1 (bp=0.209, slope +22->+17) [OUTCOME]
+
+per-region Spearman (width vs outcome):
+  [change_on ] DMS rho=+0.218 p=1.84e-03 (n=201) | VMS rho=+0.238 p=1.76e-05 (n=319)
+  [hit_ramp  ] DMS rho=+0.416 p=8.35e-10 (n=201) | VMS rho=+0.205 p=2.29e-04 (n=319)
+  [fa_ramp   ] DMS rho=+0.341 p=7.23e-07 (n=201) | VMS rho=+0.366 p=1.44e-11 (n=319)

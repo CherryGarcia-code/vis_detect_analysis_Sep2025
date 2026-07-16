@@ -1,0 +1,27 @@
+Width-ordered population heatmap + width-binned PSTH families (mean +/-95% CI)
+(continuum re-render of the transient/sustained class heatmap)
+
+n cells plotted = 520 (finite interp_fwhm; total npz cells = 520)
+row ordering = CONTINUOUS kernel width interp_fwhm, ASCENDING; NARROW at TOP, BROAD at BOTTOM
+  (one global order shared across pulse / change / FA; NO transient/sustained blocks)
+width range = 0.0258 - 0.6914 s   median = 0.1056 s
+
+5 EQUAL-COUNT width bins (equal n, UNEQUAL width span — the width
+distribution is right-skewed, so the broad bin spans a wider range):
+  edges (s) = [0.0258, 0.0704, 0.0902, 0.1266, 0.1909, 0.6914]
+    bin 0: [0.0258, 0.0704) s   n = 104 cells   suppression-flipped (pulse) = 42%
+    bin 1: [0.0704, 0.0902) s   n = 104 cells   suppression-flipped (pulse) = 41%
+    bin 2: [0.0902, 0.1266) s   n = 104 cells   suppression-flipped (pulse) = 43%
+    bin 3: [0.1266, 0.1909) s   n = 104 cells   suppression-flipped (pulse) = 35%
+    bin 4: [0.1909, 0.6914) s   n = 104 cells   suppression-flipped (pulse) = 23%
+
+FAST PULSE SIGN-ALIGNMENT: sign taken from the GLM TF KERNEL (mean over (0.0, 0.4) s lags), NOT from this PETH — signing on the PETH's own post-window is circular and produced a spurious pre-pulse rise + a ~7x inflated response. 36.9% of cells are suppression-type at the (0.0, 0.4) s kernel window (window-dependent: ~30-40%, 25-51% across defensible windows — quote a range; the old PETH-derived figure said ~49%, which was a coin-flip on noise).
+ALL fast pulses are now used (~41k/session; the old 600-pulse cap discarded ~98.5% of them and left the raw PETH noise-dominated).
+  (a signed pop-mean cancels exc vs supp -> the raw family looks flat; sign-
+   alignment makes the population pulse response coherent.)
+
+per-panel colour scaling:
+  pulse  : SIGN-ALIGNED baseline-z, RdBu_r, TwoSlopeNorm(+/-0.03) (robust 97th-pct clip; replaces the noisy peak-norm)
+  change : baseline-z, RdBu_r, TwoSlopeNorm(vmin=-1.5, vcenter=0, vmax=3)
+  fa     : baseline-z, RdBu_r, TwoSlopeNorm(vmin=-1.5, vcenter=0, vmax=3)
+left strip + numeric width colorbar both run NARROW(top) -> BROAD(bottom).

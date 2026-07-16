@@ -37,7 +37,9 @@ FIX: take the sign from the GLM TF KERNEL (mean over the same 0-0.4 s lag window
 The kernel is an independent estimator of the same quantity — fit on the full
 continuous TF regression with lick/movement/reward nuisances regressed out — so it is
 not derived from the trace being averaged. The suppression fraction it reports
-(~37%) is the honest one; the old PETH-derived "~49%" was a coin-flip on noise.
+(~30-40%, window-dependent: 25-51% across defensible kernel lag windows, so quote a
+RANGE not a point) is the honest one; the old PETH-derived "~49%" was a coin-flip on
+noise (its post-window response sits below its own noise floor).
 
 Change / FA are predominantly excitatory and are shown raw (no sign-alignment).
 
@@ -289,7 +291,8 @@ def main():
         f"— n={len(order)} cells, no transient/sustained blocks\n"
         f"all responsive cells incl. the {n_interm} intermediate-width cells; PSTH families = "
         f"mean +/-95% CI per equal-count width bin; pulse sign-aligned BY THE GLM KERNEL "
-        f"(independent of this PETH — {pct_flip_all:.0f}% suppression-type)",
+        f"(independent of this PETH — {pct_flip_all:.0f}% suppression-type at this window; "
+        f"window-dependent ~30-40%)",
         fontsize=12.5, y=0.998,
     )
     for ext in ("png", "pdf"):
@@ -318,8 +321,10 @@ def main():
         f"FAST PULSE SIGN-ALIGNMENT: sign taken from the GLM TF KERNEL (mean over "
         f"{PULSE_SIGN_WIN} s lags), NOT from this PETH — signing on the PETH's own "
         f"post-window is circular and produced a spurious pre-pulse rise + a ~7x "
-        f"inflated response. {pct_flip_all:.1f}% of cells are suppression-type "
-        f"(the old PETH-derived figure said ~49%, which was a coin-flip on noise).",
+        f"inflated response. {pct_flip_all:.1f}% of cells are suppression-type at the "
+        f"{PULSE_SIGN_WIN} s kernel window (window-dependent: ~30-40%, 25-51% across "
+        f"defensible windows — quote a range; the old PETH-derived figure said ~49%, "
+        f"which was a coin-flip on noise).",
         "ALL fast pulses are now used (~41k/session; the old 600-pulse cap discarded "
         "~98.5% of them and left the raw PETH noise-dominated).",
         "  (a signed pop-mean cancels exc vs supp -> the raw family looks flat; sign-",

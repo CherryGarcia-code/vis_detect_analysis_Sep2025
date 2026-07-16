@@ -23,14 +23,19 @@ The real reasons the raw pulse PETH is a poor per-cell instrument are:
 The GLM instead regresses the spike train against the WHOLE continuous TF timeseries
 with those nuisance regressors included, so it is a far more efficient estimator.
 
-⭐ ONCE ALL PULSES ARE USED, THE RAW PETH CORROBORATES THE KERNEL. With the 600-pulse
-cap removed the grey trace TRACKS each cell's kernel closely (mean shape correlation
-r = +0.82, median +0.86, 100% of cells positive — it was +0.14 / 66% under the cap).
-That is an INDEPENDENT, model-free confirmation that the kernel is measuring a real
-response, not a model artifact: the deconvolved kernel and the raw pulse-triggered
-average agree. The grey trace is flipped by the KERNEL's sign (never by its own
-post-window sign — that would be circular and would make even pure noise look like a
-response).
+⭐ A MODEL-FREE PULSE TRACE CORROBORATES THE KERNEL. The grey overlay is the FAST-minus-
+SLOW pulse contrast (a fast pulse is a TF increase, slow is a decrease; the kernel is the
+per-unit-TF response, so fast−slow is its model-free analog). fast and slow pulses share
+the same within-trial firing background — identical trial-phase timing — so the contrast
+CANCELS that background, which a fast-ONLY PETH cannot and which the GLM removes via its
+baseline/trial-start regressors. All pulses are used (the old 600-cap left it noise-
+dominated), leakage-guarded and complete-case (whole window before the change/lick), so it
+is honest but far NOISIER than the kernel per cell — model-free corroboration that the
+kernel measures a real response, and a demonstration of why the deconvolving GLM is the
+better estimator. The population model-free width checks are moderate once leakage is
+removed (PETH-FWHM vs kernel width rho=+0.34; fast−slow pulse_fwhm vs kernel width +0.22).
+The trace is flipped by the KERNEL's sign (never by its own post-window sign — that would
+be circular).
 
 Each kernel carries a 95% CI band (shaded) from a per-cell TRIAL BOOTSTRAP of the
 GLM refit (resample the cell's trials, refit the ridge-Poisson at the point-estimate
@@ -198,9 +203,9 @@ def main():
                     glo = gaussian_filter1d(np.asarray(pci[f"{gkey}_lo"], float), 1.3) * gscale
                     ghi = gaussian_filter1d(np.asarray(pci[f"{gkey}_hi"], float), 1.3) * gscale
                     ax.fill_between(gt, glo, ghi, color="0.55", alpha=0.16, lw=0, zorder=0,
-                                    label="raw PETH 95% CI (trial bootstrap)")
+                                    label="fast−slow 95% CI (trial bootstrap)")
                 ax.plot(gt, raw * gscale, color="0.45", lw=1.1, alpha=0.9, zorder=1,
-                        label="raw fast-pulse PETH (scaled)")
+                        label="fast−slow pulse contrast (scaled)")
             ax.set_xlim(0, 1.45)
             # Keep the KERNEL (the estimand) in focus. The raw-PETH CI is far wider — that
             # IS the point (the GLM is the more precise estimator) — so autoscaling to it
@@ -233,16 +238,17 @@ def main():
         "Real single neurons at the transient↔sustained extremes\n"
         "GLM TF kernel = each cell's deconvolved response to a unit change in temporal frequency."
         "   TOP: SUSTAINED (stays elevated ~0.4–0.7 s)   BOTTOM: TRANSIENT (a brief blip)\n"
-        f"{band_note}Grey = the same cell's RAW (model-free) fast-pulse PETH + its 95% CI: it "
-        "tracks the kernel (shape r=+0.82) but is far less precise —\nindependent corroboration, "
-        "and why the GLM is the better estimator.",
+        f"{band_note}Grey = the same cell's model-free FAST−SLOW pulse contrast + its 95% CI "
+        "(background-cancelled): it tracks the kernel's shape but is far noisier —\nmodel-free "
+        "corroboration, and why the deconvolving GLM is the better estimator.",
         fontsize=10.5, y=1.015)
     for ext in ("png", "pdf"):
         fig.savefig(OUT / f"exemplar_kernels_continuum.{ext}", dpi=175, bbox_inches="tight")
     plt.close(fig)
     lines += ["", "GLM kernel = deconvolved response to a unit change in the continuous TF signal;",
-              "grey raw fast-pulse PETH is weak/smeared per cell (stimulus autocorrelation + weak signal)",
-              "— the reason we read duration off the kernel. Exemplars = 3 broadest + 3 narrowest fwhm",
+              "grey = model-free fast-slow pulse contrast, noisy per cell (weak per-pulse signal ~20x",
+              "below spiking noise; TF is white noise, NOT autocorrelation) — the reason we read",
+              "duration off the kernel. Exemplars = 3 broadest + 3 narrowest fwhm",
               "among clean cells (kpeak/c1/spikes > median).",
               ("Shaded band = 95% CI from a per-cell trial bootstrap (compute_exemplar_ci.py)."
                if any_band else "No CI cache found — run compute_exemplar_ci.py for the 95% bands.")]

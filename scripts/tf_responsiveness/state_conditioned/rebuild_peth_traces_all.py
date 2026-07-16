@@ -27,6 +27,12 @@ from continuum_common import REPO, MICE                                       # 
 from representative_cells import (_registry, good_dates, _spikes, load_session,  # noqa: E402
                                   get_event_times_by_trial)
 from heatmap_transient_sustained import ALIGN, BIN, SIG, PULSE_CAP, MIN_EV, _cfg  # noqa: E402
+# The project's canonical TF-pulse eligibility guard (tf_pulse.py:49-53): >=1 s after
+# Baseline_ON, >=1 s before the change, >=2 s before an fa/abort/ref lick. The GLM does not
+# need it (it regresses change/lick out); a raw PETH plot has no such protection and does.
+from visdetect.analysis.tf_pulse import (                                        # noqa: E402
+    TFRespPulseConfig, _outcome_time_for_trial,
+)
 from visdetect.analysis.align import align_spikes_to_events                   # noqa: E402
 from visdetect.analysis.tf_glm import assemble_design, pulse_times_from_tf    # noqa: E402
 from visdetect.analysis.tf_glm_data import session_trial_regressors           # noqa: E402
@@ -35,17 +41,31 @@ OUT_NPZ = Path(REPO) / "data/cache/tf_glm_bg046/peth_traces_all.npz"
 NARROW, BROAD = 0.05, 0.15  # for the reference cls label only (grid kernel_fwhm)
 
 
-def _ztrace(spk, times, win, base):
+def _ztrace(spk, times, win, base, max_lag=None):
+    """PETH z-scored to a pre-event baseline.
+
+    `max_lag` (per event, seconds) CENSORS lags that run past that event's valid horizon.
+    Needed for the fast TF pulse: pulses live in the trial BASELINE and
+    align_spikes_to_events does NOT clip at trial boundaries, so a +0.8 s window around a
+    pulse late in the baseline runs into the CHANGE and the LICK. Those (large) responses
+    contaminate the LATE lags — and because their size scales with the cell's change/lick
+    coupling, which itself correlates with kernel width, the contamination can FAKE a
+    width->duration relationship. Censored bins become NaN and drop out of the mean, so n
+    falls with lag (honest)."""
     if len(times) < MIN_EV:
         return None, None
     binned, t = align_spikes_to_events(spk, list(times), window=win, bin_size=BIN)
     binned = np.asarray(binned, float)
+    t = np.asarray(t, float)
+    if max_lag is not None:
+        binned = np.where(t[None, :] < np.asarray(max_lag, float)[:, None], binned, np.nan)
     bmask = (t >= base[0]) & (t < base[1])
     bvals = binned[:, bmask].ravel()
-    mu, sd = bvals.mean(), bvals.std()
+    mu, sd = float(np.nanmean(bvals)), float(np.nanstd(bvals))
     if not np.isfinite(sd) or sd < 1e-6:
-        sd = max(bvals.mean(), 1.0)
-    z = gaussian_filter1d(binned.mean(0), SIG) if SIG > 0 else binned.mean(0)
+        sd = max(mu, 1.0)
+    m = np.nanmean(binned, axis=0)
+    z = gaussian_filter1d(m, SIG) if SIG > 0 else m
     return (z - mu) / sd, t
 
 
@@ -82,16 +102,67 @@ def _process_session(task):
         # left the raw pulse PETH noise-dominated. Guard kept so a cap can be restored.
         if PULSE_CAP is not None and fast.size > PULSE_CAP:
             fast = np.sort(rng.choice(fast, PULSE_CAP, replace=False))
+
+        # ── COMPLETE-CASE PULSE SELECTION ──────────────────────────────────────
+        # Fast pulses sit in the trial BASELINE and align_spikes_to_events does NOT clip at
+        # trial boundaries, so a +0.8 s window around a pulse late in the baseline runs into
+        # the CHANGE and/or the LICK. Their (large) responses contaminate the late lags, and
+        # because their size scales with the cell's change/lick coupling — which correlates
+        # with kernel width — they can FAKE a width->duration relationship.
+        #
+        # ⚠️ Do NOT fix this by per-lag censoring (NaN-ing offending lags): that changes the
+        # SAMPLE COMPOSITION with lag (pulses dropped at long lags have ~45-50% LOWER
+        # baseline firing than survivors), so a single global mu then drifts upward with lag
+        # — trading one artifact for another. (Caught by adversarial review.)
+        #
+        # ⚠️ And "clip to the trial" protects nothing: the design's t_end is the NEXT trial's
+        # Baseline_ON (tf_glm_data.py:293, 481-482), a median ~4.2 s PAST the first lick.
+        #
+        # THE FIX IS THE PROJECT'S OWN LEAKAGE GUARD. TFRespPulseConfig (tf_pulse.py:49-53)
+        # already defines which TF pulses are eligible, and `_collect_pulses` applies it:
+        #     min_after_baseline           = 1.0 s   (>= 1 s AFTER Baseline_ON)
+        #     min_before_change            = 1.0 s   (>= 1 s BEFORE the change)
+        #     min_before_outcome_fa_abort  = 2.0 s   (>= 2 s BEFORE an fa/abort/ref lick)
+        # The GLM's pulse_times_from_tf applies NONE of these — it only thresholds the TF
+        # vector — which is the root cause of the change/lick contamination. Apply the
+        # canonical guard here, reusing the project's own `_outcome_time_for_trial` so this
+        # cannot drift from the reference implementation.
+        # (Threshold stays the GLM's 0.5 s.d., per Khilkevich Methods p17 — the guards are a
+        # separate concern from the pulse-detection threshold.)
+        pcfg = TFRespPulseConfig()
+        be = np.asarray(d.bin_edges, float)
+        tix = np.asarray(d.trial_index)
+        bi = np.clip(np.searchsorted(be, fast, side="right") - 1, 0, tix.size - 1)
+        ptr = tix[bi]
+        keep = np.zeros(fast.size, bool)
+        strials = getattr(s, "trials", []) or []
+        for k in range(len(trials)):
+            sel = np.where(ptr == k)[0]
+            if not sel.size:
+                continue
+            t0 = float(trials[k].t_start)
+            ct = float(getattr(trials[k], "change_time", np.nan))
+            t_out = (_outcome_time_for_trial(strials[k], t0) if k < len(strials) else None)
+            ok = fast[sel] >= (t0 + pcfg.min_after_baseline)
+            if np.isfinite(ct):
+                ok &= fast[sel] <= (ct - pcfg.min_before_change)
+            if t_out is not None:
+                ok &= fast[sel] <= (float(t_out) - pcfg.min_before_outcome_fa_abort)
+            keep[sel] = ok
+        n_all, n_clean = int(fast.size), int(keep.sum())
+        fast = fast[keep]
+
         ev = {"pulse": fast,
               "change": _outcome_times(s, "Change_ON", "hit"),
               "fa": _outcome_times(s, "FA", "fa")}
+
         rows = []
         for r in recs:
             uid = int(r["unit"])
             spk = np.sort(_spikes(s, uid))
             tr = {}
             for k, (win, base) in ALIGN.items():
-                z, t = _ztrace(spk, ev[k], win, base)
+                z, t = _ztrace(spk, ev[k], win, base)      # no per-lag censoring needed now
                 tr[k] = (z, t)
             fw = float(r["kernel_fwhm"])
             cls = "transient" if fw <= NARROW else ("sustained" if fw >= BROAD else "intermediate")

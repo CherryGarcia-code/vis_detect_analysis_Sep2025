@@ -1,0 +1,5 @@
+WIDTH -> COUPLING NULL CONTROLS (must be flat under permutation)
+============================================================
+[change_on] observed ρ=+0.236 | null mean=+0.0005 sd=0.0433 | global p_perm=5.00e-04 z=+5.45 | within-mouse p=5.00e-04 z=+5.31 | n=520
+[hit_ramp] observed ρ=+0.286 | null mean=+0.0013 sd=0.0426 | global p_perm=5.00e-04 z=+6.68 | within-mouse p=5.00e-04 z=+6.78 | n=520
+[fa_ramp] observed ρ=+0.348 | null mean=+0.0008 sd=0.0435 | global p_perm=5.00e-04 z=+8.00 | within-mouse p=5.00e-04 z=+8.05 | n=520

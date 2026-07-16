@@ -14,10 +14,26 @@ are NOT cross-session tracked, so each cell-session is one observation).
 Metrics — ALL canonical windows (EVENT_RESPONSIVENESS_WINDOWS), baseline-subtracted
 Δrate (Hz), per cell:
   change_on : hit trials, resp (0,0.25)   - base (-0.4,-0.05)   [sensory-evoked]
-  hit_ramp  : hit trials, resp (-0.3,-0.15)- base (-1.75,-1.25) [preparatory ramp, response lick]
+  hit_ramp  : hit trials, resp (-0.3,-0.15)- base (-1.75,-1.25) [response lick]
   fa_ramp   : fa  trials, resp (-0.3,-0.15)- base (-1.75,-1.25) [impulsive ramp, early lick]
 Predictor: kernel_peak_t (registry).  base_hz (Change_ON baseline rate) is the
 firing-rate covariate for partial correlations.
+
+⚠ hit_ramp is NOT an independent motor signal.  Hit licks follow the change by a
+median ~0.64 s, so the (-0.3,-0.15) s "pre-lick" window lands at/after Change_ON on
+~95% of hit trials (37% overlap the 0-0.25 s sensory response) — hit_ramp is largely
+the change-evoked response measured again near the lick (empirically ρ≈+0.57 with
+change_on, ρ≈+0.80 with fa_ramp).  Downstream width→coupling figures must treat
+change_on / hit_ramp as ONE sensory/decision signal and fa_ramp (the only clean motor
+probe: an early lick with NO change stimulus present) as the independent motor test.
+
+BASELINE-CLAMP (Jul 2026 fix): the (-1.75,-1.25) s hit/FA-ramp baseline is taken
+relative to the LICK, and FA licks are early (median ~4.6 s after Baseline_ON but
+p5≈0.36 s), so on ~20% of FA trials that window started BEFORE the trial's own
+Baseline_ON — sampling the ITI / previous trial (which can carry the prior change or
+lick).  _delta now includes a trial only if BOTH its baseline AND response windows
+start at/after that trial's Baseline_ON (complete-case).  Baseline_ON is read from the
+event getter because Trial.t_start is NaN on many trials.
 
 Stats: Spearman rho (pooled + per mouse) with 1000x bootstrap CI; PARTIAL
 Spearman controlling base_hz (rules out "late cells just fire more"); early/late
@@ -60,9 +76,9 @@ SEED = 42
 CH_BASE, CH_RESP = EVENT_RESPONSIVENESS_WINDOWS["Change_ON"]     # (-0.4,-0.05),(0,0.25)
 RAMP_BASE, RAMP_RESP = EVENT_RESPONSIVENESS_WINDOWS["FA"]        # (-1.75,-1.25),(-0.3,-0.15)
 METRICS = [("change_on", "Change_ON response\n(0–0.25 s, hit)"),
-           ("hit_ramp", "Hit motor ramp\n(−0.3..−0.15 s, response lick)"),
+           ("hit_ramp", "Hit pre-lick window\n(−0.3..−0.15 s; ≈change resp)"),
            ("fa_ramp", "FA motor ramp\n(−0.3..−0.15 s, early lick)")]
-OUT = Path("E:/python_analysis/git_repos/vd_tf_bg046/FIGURES/tf_glm_bg046/latency_outcome_coupling")
+OUT = Path(str(REPO)) / "FIGURES/tf_glm_bg046/latency_outcome_coupling"
 CACHE = OUT / "latency_outcome_metrics.csv"
 
 
@@ -76,25 +92,45 @@ def _win_rate(spk, times, win):
     return float(((hi - lo) / (win[1] - win[0])).mean())
 
 
-def _delta(spk, times, base, resp):
-    if len(times) < MIN_TRIALS:
+def _delta(spk, times, bon, base, resp):
+    """Baseline-subtracted Δrate (Hz), COMPLETE-CASE clamped to Baseline_ON.
+
+    A trial is included only if BOTH its baseline and response windows start at/after
+    that trial's Baseline_ON (`times + win[0] >= bon`), so neither window can sample the
+    pre-trial ITI / previous trial.  This fixes the fa_ramp/hit_ramp baseline
+    (-1.75,-1.25 s re the lick) crossing Baseline_ON on early-lick trials.  `bon` is the
+    per-event Baseline_ON time (parallel to `times`)."""
+    times = np.asarray(times, float)
+    bon = np.asarray(bon, float)
+    ok = (np.isfinite(times) & np.isfinite(bon)
+          & (times + base[0] >= bon) & (times + resp[0] >= bon))
+    sub = times[ok]
+    if sub.size < MIN_TRIALS:
         return np.nan
-    return _win_rate(spk, times, resp) - _win_rate(spk, times, base)
+    return _win_rate(spk, sub, resp) - _win_rate(spk, sub, base)
 
 
 def _outcome_times(session, event, outcome):
-    """Absolute event times for trials whose lowercased trialoutcome == outcome."""
+    """(event_times, baseline_on_times) parallel float arrays for trials whose
+    lowercased trialoutcome == outcome and both times are finite.  Baseline_ON is read
+    from the event getter because Trial.t_start is NaN on many trials."""
     et = np.asarray(get_event_times_by_trial(session, event), float)
-    return [et[i] for i, t in enumerate(session.trials)
-            if str(getattr(t, "trialoutcome", "") or "").lower() == outcome
-            and i < et.size and np.isfinite(et[i])]
+    bon = np.asarray(get_event_times_by_trial(session, "Baseline_ON"), float)
+    ev, bo = [], []
+    for i, t in enumerate(session.trials):
+        if (str(getattr(t, "trialoutcome", "") or "").lower() == outcome
+                and i < et.size and i < bon.size
+                and np.isfinite(et[i]) and np.isfinite(bon[i])):
+            ev.append(et[i])
+            bo.append(bon[i])
+    return np.asarray(ev, float), np.asarray(bo, float)
 
 
 def session_metrics(subj, region, sess, reg_rows):
     s = load_session(f"{REPO}/data/pkls/{subj}/{sess}.pkl")
-    hit_change = _outcome_times(s, "Change_ON", "hit")   # sensory-evoked change
-    hit_lick = _outcome_times(s, "Hit", "hit")           # response-lick aligned
-    fa_lick = _outcome_times(s, "FA", "fa")              # early-lick aligned
+    hit_change, hit_change_bon = _outcome_times(s, "Change_ON", "hit")  # sensory-evoked change
+    hit_lick, hit_lick_bon = _outcome_times(s, "Hit", "hit")            # response-lick aligned
+    fa_lick, fa_lick_bon = _outcome_times(s, "FA", "fa")                # early-lick aligned
     rows = []
     for _, r in reg_rows.iterrows():
         uid = int(r["unit"])
@@ -106,9 +142,9 @@ def session_metrics(subj, region, sess, reg_rows):
             kernel_peak_t=float(r["kernel_peak_t"]), c1_r=float(r["c1_r_log2"]),
             n_spikes=float(r["n_spikes"]),
             base_hz=_win_rate(spk, hit_change, CH_BASE),
-            change_on=_delta(spk, hit_change, CH_BASE, CH_RESP),
-            hit_ramp=_delta(spk, hit_lick, RAMP_BASE, RAMP_RESP),
-            fa_ramp=_delta(spk, fa_lick, RAMP_BASE, RAMP_RESP),
+            change_on=_delta(spk, hit_change, hit_change_bon, CH_BASE, CH_RESP),
+            hit_ramp=_delta(spk, hit_lick, hit_lick_bon, RAMP_BASE, RAMP_RESP),
+            fa_ramp=_delta(spk, fa_lick, fa_lick_bon, RAMP_BASE, RAMP_RESP),
             n_hit=len(hit_change), n_fa=len(fa_lick)))
     del s
     gc.collect()

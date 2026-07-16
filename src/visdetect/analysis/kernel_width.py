@@ -1,10 +1,12 @@
 """Continuous width estimators for a 1-D GLM TF kernel (or any deflection trace).
 
 All estimators operate on the ABSOLUTE deflection |K| so suppression-type cells
-(~half of TF-responsive units fire *less* to fast pulses) are treated the same as
-excitatory cells. `grid_fwhm` reproduces the pipeline's coarse walk-out exactly
-(for the registry validation gate); `interpolated_fwhm` and `temporal_spread` are
-the continuous measures the 50 ms lag grid cannot resolve.
+(~30-40% of TF-responsive units fire *less* to fast pulses; the fraction is
+window-dependent, 25-51% across defensible kernel lag windows, so it is a range not
+a point) are treated the same as excitatory cells. `grid_fwhm` reproduces the
+pipeline's coarse walk-out exactly (for the registry validation gate);
+`interpolated_fwhm` and `temporal_spread` are the continuous measures the 50 ms lag
+grid cannot resolve.
 """
 from __future__ import annotations
 

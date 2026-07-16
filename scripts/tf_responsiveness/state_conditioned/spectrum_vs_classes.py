@@ -28,14 +28,28 @@ from visdetect.analysis.spectrum_stats import (                       # noqa: E4
 )
 
 CACHE = Path(REPO) / "data/cache/tf_glm_bg046/kernel_width_continuous.csv"
+PULSE_ALL = Path(REPO) / "data/cache/tf_glm_bg046/pulse_fwhm_allpulses.csv"
 OUT = Path(REPO) / "FIGURES/tf_glm_bg046/spectrum_vs_classes"
 REGION = {"BG_046": "DMS", "BG_039": "DMS", "BG_031": "VMS"}
-OUTCOMES = [("change_on", "Change_ON"), ("hit_ramp", "Hit ramp"), ("fa_ramp", "FA ramp")]
+# hit_ramp is NOT an independent outcome: the hit lick follows the change by ~0.64 s, so
+# its window is largely the change-evoked response (rho~+0.58 with change_on). It is a
+# consistency check, not a third test; fa_ramp (early lick, NO change stimulus) is the
+# independent motor probe (width->fa_ramp survives controlling change_on, partial +0.28).
+OUTCOMES = [("change_on", "Change_ON (sensory)"),
+            ("hit_ramp", "Hit pre-lick (≈change resp)"),
+            ("fa_ramp", "FA motor ramp (independent)")]
 WIDTH = "interp_fwhm"  # primary continuous width
+# Model-free width measure: the GUARDED all-pulse fast-minus-slow contrast, NOT the stale
+# 600-cap `pulse_fwhm` column (which was noise, rho=+0.045 to interp_fwhm).
+PULSE_MEASURE = "pulse_fwhm_all"
 
 
 def main():
     d = pd.read_csv(CACHE)
+    if PULSE_ALL.exists():
+        pa = pd.read_csv(PULSE_ALL, dtype={"session": str})[
+            ["subject", "session", "unit", "pulse_fwhm_all"]]
+        d = d.merge(pa, on=["subject", "session", "unit"], how="left")
     d["region"] = d.subject.map(REGION)
     OUT.mkdir(parents=True, exist_ok=True)
     try:
@@ -46,7 +60,7 @@ def main():
 
     stat_rows, lines = [], []
     # ── modality battery on each width measure, pooled + per region ──
-    for measure in [WIDTH, "temporal_spread", "pulse_fwhm"]:
+    for measure in [WIDTH, "temporal_spread", PULSE_MEASURE]:
         for scope, sub in [("pooled", d)] + [(rg, d[d.region == rg]) for rg in ("DMS", "VMS")]:
             x = sub[measure].replace([np.inf, -np.inf], np.nan).dropna().values
             gm = gmm_delta_bic(x); si = silverman_bootstrap(x, n_boot=300)

@@ -1,0 +1,6 @@
+[change_on] pooled ρ=-0.015 p=7.34e-01 partial=-0.004(p=9.25e-01) | BG_046 ρ=+0.20(p=9e-03,n=162) · BG_039 ρ=-0.17(p=3e-01,n=39) · BG_031 ρ=-0.10(p=9e-02,n=319)
+[hit_ramp] pooled ρ=+0.022 p=6.11e-01 partial=+0.034(p=4.45e-01) | BG_046 ρ=+0.18(p=2e-02,n=162) · BG_039 ρ=+0.05(p=8e-01,n=39) · BG_031 ρ=-0.11(p=5e-02,n=319)
+[fa_ramp] pooled ρ=+0.094 p=3.19e-02 partial=+0.111(p=1.17e-02) | BG_046 ρ=+0.20(p=1e-02,n=162) · BG_039 ρ=+0.05(p=8e-01,n=39) · BG_031 ρ=+0.03(p=6e-01,n=319)
+[change_on] early(n=174) med=+0.66 vs late(n=346) med=+0.70  MWU p=7.36e-01
+[hit_ramp] early(n=174) med=+1.84 vs late(n=346) med=+1.94  MWU p=2.19e-01
+[fa_ramp] early(n=174) med=+0.69 vs late(n=346) med=+1.78  MWU p=1.98e-04

@@ -1,0 +1,26 @@
+Hardening the width->coupling relationship against pseudoreplication (CONTINUOUS width)
+(continuum re-render of the transient/sustained class-gap hardening figure)
+
+n cells = 520 (finite width = 520) | DMS=201 VMS=319 | sessions=69
+target = the graded width->coupling relationship (Spearman/regression of
+  continuous interp_fwhm on each outcome), NOT a transient-vs-sustained gap.
+
+[C tracked-collapse BG_046] 24 responsive cell-sessions -> 23 unique consensus units (mean 1.0 sess/unit)
+
+[change_on]
+  A mixed(session RE)  beta_w=+0.507 p=2.36e-12 [NON-CONVERGED->cluster-robust]  (n=520, sess=69)
+    cluster-robust OLS beta_w=+0.536 p=3.34e-12  | PREFERRED = cluster (beta_w=+0.536 p=3.34e-12)
+  B per-session Spearman: median rho=+0.271 over 44 sessions (70% positive), Wilcoxon p=2.70e-03
+  C tracked collapse: Spearman rho=+0.212 p=3.30e-01 (n=23 units)
+
+[hit_ramp]
+  A mixed(session RE)  beta_w=+1.787 p=9.46e-15 [NON-CONVERGED->cluster-robust]  (n=520, sess=69)
+    cluster-robust OLS beta_w=+1.812 p=6.53e-10  | PREFERRED = cluster (beta_w=+1.812 p=6.53e-10)
+  B per-session Spearman: median rho=+0.275 over 44 sessions (77% positive), Wilcoxon p=1.52e-04
+  C tracked collapse: Spearman rho=+0.492 p=1.71e-02 (n=23 units)
+
+[fa_ramp]
+  A mixed(session RE)  beta_w=+1.700 p=2.10e-17 [converged]  (n=520, sess=69)
+    cluster-robust OLS beta_w=+1.722 p=1.12e-10  | PREFERRED = mixed (beta_w=+1.700 p=2.10e-17)
+  B per-session Spearman: median rho=+0.400 over 44 sessions (93% positive), Wilcoxon p=1.81e-06
+  C tracked collapse: Spearman rho=+0.507 p=1.36e-02 (n=23 units)

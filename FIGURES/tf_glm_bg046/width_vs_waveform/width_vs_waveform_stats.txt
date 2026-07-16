@@ -1,0 +1,27 @@
+cells=520; with t2p=491; with FSI/SPN label=491
+OVERLAP crosstab (median-split width x waveform):
+celltype   FSI  SPN
+wclass             
+sustained  187   59
+transient  204   41
+  chi2=3.54 p=5.98e-02
+CONTINUOUS t2p vs width: rho=+0.058 p=1.97e-01 (n=491)
+    DMS: rho=-0.027 p=7.27e-01 (n=172)
+    VMS: rho=+0.090 p=1.09e-01 (n=319)
+FOUR-QUADRANT (t2p median=0.200 ms, width median=0.106 s) — median Δ firing (Hz):
+    transient x narrow/FSI  n=126  {'change_on': 0.67, 'hit_ramp': 1.61, 'fa_ramp': 0.96}
+    transient x broad/SPN   n=119  {'change_on': 0.34, 'hit_ramp': 0.99, 'fa_ramp': 0.35}
+    sustained x narrow/FSI  n=125  {'change_on': 1.12, 'hit_ramp': 3.3, 'fa_ramp': 2.99}
+    sustained x broad/SPN   n=121  {'change_on': 0.99, 'hit_ramp': 3.02, 'fa_ramp': 2.32}
+INDEPENDENCE (outcome ~ width + t2p, standardized): width beta | t2p beta
+  metrics are raw-Hz Δfiring; MAGNITUDE established elsewhere — this isolates width-vs-t2p independence
+  mixedlm=session random-intercept; OLS=cluster-robust (cluster on session, prefer if mixedlm non-converged)
+  [change_on] mixedlm width b=+0.538 p=1.19e-12 | t2p b=-0.109 p=1.51e-01  [!] mixedlm did NOT converge (RE var~0) → prefer OLS below
+  [change_on] OLS(cl) width b=+0.561 p=1.21e-15 | t2p b=-0.113 p=1.00e-01  n=491
+  [hit_ramp] mixedlm width b=+1.828 p=2.85e-14 | t2p b=-0.362 p=1.33e-01
+  [hit_ramp] OLS(cl) width b=+1.859 p=2.73e-10 | t2p b=-0.399 p=4.65e-02  n=491
+  [fa_ramp] mixedlm width b=+1.761 p=7.40e-17 | t2p b=-0.171 p=4.19e-01
+  [fa_ramp] OLS(cl) width b=+1.781 p=3.44e-11 | t2p b=-0.224 p=2.96e-01  n=491
+YIELD-BIAS CAVEAT: FSI:SPN = 391:100 in the labeled sample — narrow cells are
+  OVER-SAMPLED; do NOT read population fractions as biology. The within-sample t2p↔width
+  relationship + the independence test (which don't depend on the FSI/SPN marginal) are what matter.

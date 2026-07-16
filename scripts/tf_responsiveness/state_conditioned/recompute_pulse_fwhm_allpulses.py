@@ -2,13 +2,20 @@
 
 `kernel_width_continuous.csv` carries `pulse_fwhm` — a MODEL-FREE width taken from the
 fast-minus-slow pulse-PETH contrast, meant as an independent check on the GLM-derived
-`interp_fwhm`. It came out weak (Spearman ~0.11) and that was recorded as "inherent".
-It probably was not: it used PULSE_CAP=600, i.e. ~1.5% of the ~41k pulses/session, and
+`interp_fwhm`. It came out weak (Spearman +0.045, p=0.31) and that was recorded as
+"inherent". It was not: it used PULSE_CAP=600, i.e. ~1.5% of the ~41k pulses/session, and
 the per-pulse response sits ~20x below the spiking noise. This re-runs it with ALL pulses.
 
-If the correlation with interp_fwhm now rises, the width axis gains a SECOND independent,
-model-free confirmation (the first being that the raw fast-pulse PETH's own FWHM now
-tracks interp_fwhm at rho=+0.43 after the same cap was removed).
+CANONICAL LEAKAGE GUARD (Jul 2026): the fast pulses live in the trial BASELINE and the
+PETH window runs +0.75 s, which on a late-baseline pulse reaches the CHANGE and the LICK;
+align does not clip at trial boundaries and the design's trial end is the NEXT trial's
+Baseline_ON, so the fast-minus-slow contrast is NOT guaranteed to cancel that leakage
+(it only cancels if fast and slow pulses are matched in within-baseline timing). We apply
+the project's own TFRespPulseConfig eligibility guard to BOTH pulse lists — the same guard
+`rebuild_peth_traces_all.py` uses (>=1 s after Baseline_ON, >=1 s before the change, >=2 s
+before an fa/abort/ref lick) — so this cross-check is on the identical clean pulse set as
+the raw-PETH width. If the correlation with interp_fwhm still rises, the width axis gains a
+SECOND model-free (though not data-independent) confirmation.
 
 Only the pulse PETHs are recomputed — the GLM kernels are cached, so no refit is needed.
 The pulse PETH is VECTORISED here (visdetect's tf_pulse_peth loops in Python over pulses,
@@ -44,10 +51,44 @@ from visdetect.analysis.tf_glm import (                              # noqa: E40
 )
 from visdetect.analysis.tf_glm_data import session_trial_regressors  # noqa: E402
 from visdetect.analysis.kernel_width import interpolated_fwhm, temporal_spread  # noqa: E402
+# The project's canonical TF-pulse eligibility guard (tf_pulse.py:49-53), identical to
+# the one rebuild_peth_traces_all.py applies to the raw-PETH path.
+from visdetect.analysis.tf_pulse import (                            # noqa: E402
+    TFRespPulseConfig, _outcome_time_for_trial,
+)
 
 MICE = [("BG_046", "DMS"), ("BG_039", "DMS"), ("BG_031", "VMS")]
 WIDTH_CSV = Path(REPO) / "data/cache/tf_glm_bg046/kernel_width_continuous.csv"
 OUT_CSV = Path(REPO) / "data/cache/tf_glm_bg046/pulse_fwhm_allpulses.csv"
+
+
+def _guard_pulses(pulses, trials, strials, bin_edges, trial_index, pcfg):
+    """Keep only TF pulses passing the canonical TFRespPulseConfig leakage guard:
+    >= min_after_baseline s after Baseline_ON, >= min_before_change s before the change,
+    >= min_before_outcome_fa_abort s before an fa/abort/ref lick. Reuses the project's own
+    `_outcome_time_for_trial` so it cannot drift from the reference implementation."""
+    p = np.asarray(pulses, float)
+    if p.size == 0:
+        return p
+    be = np.asarray(bin_edges, float)
+    tix = np.asarray(trial_index)
+    bi = np.clip(np.searchsorted(be, p, side="right") - 1, 0, tix.size - 1)
+    ptr = tix[bi]
+    keep = np.zeros(p.size, bool)
+    for k in range(len(trials)):
+        sel = np.where(ptr == k)[0]
+        if not sel.size:
+            continue
+        t0 = float(trials[k].t_start)
+        ct = float(getattr(trials[k], "change_time", np.nan))
+        t_out = (_outcome_time_for_trial(strials[k], t0) if k < len(strials) else None)
+        ok = p[sel] >= (t0 + pcfg.min_after_baseline)
+        if np.isfinite(ct):
+            ok &= p[sel] <= (ct - pcfg.min_before_change)
+        if t_out is not None:
+            ok &= p[sel] <= (float(t_out) - pcfg.min_before_outcome_fa_abort)
+        keep[sel] = ok
+    return p[keep]
 
 
 def _peth_vec(v, bin_edges, trial_index, pulse_times, win, bin_s):
@@ -87,6 +128,12 @@ def _session(task):
         d = assemble_design(trials, cfg)
         fast, slow = pulse_times_from_tf(d, cfg)
         fast, slow = np.asarray(fast, float), np.asarray(slow, float)   # ALL of them
+        # Canonical leakage guard on BOTH lists, so late-baseline pulses whose window
+        # reaches the change/lick cannot leak into (and inflate) the fast-minus-slow width.
+        pcfg = TFRespPulseConfig()
+        strials = getattr(s, "trials", []) or []
+        fast = _guard_pulses(fast, trials, strials, d.bin_edges, d.trial_index, pcfg)
+        slow = _guard_pulses(slow, trials, strials, d.bin_edges, d.trial_index, pcfg)
         ti, win, bs = d.trial_index, cfg.pulse_eval_win, cfg.bin_s
         rows = []
         for r in recs:
