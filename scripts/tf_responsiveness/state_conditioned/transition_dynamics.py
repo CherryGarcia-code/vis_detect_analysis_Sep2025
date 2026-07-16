@@ -168,11 +168,13 @@ def main():
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5.5))
     # panel 1: mean projection trajectory
-    m = np.nanmean(allseg, 0); sem = np.nanstd(allseg, 0) / np.sqrt(np.sum(np.isfinite(allseg), 0))
+    # 95% CI (1.96 * SEM) — project convention: shade a 95% CI, never a bare SEM.
+    m = np.nanmean(allseg, 0)
+    ci = 1.96 * np.nanstd(allseg, 0, ddof=1) / np.sqrt(np.sum(np.isfinite(allseg), 0))
     ax1.axvspan(-0.5, WIN - 0.5, color="#3474ae", alpha=0.06)
     ax1.axvline(0, color="k", lw=1.2, ls="--", label="behavioural flip")
     ax1.plot(lags, m, "-o", color="#6a51a3", lw=2.2, ms=5)
-    ax1.fill_between(lags, m - sem, m + sem, color="#6a51a3", alpha=0.2)
+    ax1.fill_between(lags, m - ci, m + ci, color="#6a51a3", alpha=0.2)
     ax1.set_xlabel("trial relative to behavioural flip (0 = first new-state trial)")
     ax1.set_ylabel("task-state projection\n(engaged-like  →  ↑)")
     ax1.set_title(f"engaged→Disengaged transition (n={n_trans})", fontsize=12, fontweight="bold")
@@ -183,9 +185,10 @@ def main():
     # panel 2: LEAD test — projection per trial vs the pre-window, per-transition
     ax2.axhline(0, color="0.7", lw=0.8, ls=":")
     ax2.axvline(0, color="k", lw=1.2, ls="--")
-    mc = np.nanmean(centered, 0); semc = np.nanstd(centered, 0) / np.sqrt(np.sum(np.isfinite(centered), 0))
+    mc = np.nanmean(centered, 0)
+    cic = 1.96 * np.nanstd(centered, 0, ddof=1) / np.sqrt(np.sum(np.isfinite(centered), 0))
     ax2.plot(lags, mc, "-o", color="#238b45", lw=2.2, ms=5)
-    ax2.fill_between(lags, mc - semc, mc + semc, color="#238b45", alpha=0.2)
+    ax2.fill_between(lags, mc - cic, mc + cic, color="#238b45", alpha=0.2)
     # test each pre-flip trial (-1,-2,-3) vs 0 (Wilcoxon across transitions)
     for lag in (-3, -2, -1):
         col = list(lags).index(lag)

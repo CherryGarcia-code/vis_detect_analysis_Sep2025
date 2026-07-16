@@ -72,10 +72,11 @@ def main():
     for c, col in (("transient", TCOL), ("sustained", SCOL)):
         m = cls_s == c
         mean = np.nanmean(Msort[m], 0)
-        sem = np.nanstd(Msort[m], 0) / np.sqrt(np.sum(np.isfinite(Msort[m]), 0).clip(1))
+        # 95% CI (1.96 * SEM) — project convention: never shade a bare SEM.
+        ci = 1.96 * np.nanstd(Msort[m], 0, ddof=1) / np.sqrt(np.sum(np.isfinite(Msort[m]), 0).clip(1))
         pctl = 100 * lick_s[m].mean()
         axp.plot(t, mean, color=col, lw=2.6, label=f"{c}  ({pctl:.0f}% lick-resp, n={m.sum()})")
-        axp.fill_between(t, mean - sem, mean + sem, color=col, alpha=0.2)
+        axp.fill_between(t, mean - ci, mean + ci, color=col, alpha=0.2)
     axp.axvspan(PRE[0], PRE[1], color="0.85", zorder=0, label="pre-lick window")
     axp.axvline(0, color="k", lw=1.1, ls="--")
     axp.axhline(0, color="0.8", lw=0.8)

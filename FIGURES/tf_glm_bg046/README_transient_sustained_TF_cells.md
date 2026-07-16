@@ -354,6 +354,14 @@ Since it's a spectrum, we re-rendered the whole analysis **against the continuou
 95 % confidence interval** (resample cells with replacement 1000×). **The statistic itself is
 always computed on the raw, unbinned data** (Spearman ρ) — so no result depends on the binning.
 
+> ⚠️ **Error-band convention (project-wide): every shaded band is a 95% CI. Never a bare SEM.**
+> A ±SEM band is ~half the width of a ±95% CI for the same data, so mixing the two makes figures
+> silently non-comparable and *understates* uncertainty by ~2×. Two figures previously shaded
+> ±SEM (`heatmap_transient_sustained`, `width_continuum_summary` panel A) — both are now 95% CI,
+> which visibly widens the sustained trace's band (n=99). Where CIs come from a bootstrap
+> (`core_metrics_continuum`, exemplar kernels) they are percentile CIs; where they come from a
+> population mean they are 1.96 × SEM.
+
 **Statistical considerations carried throughout:**
 - **Spearman ρ** (rank-based) → assumes neither normality nor a straight line.
 - **segmented-vs-linear BIC** → explicitly tests "graded" against "stepped".
@@ -540,7 +548,7 @@ unresponsive cell couples.
 **Where it appears.**
 - **As a band** (median + IQR of the coupling *scalar*): `width_continuum_summary/` panel B, and
   every coupling panel of `core_metrics_continuum/`.
-- **As a PSTH trace** (the population mean *timecourse*, dashed grey ± SEM): the **Change_ON** and
+- **As a PSTH trace** (the population mean *timecourse*, dashed grey ± 95% CI): the **Change_ON** and
   **FA** panels of both `heatmap_transient_sustained/` and `heatmap_continuum/`. This is the same
   finding shown as a timecourse, and it reads immediately: the narrowest width bin **starts on the
   unresponsive trace** and the families **fan upward with width** (Change_ON peak: unresponsive

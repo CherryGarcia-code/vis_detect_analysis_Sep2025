@@ -9,7 +9,8 @@ width axis and its coupling.
 
 Panel A  width-binned MEAN GLM kernel, stacked narrow(top)->broad(bottom). Averaged at the
          BIN level (not per cell), then each bin-mean scaled to unit peak so bins are shape-
-         comparable; +/-1 SEM shaded. A half-max bar marks each bin's width. The peak
+         comparable; **95% CI** shaded (project convention: every shaded band in this figure
+         set is a 95% CI, never a bare SEM). A half-max bar marks each bin's width. The peak
          visibly broadens down the stack.
 Panel B  width (x) vs FA-motor coupling (y), each cell a point coloured by width, with a
          decile mean+-bootstrap-CI trend and a top marginal width histogram. Shows the axis
@@ -110,12 +111,14 @@ def main():
     for b in range(N_BINS):
         sel = binid == b
         km = np.nanmean(Krel[sel], axis=0)
-        sem = np.nanstd(Krel[sel], axis=0) / np.sqrt(max(sel.sum(), 1))
+        # 95% CI (1.96 * SEM) — never a bare SEM: a +/-SEM band looks ~half as wide for the
+        # same data, so mixing the two across figures makes them silently non-comparable.
+        ci = 1.96 * np.nanstd(Krel[sel], axis=0, ddof=1) / np.sqrt(max(sel.sum(), 1))
         pk = np.max(np.abs(km)) + 1e-12
-        km, sem = km / pk, sem / pk                     # unit-peak (bin mean, not per cell)
+        km, ci = km / pk, ci / pk                       # unit-peak (bin mean, not per cell)
         y0 = (N_BINS - 1 - b) * off
         c = cmap(b / (N_BINS - 1))
-        axA.fill_between(rel, y0 + km - sem, y0 + km + sem, color=c, alpha=0.30, lw=0)
+        axA.fill_between(rel, y0 + km - ci, y0 + km + ci, color=c, alpha=0.30, lw=0)
         axA.fill_between(rel, y0, y0 + km, color=c, alpha=0.75, lw=0)
         axA.plot(rel, y0 + km, color="k", lw=0.9)
         # half-max width bar of the bin-mean kernel (peak-relative)

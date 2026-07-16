@@ -82,8 +82,20 @@ def _ztrace(spk, times, win, base):
     return (z - mu) / sd, t
 
 
+def _mean_ci(rows):
+    """Per-timepoint mean and 95% CI half-width (1.96 * SEM) across cells.
+
+    Project convention: every shaded band in this figure set is a 95% CI, never a bare SEM —
+    a +/-SEM band looks ~half as wide for the same data, so mixing the two makes figures
+    silently non-comparable."""
+    mean = np.nanmean(rows, axis=0)
+    n = np.sum(np.isfinite(rows), axis=0).clip(1)
+    sem = np.nanstd(rows, axis=0, ddof=1) / np.sqrt(n)
+    return mean, 1.96 * sem
+
+
 def _unresponsive_trace(key):
-    """(t, mean, sem, n) for the TF-UNRESPONSIVE reference on `change`/`fa`, else None.
+    """(t, mean, ci95, n) for the TF-UNRESPONSIVE reference on `change`/`fa`, else None.
 
     None for `pulse` BY DESIGN: that panel is sign-aligned by the GLM kernel, which unresponsive
     cells do not have — signing them by a noise-derived sign would fabricate a response. Build
@@ -99,9 +111,8 @@ def _unresponsive_trace(key):
     t = np.asarray(z[f"t_{key}"], float)
     if M.size == 0 or t.size == 0:
         return None
-    mean = np.nanmean(M, 0)
-    sem = np.nanstd(M, 0) / np.sqrt(np.sum(np.isfinite(M), 0).clip(1))
-    return t, mean, sem, int(np.sum(np.any(np.isfinite(M), axis=1)))
+    mean, ci = _mean_ci(M)
+    return t, mean, ci, int(np.sum(np.any(np.isfinite(M), axis=1)))
 
 
 def _outcome_times(session, event, outcome):
@@ -255,23 +266,22 @@ def main():
             # non-responding cell by its own noise kernel would fabricate a response.
             uref = _unresponsive_trace(k)
             if uref is not None:
-                ut, umean, usem, un = uref
+                ut, umean, uci, un = uref
                 axp.plot(ut, umean, color="0.25", lw=2.0, ls="--", zorder=1,
                          label=f"TF-unresponsive (n={un:,})")
-                axp.fill_between(ut, umean - usem, umean + usem, color="0.45", alpha=0.22,
+                axp.fill_between(ut, umean - uci, umean + uci, color="0.45", alpha=0.22,
                                  lw=0, zorder=0)
             for c, col in (("transient", TCOL), ("sustained", SCOL)):
                 sub = M[cls[order] == c]
                 if not len(sub):
                     continue
-                mean = np.nanmean(sub, 0)
-                sem = np.nanstd(sub, 0) / np.sqrt(np.sum(np.isfinite(sub), 0).clip(1))
+                mean, ci = _mean_ci(sub)          # 95% CI — never a bare SEM
                 axp.plot(t, mean, color=col, lw=2.2, label=c)
-                axp.fill_between(t, mean - sem, mean + sem, color=col, alpha=0.2)
+                axp.fill_between(t, mean - ci, mean + ci, color=col, alpha=0.2)
             if uref is not None:
                 axp.legend(frameon=False, fontsize=9, loc="upper left")
             axp.axvline(0, color="0.6", lw=0.8); axp.axhline(0, color="0.85", lw=0.8)
-            axp.set_title(TITLES[k] + "  — magnitude", fontsize=14, fontweight="bold")
+            axp.set_title(TITLES[k] + "  — magnitude (±95% CI)", fontsize=14, fontweight="bold")
             axp.set_xlim(t[0], t[-1])
             axp.set_ylabel("z-score (pop mean)", fontsize=13) if j == 1 else None
         axp.tick_params(labelsize=11)
