@@ -126,6 +126,29 @@ def _kernel_sign(D, win=PULSE_SIGN_WIN):
     return s
 
 
+def _unresponsive_trace(key):
+    """(t, mean, ci95, n) for the TF-UNRESPONSIVE reference on the `change`/`fa` panels, or
+    None if unavailable / not applicable.
+
+    Returns None for `pulse` BY DESIGN — that panel is sign-aligned by each cell's GLM kernel
+    and unresponsive cells have no kernel; signing them by a noise-derived sign would fabricate
+    a response (the circularity this figure was fixed to remove). Build the cache with
+    `py rebuild_peth_traces_all.py --unresponsive`.
+    """
+    if key not in ("change", "fa"):
+        return None
+    f = Path(REPO) / "data/cache/tf_glm_bg046/peth_traces_unresponsive.npz"
+    if not f.exists():
+        return None
+    z = np.load(f, allow_pickle=True)
+    M = np.asarray(z[f"mat_{key}"], float)
+    t = np.asarray(z[f"t_{key}"], float)
+    if M.size == 0 or t.size == 0:
+        return None
+    mean, ci = _mean_ci(M)
+    return t, mean, ci, int(np.sum(np.any(np.isfinite(M), axis=1)))
+
+
 def _mean_ci(rows):
     """Per-timepoint mean and 95% CI half-width (1.96 * SEM) across cells in a bin."""
     mean = np.nanmean(rows, axis=0)
@@ -209,6 +232,19 @@ def main():
 
         # ── top panel: width-binned PSTH family (mean + 95% CI shading) ─────────
         axp = fig.add_subplot(gs[0, j])
+        # TF-UNRESPONSIVE reference trace (Change_ON / FA only). These panels are shown RAW
+        # (no sign-alignment), so the reference drops in cleanly. It is deliberately absent
+        # from the PULSE panel: that panel is sign-aligned by each cell's GLM kernel, and
+        # signing a non-responding cell by its own noise kernel would fabricate a bump — the
+        # exact circularity we removed. (It is also tautological there: they are DEFINED as
+        # having no TF response.) See _unresponsive_trace().
+        uref = _unresponsive_trace(k)
+        if uref is not None:
+            ut, umean, uci, un = uref
+            axp.fill_between(ut, umean - uci, umean + uci, color="0.45", alpha=0.22, lw=0,
+                             zorder=1)
+            axp.plot(ut, umean, color="0.25", lw=2.0, ls="--", zorder=2,
+                     label=f"TF-UNRESPONSIVE (n={un:,})")
         for b in range(N_WIDTH_BINS):
             rows = Mfull[bin_idx == b]
             if rows.size == 0:

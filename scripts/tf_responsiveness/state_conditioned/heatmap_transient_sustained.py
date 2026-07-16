@@ -82,6 +82,28 @@ def _ztrace(spk, times, win, base):
     return (z - mu) / sd, t
 
 
+def _unresponsive_trace(key):
+    """(t, mean, sem, n) for the TF-UNRESPONSIVE reference on `change`/`fa`, else None.
+
+    None for `pulse` BY DESIGN: that panel is sign-aligned by the GLM kernel, which unresponsive
+    cells do not have — signing them by a noise-derived sign would fabricate a response. Build
+    the cache with `py rebuild_peth_traces_all.py --unresponsive`.
+    """
+    if key not in ("change", "fa"):
+        return None
+    f = Path(REPO) / "data/cache/tf_glm_bg046/peth_traces_unresponsive.npz"
+    if not f.exists():
+        return None
+    z = np.load(f, allow_pickle=True)
+    M = np.asarray(z[f"mat_{key}"], float)
+    t = np.asarray(z[f"t_{key}"], float)
+    if M.size == 0 or t.size == 0:
+        return None
+    mean = np.nanmean(M, 0)
+    sem = np.nanstd(M, 0) / np.sqrt(np.sum(np.isfinite(M), 0).clip(1))
+    return t, mean, sem, int(np.sum(np.any(np.isfinite(M), axis=1)))
+
+
 def _outcome_times(session, event, outcome):
     et = np.asarray(get_event_times_by_trial(session, event), float)
     return [et[i] for i, tr in enumerate(session.trials)
@@ -228,6 +250,16 @@ def main():
             axp.set_ylabel("density", fontsize=13)
             axp.legend(frameon=False, fontsize=11)
         else:
+            # TF-UNRESPONSIVE reference (Change_ON / FA only — these are shown RAW, so it drops
+            # in cleanly). Absent from the sign-aligned PULSE panel by design: signing a
+            # non-responding cell by its own noise kernel would fabricate a response.
+            uref = _unresponsive_trace(k)
+            if uref is not None:
+                ut, umean, usem, un = uref
+                axp.plot(ut, umean, color="0.25", lw=2.0, ls="--", zorder=1,
+                         label=f"TF-unresponsive (n={un:,})")
+                axp.fill_between(ut, umean - usem, umean + usem, color="0.45", alpha=0.22,
+                                 lw=0, zorder=0)
             for c, col in (("transient", TCOL), ("sustained", SCOL)):
                 sub = M[cls[order] == c]
                 if not len(sub):
@@ -236,6 +268,8 @@ def main():
                 sem = np.nanstd(sub, 0) / np.sqrt(np.sum(np.isfinite(sub), 0).clip(1))
                 axp.plot(t, mean, color=col, lw=2.2, label=c)
                 axp.fill_between(t, mean - sem, mean + sem, color=col, alpha=0.2)
+            if uref is not None:
+                axp.legend(frameon=False, fontsize=9, loc="upper left")
             axp.axvline(0, color="0.6", lw=0.8); axp.axhline(0, color="0.85", lw=0.8)
             axp.set_title(TITLES[k] + "  — magnitude", fontsize=14, fontweight="bold")
             axp.set_xlim(t[0], t[-1])

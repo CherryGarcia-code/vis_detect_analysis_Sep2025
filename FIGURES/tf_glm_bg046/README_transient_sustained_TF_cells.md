@@ -537,10 +537,25 @@ carries the weight. Note also the reference band is wide (the unresponsive IQR s
 — **licking is represented all over striatum**. The claim is about the *median* cell, not that no
 unresponsive cell couples.
 
-**Where it appears:** the reference band is drawn on `width_continuum_summary/` (panel B) and on
-every coupling panel of `core_metrics_continuum/`. It is deliberately **not** drawn on the TF
-selectivity panel, where an unresponsive cell's value is near-zero *by definition* and a band
-would be circular decoration rather than information.
+**Where it appears.**
+- **As a band** (median + IQR of the coupling *scalar*): `width_continuum_summary/` panel B, and
+  every coupling panel of `core_metrics_continuum/`.
+- **As a PSTH trace** (the population mean *timecourse*, dashed grey ± SEM): the **Change_ON** and
+  **FA** panels of both `heatmap_transient_sustained/` and `heatmap_continuum/`. This is the same
+  finding shown as a timecourse, and it reads immediately: the narrowest width bin **starts on the
+  unresponsive trace** and the families **fan upward with width** (Change_ON peak: unresponsive
+  ≈ 0.13 → narrowest bin ≈ 0.15 → broadest ≈ 0.62 z; FA peak: ≈ 0.13 → ≈ 0.15 → ≈ 0.83 z).
+
+**Where it is deliberately ABSENT, and why** — three places, each for a reason:
+1. **The TF-selectivity panel** (`core_metrics_continuum`): an unresponsive cell's selectivity is
+   near-zero *by definition*. A band there is circular decoration, not information.
+2. **The width axis itself**: their kernel width is noise (see the warning above).
+3. **⭐ The fast-pulse PSTH panel** (both heatmaps): that panel is **sign-aligned by each cell's
+   GLM kernel** — and unresponsive cells have no cached kernel. Signing a *non-responding* cell by
+   its own noise-derived kernel sign is exactly the residual circularity §13a documents: it would
+   fabricate a small positive bump and make "no response" look like a response. It is also
+   tautological — these cells are *defined* by having no TF response. **If you ever want that
+   panel, it needs a GLM refit for the unresponsive cells and a split-half sign, not a shortcut.**
 
 ---
 
@@ -711,7 +726,8 @@ py scripts/tf_responsiveness/state_conditioned/state_x_class.py                #
 # --- Part II: the continuous width + coupling metrics (SLOW — refit/reload; run once) ---
 py scripts/tf_responsiveness/state_conditioned/recompute_kernel_width.py --workers 10   # §10, ~20-25 min
 py scripts/tf_responsiveness/state_conditioned/latency_outcome_coupling.py --force      # §1 coupling metrics (baseline-clamped), ~2 min
-py scripts/tf_responsiveness/state_conditioned/latency_outcome_coupling.py --unresponsive --workers 12  # §13d TF-unresponsive reference (11,078 cells, ~1 min)
+py scripts/tf_responsiveness/state_conditioned/latency_outcome_coupling.py --unresponsive --workers 12  # §13d TF-unresponsive coupling reference (11,078 cells, ~1 min)
+py scripts/tf_responsiveness/state_conditioned/rebuild_peth_traces_all.py --unresponsive --workers 12  # §13d TF-unresponsive Change/FA PSTH traces (~15 min)
 py scripts/tf_responsiveness/state_conditioned/rebuild_peth_traces_all.py --workers 16  # guarded traces, all 520 cells (~25 min)
 py scripts/tf_responsiveness/state_conditioned/recompute_pulse_fwhm_allpulses.py --workers 14  # §13a guarded model-free width (~4 min)
 

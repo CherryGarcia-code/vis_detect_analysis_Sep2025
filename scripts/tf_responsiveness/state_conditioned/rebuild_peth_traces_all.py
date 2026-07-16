@@ -38,6 +38,8 @@ from visdetect.analysis.tf_glm import assemble_design, pulse_times_from_tf    # 
 from visdetect.analysis.tf_glm_data import session_trial_regressors           # noqa: E402
 
 OUT_NPZ = Path(REPO) / "data/cache/tf_glm_bg046/peth_traces_all.npz"
+# TF-UNRESPONSIVE reference traces (Change_ON / FA only — see _process_session_events_only).
+OUT_UNRESP_NPZ = Path(REPO) / "data/cache/tf_glm_bg046/peth_traces_unresponsive.npz"
 NARROW, BROAD = 0.05, 0.15  # for the reference cls label only (grid kernel_fwhm)
 
 
@@ -80,6 +82,100 @@ def _responsive_all(subj):
     r = _registry(subj)
     r = r[r.resp & r.session_date.isin(good_dates(subj))]
     return r[["session", "unit", "kernel_fwhm"]]
+
+
+def _unresponsive_all(subj):
+    r = _registry(subj)
+    r = r[(~r.resp) & r.session_date.isin(good_dates(subj))]
+    return r[["session", "unit", "kernel_fwhm"]]
+
+
+def _process_session_events_only(task):
+    """Change_ON / FA traces for the TF-UNRESPONSIVE reference.
+
+    Deliberately does NOT compute the fast-pulse trace, for two reasons:
+      1. The pulse panel is SIGN-ALIGNED by each cell's GLM kernel, and unresponsive cells have
+         no cached kernel. Signing a non-responding cell by its own noise-derived kernel sign is
+         precisely the residual circularity the adversarial review flagged — it would fabricate a
+         small positive bump and make 'no response' look like a response.
+      2. It is near-tautological: these cells are DEFINED as having no TF response.
+    Change_ON / FA are shown RAW (no sign-alignment) in both heatmap figures, so the reference
+    drops in with no such trap — and those are the panels where the comparison is meaningful.
+
+    Skipping the pulse also lets us skip the design assembly + pulse detection entirely, so this
+    is fast (event counts are ~250/cell rather than ~15k).
+    """
+    subj, sess, recs = task
+    pkl = Path(REPO) / "data/pkls" / subj / f"{sess}.pkl"
+    if not pkl.exists():
+        return {"rows": [], "err": f"MISSING {pkl}"}
+    try:
+        s = load_session(str(pkl))
+        ev = {"change": _outcome_times(s, "Change_ON", "hit"),
+              "fa": _outcome_times(s, "FA", "fa")}
+        rows = []
+        for r in recs:
+            uid = int(r["unit"])
+            spk = np.sort(_spikes(s, uid))
+            if spk.size == 0:
+                continue
+            tr = {}
+            for k in ("change", "fa"):
+                win, base = ALIGN[k]
+                tr[k] = _ztrace(spk, ev[k], win, base)
+            rows.append({"subject": subj, "session": sess, "unit": uid,
+                         "cls": "unresponsive", "tr": tr})
+        del s; gc.collect()
+        return {"rows": rows, "err": None}
+    except Exception as e:
+        import traceback
+        return {"rows": [], "err": f"{type(e).__name__}: {e}\n{traceback.format_exc()}"}
+
+
+def main_unresponsive(n_workers=12):
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    tasks = []
+    for subj, _ in MICE:
+        r = _unresponsive_all(subj)
+        for sess, g in r.groupby("session"):
+            tasks.append((subj, sess, g[["unit", "kernel_fwhm"]].to_dict("records")))
+    n_workers = max(1, min(n_workers, len(tasks)))
+    print(f"START unresponsive Change/FA traces | {len(tasks)} sessions | "
+          f"{sum(len(t[2]) for t in tasks)} cells | {n_workers} workers", flush=True)
+    results = []
+    with ProcessPoolExecutor(max_workers=n_workers) as ex:
+        futs = {ex.submit(_process_session_events_only, t): t for t in tasks}
+        for i, fut in enumerate(as_completed(futs)):
+            res = fut.result(); results.append(res)
+            print(f"  [{i+1}/{len(tasks)}] "
+                  f"{'ERR ' + res['err'].splitlines()[0] if res['err'] else str(len(res['rows'])) + ' cells'}",
+                  flush=True)
+    all_rows = [row for res in results for row in res["rows"]]
+    tax = {k: None for k in ("change", "fa")}
+    for row in all_rows:
+        for k in ("change", "fa"):
+            _z, t = row["tr"][k]
+            if t is not None and tax[k] is None:
+                tax[k] = np.asarray(t, float)
+    out = {"meta_subject": np.array([r["subject"] for r in all_rows]),
+           "meta_session": np.array([r["session"] for r in all_rows]),
+           "meta_unit": np.array([r["unit"] for r in all_rows]),
+           "meta_cls": np.array([r["cls"] for r in all_rows])}
+    for k in ("change", "fa"):
+        L = len(tax[k]) if tax[k] is not None else 0
+        M = np.full((len(all_rows), L), np.nan)
+        for i, row in enumerate(all_rows):
+            z, _t = row["tr"][k]
+            if z is not None and len(z) == L:
+                M[i] = z
+        out[f"mat_{k}"] = M
+        out[f"t_{k}"] = tax[k] if tax[k] is not None else np.zeros(0)
+    OUT_UNRESP_NPZ.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(OUT_UNRESP_NPZ, **out)
+    errs = [r["err"] for r in results if r["err"]]
+    print(f"wrote {OUT_UNRESP_NPZ} | {len(all_rows)} unresponsive cells | {len(errs)} errors",
+          flush=True)
+    print("END OK", flush=True)
 
 
 def _process_session(task):
@@ -223,5 +319,12 @@ def main(n_workers=10):
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(); ap.add_argument("--workers", type=int, default=10)
-    main(n_workers=ap.parse_args().workers)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--workers", type=int, default=10)
+    ap.add_argument("--unresponsive", action="store_true",
+                    help="build the TF-unresponsive Change_ON/FA reference traces and exit")
+    _a = ap.parse_args()
+    if _a.unresponsive:
+        main_unresponsive(n_workers=_a.workers)
+    else:
+        main(n_workers=_a.workers)
