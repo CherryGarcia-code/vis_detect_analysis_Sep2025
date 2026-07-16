@@ -1,10 +1,22 @@
-"""Neuronal-activity view of the TF-cell / lick-responsiveness story: FA-lick-
-aligned population activity of TF-responsive cells, sorted by each cell's pre-lick
-ramp, with the canonical lick-responsive label marked. Shows WHY sustained cells
-are 89% lick-responsive — they carry the strong, consistent pre-lick motor ramp —
-while transient cells' ramp is weaker. Reuses the FA traces already cached by
-heatmap_transient_sustained (peth_traces.npz) + the lick_acquisition per-cell
-labels — no session reload.
+"""Neuronal-activity view of the TF-cell / lick-responsiveness story: FA-lick-aligned
+population activity of TF-responsive cells, ordered by the INDEPENDENT GLM kernel width, with
+the canonical lick-responsive label marked. Shows WHY sustained cells are more lick-responsive
+— they carry the strong, consistent pre-lick motor ramp — while transient cells' ramp is weaker.
+
+This is the CLASS (Part I) view; `fa_lick_continuum.py` is the continuum (Part II) re-render of
+the same data. Cache-only (the shared guarded FA traces + the lick_acquisition per-cell labels)
+— no session reload.
+
+Three bugs fixed (Jul 2026) — all three were silent:
+  1. ⚠️ CIRCULAR SORT. Rows were ordered by each cell's OWN pre-lick ramp — the very quantity
+     plotted beside them. Sorting a noisy per-cell readout by its own value manufactures a clean
+     top-to-bottom gradient even from pure noise (the same double-dipping removed from
+     heatmap_transient_sustained). Rows are now ordered by the GLM kernel WIDTH, which is
+     independent of the FA trace being displayed.
+  2. STALE CACHE. It read the legacy per-figure `peth_traces.npz` (pre-fix: 600-pulse cap,
+     Jul-2) instead of the shared, leakage-guarded `peth_traces_all.npz`.
+  3. STALE PATHS. FIG/LICK/OUT pointed at the old `vd_tf_bg046` repo — where the lick-label CSV
+     does not even exist — so this wrote figures where nobody looks, from inputs that were gone.
 """
 from __future__ import annotations
 import sys
@@ -22,9 +34,12 @@ _HERE = str(Path(__file__).resolve().parent)
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from transient_vs_sustained import TCOL, SCOL                                # noqa: E402
+from representative_cells import REPO                                        # noqa: E402
+from continuum_common import load_width_metrics, WIDTH                       # noqa: E402
 
-FIG = Path("E:/python_analysis/git_repos/vd_tf_bg046/FIGURES/tf_glm_bg046")
-NPZ = FIG / "heatmap_transient_sustained" / "peth_traces.npz"
+FIG = Path(str(REPO)) / "FIGURES/tf_glm_bg046"
+# the SHARED, leakage-guarded traces (not the legacy per-figure 600-cap peth_traces.npz)
+NPZ = Path(str(REPO)) / "data/cache/tf_glm_bg046/peth_traces_all.npz"
 LICK = FIG / "lick_acquisition" / "lick_acquisition_cells.csv"
 OUT = FIG / "fa_lick_activity"
 PRE = (-0.3, -0.15)     # canonical pre-lick window (== FA-lick responsiveness window)
@@ -41,11 +56,19 @@ def main():
     lmap = {(str(r.subject), str(r.session), int(r.unit)): bool(r.lick_sig) for r in lk.itertuples()}
     lick_sig = np.array([lmap.get((subj[i], sess[i], int(unit[i])), np.nan) for i in range(len(cls))])
 
+    # INDEPENDENT row order: the GLM kernel width, joined on (subject, session, unit).
+    # NOT the pre-lick ramp — that is the quantity plotted beside these rows, and sorting a
+    # noisy readout by its own value manufactures a gradient out of noise (double dipping).
+    wmap = {(str(r.subject), str(r.session), int(r.unit)): float(getattr(r, WIDTH))
+            for r in load_width_metrics().itertuples()}
+    width = np.array([wmap.get((subj[i], sess[i], int(unit[i])), np.nan) for i in range(len(cls))])
+
     pre = (t >= PRE[0]) & (t <= PRE[1])
     ramp = np.nanmean(M[:, pre], axis=1)
-    keep = np.isin(cls, ["transient", "sustained"]) & np.isfinite(ramp) & np.isfinite(M).any(1) & np.isfinite(lick_sig)
+    keep = (np.isin(cls, ["transient", "sustained"]) & np.isfinite(ramp)
+            & np.isfinite(M).any(1) & np.isfinite(lick_sig) & np.isfinite(width))
     idx = np.where(keep)[0]
-    idx = idx[np.argsort(ramp[idx])[::-1]]     # all cells sorted by pre-lick ramp, descending
+    idx = idx[np.argsort(width[idx])]          # ascending kernel WIDTH: narrow top -> broad bottom
     Msort = M[idx]
     cls_s = cls[idx]
     lick_s = lick_sig[idx].astype(bool)
@@ -110,7 +133,7 @@ def main():
     axc.imshow(strip, aspect="auto", cmap=ListedColormap([TCOL, SCOL]),
                extent=[0, 1, n, 0], interpolation="nearest")
     axc.set_xticks([]); axc.set_yticks([])
-    axc.set_ylabel("cells, sorted by pre-lick ramp  →", fontsize=12)
+    axc.set_ylabel("cells, ordered by GLM kernel WIDTH (narrow → broad)", fontsize=12)
 
     # ── heatmap (spans cols 1–2) ──────────────────────────────────────
     axh = fig.add_subplot(gs[1, 1:])
@@ -126,8 +149,9 @@ def main():
     cb.set_label("z-score", fontsize=11); cb.ax.tick_params(labelsize=9)
 
     fig.suptitle(f"FA-lick-aligned activity of TF-responsive cells (n={n}: {n_tr} transient, {n_su} sustained) — "
-                 "sustained cells cluster at the strong pre-lick-ramp end (the basis of their 89% lick-responsiveness)",
-                 fontsize=13, y=0.98)
+                 "rows ordered by the INDEPENDENT GLM kernel width (narrow→broad), not by the ramp they show\n"
+                 "sustained cells carry the larger pre-lick ramp — the basis of their higher lick-responsiveness",
+                 fontsize=12.5, y=0.99)
     for ext in ("png", "pdf"):
         fig.savefig(OUT / f"fa_lick_activity.{ext}", dpi=170, bbox_inches="tight")
     plt.close(fig)

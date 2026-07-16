@@ -289,10 +289,15 @@ implying classes) or **graded** (a straight line, implying a spectrum)? Tested w
 | segmented vs linear (all 3 outcomes) | ΔBIC = **−7.6 / −11.8 / −12.1** (negative) | **graded, not stepped** |
 
 > ⚠️ **This table used to include a `pulse_fwhm` row computed from the 600-pulse-capped PETH.**
-> That column was **noise** (ρ = +0.045 to the real width axis — i.e. it correlated with nothing),
-> so its modality verdict meant nothing. It is now replaced by the guarded all-pulse
-> `pulse_fwhm_all`. The verdict (spectrum) is unchanged either way, but the old row should not be
-> quoted.
+> That column was **noise** (ρ = +0.045 to the real width axis — i.e. it correlated with nothing,
+> and with its own all-pulse recomputation at only +0.048), so its modality verdict meant nothing.
+> It is replaced by the guarded all-pulse `pulse_fwhm_all`. The verdict (spectrum) is unchanged
+> either way, but the old row must not be quoted.
+> **The `pulse_fwhm` / `pulse_spread` columns have now been DELETED** from
+> `kernel_width_continuous.csv` and their `PULSE_CAP=600` computation removed from
+> `recompute_kernel_width.py` — a column named "pulse_fwhm" sitting in the shipped CSV was a live
+> footgun for the next script that grabbed it assuming it was the model-free width. The model-free
+> width lives in `pulse_fwhm_allpulses.csv` (`pulse_fwhm_all`) and nowhere else.
 
 **⭐ The key catch — the GMM was lying.** Its +242 is a **right-skew artifact**, not evidence of
 two classes:

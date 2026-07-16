@@ -4,10 +4,11 @@
 The registry only stored the 50 ms-grid `kernel_fwhm` (the raw kernel was never
 cached — verified). This refits the full BG GLM LOCALLY from Session pkls (the
 exact config the registry used), extracts the raw FIR kernel, and computes sub-bin
-continuous width (interpolated FWHM + temporal spread), plus a model-free
-fast-minus-slow pulse-PETH width as an independent cross-check. A validation gate
-asserts the recomputed grid-FWHM reproduces the registry value before the
-continuous width is trusted; the raw kernel vectors are saved (the missing cache).
+continuous width (interpolated FWHM + temporal spread). A validation gate asserts the
+recomputed grid-FWHM reproduces the registry value before the continuous width is
+trusted; the raw kernel vectors are saved (the missing cache).
+The model-free fast-minus-slow pulse width lives in `recompute_pulse_fwhm_allpulses.py`
+(all pulses + the canonical leakage guard) — NOT here; see the note by OUT_CSV.
 
 Parallelised across SESSIONS with a ProcessPool (BLAS pinned to 1 thread/worker):
 each per-cell 10-fold Poisson-GLM fit is heavy, so a serial run is ~3 h; session-
@@ -48,7 +49,7 @@ from tf_glm_bg_task import _cfg                                        # noqa: E
 from visdetect.core.session import load_session                       # noqa: E402
 from visdetect.analysis.tf_glm import (                               # noqa: E402
     assemble_design, fit_poisson_cv, make_trial_folds, _tf_kernel,
-    _lag_offsets, count_vector, pulse_times_from_tf, tf_pulse_peth,
+    _lag_offsets, count_vector,
 )
 from visdetect.analysis.tf_glm_data import session_trial_regressors   # noqa: E402
 from visdetect.analysis.kernel_width import (                         # noqa: E402
@@ -58,29 +59,24 @@ from visdetect.analysis.kernel_width import (                         # noqa: E4
 MICE = [("BG_046", "DMS"), ("BG_039", "DMS"), ("BG_031", "VMS")]
 OUT_CSV = Path(REPO) / "data/cache/tf_glm_bg046/kernel_width_continuous.csv"
 METRICS = Path(REPO) / "FIGURES/tf_glm_bg046/latency_outcome_coupling/latency_outcome_metrics.csv"
-PULSE_CAP = 600
 DEFAULT_WORKERS = 10
+
+# ⚠️ REMOVED (Jul 2026): the `pulse_fwhm` / `pulse_spread` columns and their PULSE_CAP=600
+# computation. That cap used ~600 of the ~41k pulses/session (~1.5%), leaving the model-free
+# width NOISE — it correlated with the GLM width at rho=+0.045 (p=0.31, i.e. with nothing) and
+# with its own all-pulse recomputation at only +0.048. Any statistic resting on it rested on
+# nothing, and a column named `pulse_fwhm` sitting in the shipped CSV was a live footgun for the
+# next script that grabbed it assuming it was the model-free width.
+# THE REPLACEMENT: `pulse_fwhm_all` in data/cache/tf_glm_bg046/pulse_fwhm_allpulses.csv —
+# ALL pulses AND the canonical TFRespPulseConfig leakage guard applied (rho=+0.218 vs the GLM
+# width). Built by `py recompute_pulse_fwhm_allpulses.py`; joined where needed (see
+# spectrum_vs_classes.py). Do not reintroduce a capped pulse width here.
 
 
 def _responsive(subj):
     r = _registry(subj)
     r = r[r.resp & r.session_date.isin(good_dates(subj))]
     return r[["session", "session_date", "unit", "n_spikes", "kernel_fwhm", "kernel_peak_t"]]
-
-
-def _pulse_width(y, d, cfg, fast, slow):
-    """Model-free width from the fast-minus-slow pulse PETH contrast (Hz)."""
-    ti, win, bs = d.trial_index, cfg.pulse_eval_win, cfg.bin_s
-    if fast.size > PULSE_CAP:
-        fast = np.sort(np.random.default_rng(0).choice(fast, PULSE_CAP, replace=False))
-    if slow.size > PULSE_CAP:  # subsample slow symmetrically so the contrast noise matches
-        slow = np.sort(np.random.default_rng(1).choice(slow, PULSE_CAP, replace=False))
-    tax, a_fast = tf_pulse_peth(y, d.bin_edges, fast, win, bs, trial_index=ti)
-    _, a_slow = tf_pulse_peth(y, d.bin_edges, slow, win, bs, trial_index=ti)
-    contrast = (a_fast - a_slow) / bs
-    contrast = contrast - np.median(contrast[:max(1, len(contrast) // 4)])  # de-mean on pre-pulse
-    tax = np.asarray(tax, float)
-    return interpolated_fwhm(contrast, tax), temporal_spread(contrast, tax)
 
 
 def _process_session(task):
@@ -101,8 +97,6 @@ def _process_session(task):
         d = assemble_design(trials, cfg)
         folds = make_trial_folds(d.trial_index, cfg.n_folds, cfg.seed)
         lags = _lag_offsets(cfg.kern["tf"], cfg.bin_s) * cfg.bin_s
-        fast, slow = pulse_times_from_tf(d, cfg)
-        fast, slow = np.asarray(fast, float), np.asarray(slow, float)
         rows, kvecs, n_skip = [], {}, 0
         for r in recs:
             uid = int(r["unit"])
@@ -117,14 +111,12 @@ def _process_session(task):
                     n_skip += 1
                     continue
                 kvecs[f"{sess}_u{uid}"] = np.asarray(K, float)  # session-scoped: cluster ids recur across sessions
-                pf, ps = _pulse_width(y, d, cfg, fast, slow)
                 rows.append(dict(
                     subject=subj, session=sess, unit=uid, n_spikes=int(r["n_spikes"]),
                     kernel_fwhm_registry=float(r["kernel_fwhm"]),
                     grid_fwhm=grid_fwhm(K, lags),
                     interp_fwhm=interpolated_fwhm(K, lags),
                     temporal_spread=temporal_spread(K, lags),
-                    pulse_fwhm=pf, pulse_spread=ps,
                     kernel_peak_t_recompute=peak_lag(K, lags),
                     kernel_peak_t_registry=float(r["kernel_peak_t"]),
                 ))
