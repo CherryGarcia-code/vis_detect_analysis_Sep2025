@@ -1,0 +1,7 @@
+[A tracked-collapse BG_046] 24 responsive cell-sessions -> 23 unique consensus units (mean 1.0 sess/unit); classes: {'transient': 14, 'sustained': 6, 'intermediate': 3}
+[change_on] RAW p=3.30e-07 | MIXED(session RE) p=1.81e-07 (β=+0.98Hz) | TRACKED p=7.79e-01 (t=0.3978042679837923/s=0.7482093663911868, n 14/6)
+[hit_ramp] RAW p=2.09e-07 | MIXED(session RE) p=1.54e-08 (β=+3.49Hz) | TRACKED p=6.22e-02 (t=1.5571051423324178/s=5.76953125, n 14/6)
+[fa_ramp] RAW p=4.42e-11 | MIXED(session RE) p=3.35e-13 (β=+3.88Hz) | TRACKED p=5.07e-02 (t=1.72078043665506/s=5.620954239583665, n 14/6)
+[C per-session Δ] change_on: median Δ(sus-tra)=+0.98Hz over 24 sessions, Wilcoxon p=3.90e-03
+[C per-session Δ] hit_ramp: median Δ(sus-tra)=+1.92Hz over 24 sessions, Wilcoxon p=5.68e-04
+[C per-session Δ] fa_ramp: median Δ(sus-tra)=+2.73Hz over 24 sessions, Wilcoxon p=5.13e-06

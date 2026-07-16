@@ -42,7 +42,7 @@ from representative_cells import REPO                       # noqa: E402
 from transient_vs_sustained import load_cells, MICE, OUTCOMES, TCOL, SCOL  # noqa: E402
 
 WF = {"FSI": "#d94801", "SPN": "#08519c"}   # narrow / broad
-OUT = Path("E:/python_analysis/git_repos/vd_tf_bg046/FIGURES/tf_glm_bg046/waveform_celltype_join")
+OUT = Path(str(REPO)) / "FIGURES/tf_glm_bg046/waveform_celltype_join"
 
 
 def _norm_date(s):

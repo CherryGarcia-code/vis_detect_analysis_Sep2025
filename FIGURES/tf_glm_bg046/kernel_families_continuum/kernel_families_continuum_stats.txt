@@ -1,0 +1,16 @@
+GLM TF kernel families by continuous width bin (sign-aligned, peak-normalised)
+n = 520 responsive cells with a cached kernel; 5 equal-count width bins
+
+  bin 0 width [0.026,0.070) s (median 0.061): kernel peak-normalised mean plotted
+  bin 1 width [0.070,0.090) s (median 0.078): kernel peak-normalised mean plotted
+  bin 2 width [0.090,0.127) s (median 0.106): kernel peak-normalised mean plotted
+  bin 3 width [0.127,0.191) s (median 0.155): kernel peak-normalised mean plotted
+  bin 4 width [0.191,0.691) s (median 0.239): kernel peak-normalised mean plotted
+
+CAVEAT: width bins are defined on interp_fwhm (a FWHM of these kernels), so the
+broadening is illustrative-by-construction; the informative content is the SHAPE
+of narrow vs broad and that the family morphs SMOOTHLY (a continuum, not 2 classes).
+
+Raw fast-pulse PSTHs do NOT show this separation (dense 50ms-pulse convolution +
+deconvolution) — see heatmap_continuum.py; the width difference lives in this kernel
+and in the change/lick COUPLING.

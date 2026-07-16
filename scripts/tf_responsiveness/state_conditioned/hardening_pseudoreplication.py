@@ -44,7 +44,7 @@ from representative_cells import REPO                                    # noqa:
 from transient_vs_sustained import load_cells, OUTCOMES, TCOL, SCOL, NARROW, BROAD  # noqa: E402
 from waveform_celltype_join import _norm_date                           # noqa: E402
 
-OUT = Path("E:/python_analysis/git_repos/vd_tf_bg046/FIGURES/tf_glm_bg046/hardening_pseudoreplication")
+OUT = Path(str(REPO)) / "FIGURES/tf_glm_bg046/hardening_pseudoreplication"
 MEMBERS = Path(f"{REPO}/data/cache/tracking_consensus/BG_046/consensus_members.csv")
 MIN_PER_CLASS = 2
 

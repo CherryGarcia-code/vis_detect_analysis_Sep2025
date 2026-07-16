@@ -1,0 +1,36 @@
+FA-lick continuum: pre-lick ramp vs continuous width + width-ordered FA
+heatmap + width-binned FA PSTH family
+(continuum re-render of fa_lick_activity.py; class comparison -> graded width)
+
+n cells = 520 (finite interp_fwhm; total npz cells = 520)
+  class composition: 315 transient, 106 intermediate, 99 sustained
+pre-lick ramp window = (-0.3, -0.15) s (mean z of mat_fa over this window, per cell)
+
+ramp ~ width Spearman: rho = +0.3397, p = 1.655e-15, n = 520
+  (POSITIVE = broad-width cells carry the larger pre-lick FA ramp)
+
+row ordering = CONTINUOUS interp_fwhm ASCENDING; NARROW at TOP, BROAD at BOTTOM
+width range = 0.0258 - 0.6914 s   median = 0.1056 s
+heatmap: RdBu_r, TwoSlopeNorm(vmin=-1.5, vcenter=0, vmax=3); FA is predominantly
+  excitatory (motor ramp) so NO sign-flip is applied (unlike the fast pulse).
+left strip + numeric width colorbar both run NARROW(top) -> BROAD(bottom).
+
+5 EQUAL-COUNT width bins (equal n, unequal width span; right-skewed):
+  edges (s) = [0.0258, 0.0704, 0.0902, 0.1266, 0.1909, 0.6914]
+    bin 0: [0.0258, 0.0704) s   n = 104   %lick-resp = 63.5%   mean pre-lick ramp = +0.0361 z
+    bin 1: [0.0704, 0.0902) s   n = 104   %lick-resp = 62.5%   mean pre-lick ramp = +0.0602 z
+    bin 2: [0.0902, 0.1266) s   n = 104   %lick-resp = 70.2%   mean pre-lick ramp = +0.0734 z
+    bin 3: [0.1266, 0.1909) s   n = 104   %lick-resp = 84.6%   mean pre-lick ramp = +0.0749 z
+    bin 4: [0.1909, 0.6914) s   n = 104   %lick-resp = 86.5%   mean pre-lick ramp = +0.1828 z
+
+% lick-responsive rises across width bins (labeled cells only): 63% -> 62% -> 70% -> 85% -> 87%
+per-bin mean pre-lick ramp (broad bins larger): +0.036 -> +0.060 -> +0.073 -> +0.075 -> +0.183
+per-bin PSTH mean over the pre-lick window (all positive = excitatory, no cancel): +0.036 -> +0.060 -> +0.073 -> +0.075 -> +0.183
+
+LICK LABEL COVERAGE:
+  lick_acquisition_cells.csv labels 520/520 of the responsive cells (0 greyed).
+  NOTE: the task brief expected the lick screen to cover the 414 transient/
+  sustained cells only (intermediates greyed). In the CURRENT cache the CSV is a
+  FULL screen and labels ALL 520 cells incl. the intermediates, so 0 are greyed.
+  Per-class %lick-responsive forms a clean continuum: transient 65% -> intermediate 83% -> sustained 89%.
+  The GREY-for-missing overlay path is retained as a robustness fallback.

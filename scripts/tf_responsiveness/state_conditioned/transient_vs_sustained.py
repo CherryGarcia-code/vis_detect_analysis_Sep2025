@@ -43,8 +43,8 @@ MICE = [("BG_046", "DMS", "#2c7fb8"), ("BG_039", "DMS", "#41ab5d"),
 NARROW = 0.05     # <= one 50 ms bin  → transient
 BROAD = 0.15      # >= 3 bins         → sustained
 TCOL, SCOL = "#e6550d", "#3182bd"   # transient / sustained
-OUT = Path("E:/python_analysis/git_repos/vd_tf_bg046/FIGURES/tf_glm_bg046/transient_vs_sustained")
-METRICS_CACHE = Path("E:/python_analysis/git_repos/vd_tf_bg046/FIGURES/tf_glm_bg046/"
+OUT = Path(str(REPO)) / "FIGURES/tf_glm_bg046/transient_vs_sustained"
+METRICS_CACHE = Path(str(REPO)) / ("FIGURES/tf_glm_bg046/"
                      "latency_outcome_coupling/latency_outcome_metrics.csv")
 OUTCOMES = [("change_on", "Change_ON resp"), ("hit_ramp", "Hit ramp"), ("fa_ramp", "FA ramp")]
 

@@ -1,0 +1,19 @@
+LEARNING axis on the CONTINUOUS kernel-width->coupling relationship
+(continuum re-render of learning_transient_sustained.py; interp_fwhm vs each outcome)
+
+cells with stage joined: 520/520  |  DMS=201 VMS=319
+stage cell counts: {'Expert': 317, 'Learning': 203}
+stage x region cell counts: {('Expert', 'DMS'): 136, ('Expert', 'VMS'): 181, ('Learning', 'DMS'): 65, ('Learning', 'VMS'): 138}
+
+ROW 1 (DRIFT-ROBUST) within-stage Spearman(interp_fwhm, outcome):
+  [change_on ] Learning: rho=+0.096 p=1.73e-01 (n=203)
+  [change_on ] Expert  : rho=+0.317 p=7.56e-09 (n=317)
+  [hit_ramp  ] Learning: rho=+0.165 p=1.88e-02 (n=203)
+  [hit_ramp  ] Expert  : rho=+0.357 p=5.97e-11 (n=317)
+  [fa_ramp   ] Learning: rho=+0.280 p=5.33e-05 (n=203)
+  [fa_ramp   ] Expert  : rho=+0.390 p=6.25e-13 (n=317)
+
+ROW 2 (CAVEATED, cross-session=drift-confounded) per-session slope vs d':
+  [change_on ] slope~d' rho=+0.255 p=9.45e-02 (n=44 sessions); partial|chrono=+0.231; slope~chrono rho=+0.168 p=2.76e-01; median slope=+0.271
+  [hit_ramp  ] slope~d' rho=+0.286 p=5.99e-02 (n=44 sessions); partial|chrono=+0.283; slope~chrono rho=+0.045 p=7.70e-01; median slope=+0.275
+  [fa_ramp   ] slope~d' rho=+0.065 p=6.73e-01 (n=44 sessions); partial|chrono=+0.069; slope~chrono rho=-0.013 p=9.34e-01; median slope=+0.400

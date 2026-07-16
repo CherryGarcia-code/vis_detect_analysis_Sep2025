@@ -1,0 +1,15 @@
+[change_on] continuous Spearman(fwhm) pooled ρ=+0.188 p=1.57e-05 | DMS +0.147 VMS +0.200
+[hit_ramp] continuous Spearman(fwhm) pooled ρ=+0.244 p=1.71e-08 | DMS +0.355 VMS +0.177
+[fa_ramp] continuous Spearman(fwhm) pooled ρ=+0.324 p=3.52e-14 | DMS +0.297 VMS +0.355
+   [change_on] split 'current (<=0.05 / >=0.15)': gap(sus-tra)=+0.95Hz nt=315 ns=99 MWU p=3.30e-07
+   [change_on] split 'median split (< 0.05 / >= 0.05)': gap(sus-tra)=+0.20Hz nt=255 ns=265 MWU p=3.77e-02
+   [change_on] split 'exclude floor (0<..<=0.05 / >=0.15)': gap(sus-tra)=+0.89Hz nt=127 ns=99 MWU p=2.51e-05
+   [change_on] split 'strict (==0 / >=0.20)': gap(sus-tra)=+2.27Hz nt=188 ns=49 MWU p=1.45e-08
+   [hit_ramp] split 'current (<=0.05 / >=0.15)': gap(sus-tra)=+3.08Hz nt=315 ns=99 MWU p=2.09e-07
+   [hit_ramp] split 'median split (< 0.05 / >= 0.05)': gap(sus-tra)=+1.51Hz nt=255 ns=265 MWU p=1.17e-04
+   [hit_ramp] split 'exclude floor (0<..<=0.05 / >=0.15)': gap(sus-tra)=+2.43Hz nt=127 ns=99 MWU p=1.43e-04
+   [hit_ramp] split 'strict (==0 / >=0.20)': gap(sus-tra)=+4.81Hz nt=188 ns=49 MWU p=1.73e-08
+   [fa_ramp] split 'current (<=0.05 / >=0.15)': gap(sus-tra)=+3.04Hz nt=315 ns=99 MWU p=4.42e-11
+   [fa_ramp] split 'median split (< 0.05 / >= 0.05)': gap(sus-tra)=+1.74Hz nt=255 ns=265 MWU p=1.73e-09
+   [fa_ramp] split 'exclude floor (0<..<=0.05 / >=0.15)': gap(sus-tra)=+2.45Hz nt=127 ns=99 MWU p=2.46e-06
+   [fa_ramp] split 'strict (==0 / >=0.20)': gap(sus-tra)=+4.95Hz nt=188 ns=49 MWU p=2.58e-11

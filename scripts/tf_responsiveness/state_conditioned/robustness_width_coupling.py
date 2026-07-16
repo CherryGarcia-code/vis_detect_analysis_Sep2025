@@ -23,11 +23,12 @@ _HERE = str(Path(__file__).resolve().parent)
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from transient_vs_sustained import load_cells, NARROW, BROAD                  # noqa: E402
+from representative_cells import REPO                                         # noqa: E402
 
 OUTCOMES = [("change_on", "Change_ON response"), ("hit_ramp", "Hit motor ramp"),
             ("fa_ramp", "FA motor ramp")]
 REGCOL = {"DMS": "#3474ae", "VMS": "#ef6548"}
-OUT = Path("E:/python_analysis/git_repos/vd_tf_bg046/FIGURES/tf_glm_bg046/robustness_width_coupling")
+OUT = Path(str(REPO)) / "FIGURES/tf_glm_bg046/robustness_width_coupling"
 
 
 def _clean(df, col):

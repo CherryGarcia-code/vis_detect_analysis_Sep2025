@@ -1,0 +1,9 @@
+n responsive (good sessions) = 520
+transient (fwhm<=0.05) = 315 (61%) | intermediate = 106 | sustained (fwhm>=0.15) = 99 (19%)
+peak_t vs fwhm: Spearman rho=+0.073 p=9.51e-02 (are 'early' and 'transient' the same axis?)
+[c1_r_log2] transient med=0.257 vs sustained med=0.315  MWU p=7.60e-10
+[base_hz] transient med=12.8 vs sustained med=14.9  MWU p=5.21e-03
+[region x class] chi2=3.8 p=5.18e-02  (DMS/VMS enrichment)
+[change_on] transient med=0.489 vs sustained med=1.44  MWU p=3.30e-07
+[hit_ramp] transient med=1.18 vs sustained med=4.26  MWU p=2.09e-07
+[fa_ramp] transient med=0.81 vs sustained med=3.85  MWU p=4.42e-11
