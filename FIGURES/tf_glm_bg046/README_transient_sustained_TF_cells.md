@@ -8,7 +8,10 @@ form **one continuous, lognormal spectrum — not two classes**. **Where a cell 
 predicts, in a graded way, how strongly it also carries the change-detection and the lick
 signals** — and those are **two separable things**: the sensory change response (ρ = +0.24) and
 the *impulsive* early lick (ρ = +0.35), which happens with **no change stimulus on screen** and
-survives partialling out the sensory response (partial ρ = +0.275). This survives firing-rate,
+survives partialling out the sensory response (partial ρ = +0.275). Benchmarked against the
+**11,078 TF-unresponsive cells** (§13d), the claim sharpens: **only the sustained end is
+behaviourally engaged — the transient end is indistinguishable from a cell with no TF response
+at all**, i.e. a literal sensory relay. This survives firing-rate,
 cell-type, region and pseudoreplication controls, goes **flat under a width-label permutation**,
 is **not** an artifact of change/lick signal leaking into the kernel (proven by refitting the
 GLM without those regressors), and does **not** depend on behavioural engagement state.
@@ -32,6 +35,7 @@ GLM without those regressors), and does **not** depend on behavioural engagement
 | ⭐ **Corrections** | §13a | **Read before quoting any pre-July number.** The bugs found in the raw-pulse panel, what survived, what didn't. |
 | ⭐ **Verification** | §13b | The GLM leakage test + the permutation null that close the loop. |
 | ⭐ **The figure to show** | §13c | `width_continuum_summary/` — the clean, denoised summary. |
+| ⭐ **The reference** | §13d | The 11,078 **TF-unresponsive** cells as a baseline — and how they sharpen the claim. |
 | Reference | §§16–19 | Plain-language glossary · follow-up questions · how to reproduce · talk wording. |
 
 **Data.** Chronic Neuropixels 2.0, visual TF change-detection task.
@@ -491,6 +495,55 @@ to **average** or **scatter**, not to re-sort.
 
 ---
 
+## 13d. ⭐ The TF-**unresponsive** reference — and how it sharpens the whole claim
+
+**Why a reference.** The 520 analysed cells are only **4.5 %** of the 11,598 recorded — a heavily
+selected subset. The obvious question is therefore: *how much of the width→coupling story is just
+"TF-responsive cells are engaged cells"?* To answer it we computed the same coupling metrics for
+the **11,078 TF-UNRESPONSIVE cells**, using the **identical windows, baseline clamp and code**
+(`latency_outcome_coupling.py --unresponsive`; only the cell selection differs, `~resp` vs `resp`).
+That identity is the point — it is only a fair baseline if it is measured the same way.
+
+> ⚠️ **They are a baseline on the COUPLING axes only — never a point on the width axis.** An
+> unresponsive cell's TF kernel is noise, so its "width" is a noise statistic, not a response
+> duration. In the figures they appear as a **horizontal band** (median + IQR), which is exactly
+> what they can honestly be.
+
+**The result — the narrow end is at baseline, and it is consistent across every metric.**
+
+| metric | narrowest decile | **TF-unresponsive** (n=11,078) | verdict | broadest decile | verdict |
+|---|---|---|---|---|---|
+| Change_ON response | +0.14 | **+0.11** | **ns** (p = 0.36) | **+2.14** | p = 2.4×10⁻¹⁵ |
+| Hit pre-lick | +0.64 | **+0.38** | **ns** (p = 0.61) | **+4.50** | p = 4.0×10⁻¹⁵ |
+| FA motor ramp | +0.25 | **+0.38** | **ns** (p = 0.29) | **+4.80** | p = 5.2×10⁻¹⁶ |
+| baseline rate (Hz) | 11.4 | **9.0** | **ns** (p = 0.29) | 13.7 | p = 4.0×10⁻⁴ |
+
+**⭐ This reframes the headline.** The story is *not* "TF-responsive cells carry the behavioural
+signals, more so if sustained". It is:
+
+> **Only the sustained end carries them. The transient end is behaviourally indistinguishable
+> from a cell with no TF response at all** — it responds to the stimulus and to nothing else.
+
+That is a much sharper claim, and a much better fit to the "pure sensory relay" description: a
+narrow-kernel TF cell is *literally* as uninvolved in the change-detection and the lick as a
+random non-TF neuron. What the width axis tracks is not "how TF-ish" a cell is but **how far it
+has moved from sensory relay toward behavioural engagement**.
+
+**How to state it honestly.** "Indistinguishable" is a **null** (n ≈ 52 narrow-decile cells vs
+11,078): it means we **cannot detect** any coupling above baseline at the narrow end, not that it
+is provably zero. The *positive* half — the broad end sits far above baseline (p ≈ 10⁻¹⁵) — is what
+carries the weight. Note also the reference band is wide (the unresponsive IQR spans roughly
+−0.3 to +1.7 Hz on FA ramp): plenty of individual non-TF cells are lick-coupled, which is expected
+— **licking is represented all over striatum**. The claim is about the *median* cell, not that no
+unresponsive cell couples.
+
+**Where it appears:** the reference band is drawn on `width_continuum_summary/` (panel B) and on
+every coupling panel of `core_metrics_continuum/`. It is deliberately **not** drawn on the TF
+selectivity panel, where an unresponsive cell's value is near-zero *by definition* and a band
+would be circular decoration rather than information.
+
+---
+
 ## 14. `width_logscale_distribution/` + `width_logscale_fit_diagnostics/` — the width is **LOGNORMAL**
 
 **Background.** The width distribution has a long right tail (a few cells with very long
@@ -658,6 +711,7 @@ py scripts/tf_responsiveness/state_conditioned/state_x_class.py                #
 # --- Part II: the continuous width + coupling metrics (SLOW — refit/reload; run once) ---
 py scripts/tf_responsiveness/state_conditioned/recompute_kernel_width.py --workers 10   # §10, ~20-25 min
 py scripts/tf_responsiveness/state_conditioned/latency_outcome_coupling.py --force      # §1 coupling metrics (baseline-clamped), ~2 min
+py scripts/tf_responsiveness/state_conditioned/latency_outcome_coupling.py --unresponsive --workers 12  # §13d TF-unresponsive reference (11,078 cells, ~1 min)
 py scripts/tf_responsiveness/state_conditioned/rebuild_peth_traces_all.py --workers 16  # guarded traces, all 520 cells (~25 min)
 py scripts/tf_responsiveness/state_conditioned/recompute_pulse_fwhm_allpulses.py --workers 14  # §13a guarded model-free width (~4 min)
 
@@ -713,6 +767,15 @@ next to it with the exact numbers quoted above.
 > shuffle the width labels**, and it's **not** an artifact of movement or change signals leaking
 > into the measurement — we refit the model with those regressors removed and the axis doesn't
 > move. We did **not** find that it depends on the animal's behavioural engagement state."
+
+**The sharpest version (use the TF-unresponsive reference):**
+> "We can benchmark this against the ~11,000 cells that show **no TF response at all**, measured
+> exactly the same way. The broad, sustained cells sit far above that baseline on the change
+> response and on the impulsive lick. But the narrow, transient cells are **statistically
+> indistinguishable from a non-TF cell** — they carry the stimulus and nothing else. So it isn't
+> that TF cells are engaged and sustained ones more so; it's that **only the sustained end is
+> engaged at all**. The width axis is really tracking how far a cell has moved from being a pure
+> sensory relay toward being part of the behaviour."
 
 **If someone asks "how do you know the width is real and not a model artifact?"**
 > "Two ways. First, a model-free check: the raw pulse-triggered response, with the stimulus-

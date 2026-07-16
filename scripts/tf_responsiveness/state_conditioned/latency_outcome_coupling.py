@@ -80,6 +80,9 @@ METRICS = [("change_on", "Change_ON response\n(0–0.25 s, hit)"),
            ("fa_ramp", "FA motor ramp\n(−0.3..−0.15 s, early lick)")]
 OUT = Path(str(REPO)) / "FIGURES/tf_glm_bg046/latency_outcome_coupling"
 CACHE = OUT / "latency_outcome_metrics.csv"
+# TF-UNRESPONSIVE reference baseline (same windows/clamp, `~resp` cells) — see
+# compute_unresponsive(). Built by `py latency_outcome_coupling.py --unresponsive`.
+UNRESP_CACHE = OUT / "latency_outcome_metrics_unresponsive.csv"
 
 
 def _win_rate(spk, times, win):
@@ -151,6 +154,67 @@ def session_metrics(subj, region, sess, reg_rows):
     return rows
 
 
+def compute_unresponsive(force=False, workers=10):
+    """Coupling metrics for the TF-UNRESPONSIVE cells — the reference baseline.
+
+    Uses the IDENTICAL windows, baseline clamp and `session_metrics` code as the responsive
+    cells; only the cell selection differs (`~resp` instead of `resp`). That identity is the
+    whole point: it is only a fair baseline if it is measured the same way.
+
+    Why a reference at all: the 520 analysed cells are just **4.5 %** of the 11,598 recorded —
+    a heavily selected subset. Plotting where the other 11,078 sit on the coupling axes answers
+    the obvious question "is the transient/narrow end already at the no-TF-response level, or
+    still clearly engaged?".
+
+    ⚠️ These cells are NOT placed on the width axis: an unresponsive cell's TF kernel is noise,
+    so its 'width' is a noise statistic, not a response duration. They are a baseline on the
+    COUPLING axes only.
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    if UNRESP_CACHE.exists() and not force:
+        return pd.read_csv(UNRESP_CACHE)
+    tasks = []
+    for subj, region, _ in MICE:
+        reg = _registry(subj)
+        reg = reg[(~reg.resp) & reg.session_date.isin(good_dates(subj))]
+        for sess, g in reg.groupby("session"):
+            pkl = Path(f"{REPO}/data/pkls/{subj}/{sess}.pkl")
+            if pkl.exists():
+                tasks.append((subj, region, str(sess), g))
+    print(f"START unresponsive reference | {len(tasks)} sessions | "
+          f"{sum(len(t[3]) for t in tasks)} cells | {workers} workers", flush=True)
+    all_rows = []
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(session_metrics, *t): t for t in tasks}
+        for i, fut in enumerate(as_completed(futs)):
+            rr = fut.result()
+            all_rows += rr
+            print(f"  [{i+1}/{len(tasks)}] +{len(rr)} cells", flush=True)
+    df = pd.DataFrame(all_rows)
+    UNRESP_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(UNRESP_CACHE, index=False)
+    print(f"wrote {UNRESP_CACHE}  (n={len(df)} unresponsive cells)", flush=True)
+    return df
+
+
+def load_unresponsive_reference():
+    """Median + IQR of each coupling metric across TF-unresponsive cells, for the reference
+    band drawn on the width→coupling figures. Returns {} if the cache has not been built
+    (run `latency_outcome_coupling.py --unresponsive`)."""
+    if not UNRESP_CACHE.exists():
+        return {}
+    d = pd.read_csv(UNRESP_CACHE)
+    out = {"n": len(d)}
+    for c in ("change_on", "hit_ramp", "fa_ramp", "base_hz"):
+        if c not in d.columns:
+            continue
+        v = d[c].replace([np.inf, -np.inf], np.nan).dropna().values
+        if v.size:
+            out[c] = {"median": float(np.median(v)), "q25": float(np.percentile(v, 25)),
+                      "q75": float(np.percentile(v, 75)), "n": int(v.size)}
+    return out
+
+
 def compute_or_load(force=False):
     if CACHE.exists() and not force:
         return pd.read_csv(CACHE)
@@ -214,7 +278,13 @@ def _clean(df, col):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--unresponsive", action="store_true",
+                    help="build the TF-unresponsive coupling reference cache and exit")
+    ap.add_argument("--workers", type=int, default=10)
     a = ap.parse_args()
+    if a.unresponsive:
+        compute_unresponsive(force=a.force, workers=a.workers)
+        return
     df = compute_or_load(force=a.force)
     OUT.mkdir(parents=True, exist_ok=True)
     try:

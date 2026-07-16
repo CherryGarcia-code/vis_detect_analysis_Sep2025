@@ -36,6 +36,7 @@ from scipy.stats import spearmanr
 _HERE = str(Path(__file__).resolve().parent)
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
+from latency_outcome_coupling import load_unresponsive_reference  # noqa: E402
 from continuum_common import (  # noqa: E402
     load_width_metrics, binned_trend, WIDTH, OUTCOMES, REPO, _cmap,
 )
@@ -87,9 +88,24 @@ def main():
     gs = gridspec.GridSpec(2, 3, hspace=0.42, wspace=0.32)
     positions = [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1)]
 
+    # TF-UNRESPONSIVE reference: where the ~11k cells with NO TF response sit on the same
+    # metric (identical windows/clamp). Drawn as a horizontal band — an unresponsive cell's
+    # kernel width is noise, so it has no position on the x-axis. Only for metrics that are
+    # defined for them (coupling + rate); `c1_r_log2` is a TF-selectivity index, for which an
+    # unresponsive cell's value is definitionally near-zero, so a band there is uninformative.
+    ref = load_unresponsive_reference()
+
     for (col, ylab, color), (r, c) in zip(METRICS, positions):
         ax = fig.add_subplot(gs[r, c])
+        rr = ref.get(col) if col != "c1_r_log2" else None
+        if rr:
+            ax.axhspan(rr["q25"], rr["q75"], color="0.55", alpha=0.16, zorder=0,
+                       label=f"TF-unresponsive IQR (n={rr['n']:,})")
+            ax.axhline(rr["median"], color="0.35", lw=1.4, ls="--", zorder=1,
+                       label=f"TF-unresponsive median")
         res = binned_trend(ax, w, d[col].to_numpy(float), color=color)
+        if rr:
+            ax.legend(frameon=False, fontsize=7, loc="lower right")
         ax.set_xlabel(XLABEL)
         ax.set_ylabel(ylab)
         ax.set_title(ylab, fontsize=10.5)
@@ -97,6 +113,23 @@ def main():
         # ΔBIC annotation (below the Spearman that binned_trend already draws)
         ax.text(0.03, 0.80, f"ΔBIC={seg['delta_bic']:+.1f}", transform=ax.transAxes,
                 va="top", ha="left", fontsize=8, color="0.35")
+        if rr:
+            # narrowest vs broadest decile against the unresponsive baseline — the question the
+            # reference exists to answer: is the transient end already at "no TF response"?
+            from scipy.stats import mannwhitneyu
+            uref = pd.read_csv(Path(REPO) / "FIGURES/tf_glm_bg046/latency_outcome_coupling/"
+                               "latency_outcome_metrics_unresponsive.csv")
+            uv = uref[col].replace([np.inf, -np.inf], np.nan).dropna().values
+            q = np.nanpercentile(w, [10, 90])
+            for lab, sel in (("narrow d1", w <= q[0]), ("broad d10", w >= q[1])):
+                v = d.loc[sel, col].replace([np.inf, -np.inf], np.nan).dropna().values
+                if v.size and uv.size:
+                    pu = mannwhitneyu(v, uv).pvalue
+                    verdict = ("INDISTINGUISHABLE from unresponsive" if pu >= 0.05
+                               else ("ABOVE unresponsive" if np.median(v) > rr["median"]
+                                     else "BELOW unresponsive"))
+                    lines.append(f"    [{col}] {lab}: median={np.median(v):+.3f} vs "
+                                 f"unresp median={rr['median']:+.3f} | MWU p={pu:.2e} -> {verdict}")
         tag = " [OUTCOME]" if col in OUTCOME_COLS else ""
         lines.append(
             f"[{col:10s}] Spearman rho={res['rho']:+.3f} p={res['p']:.2e}"

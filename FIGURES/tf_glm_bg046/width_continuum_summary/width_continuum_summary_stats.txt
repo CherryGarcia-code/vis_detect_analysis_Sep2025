@@ -10,3 +10,8 @@ WIDTH-BINNED MEAN KERNEL (ridgeline) — PEAK-ALIGNED bin average, unit-peak sca
 
 width vs fa_ramp: Spearman rho=+0.348 p=2.73e-16 n=520
 width distribution: n=520 median=0.106s range 0.026-0.691s
+
+TF-UNRESPONSIVE REFERENCE (same windows/clamp; ~4.5% of cells are responsive)
+  unresponsive fa_ramp: median=+0.383 IQR[-0.280,+1.664] n=11078
+  narrowest bin  median=+0.475 (n=87) vs unresponsive: MWU p=5.88e-01  -> INDISTINGUISHABLE from the unresponsive baseline
+  broadest bin   median=+4.388 (n=87) vs unresponsive: MWU p=3.23e-22  -> significantly ABOVE baseline

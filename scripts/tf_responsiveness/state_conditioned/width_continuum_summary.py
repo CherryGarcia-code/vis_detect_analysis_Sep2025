@@ -33,6 +33,7 @@ _HERE = str(Path(__file__).resolve().parent)
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from continuum_common import load_width_metrics, binned_trend, _cmap, REPO, WIDTH  # noqa: E402
+from latency_outcome_coupling import load_unresponsive_reference                   # noqa: E402
 from visdetect.analysis.kernel_width import interpolated_fwhm                      # noqa: E402
 
 OUT = Path(REPO) / "FIGURES/tf_glm_bg046/width_continuum_summary"
@@ -149,6 +150,20 @@ def main():
         axM.spines[sp].set_visible(False)
     axM.set_title("B  every cell = one point on the continuous width axis (spectrum, no gap);\n"
                   "broad-kernel cells couple more to the impulsive lick", fontsize=11)
+    # ── TF-UNRESPONSIVE reference band ─────────────────────────────────────────
+    # The 520 analysed cells are only 4.5% of the 11,598 recorded. This band is where the
+    # other ~11k (TF-UNRESPONSIVE) cells sit on the SAME coupling metric, measured with the
+    # identical windows/clamp — i.e. what "no TF response" looks like. It is a horizontal
+    # band, not a scatter: an unresponsive cell's kernel width is noise, so it has no
+    # position on the x-axis.
+    ref = load_unresponsive_reference()
+    r = ref.get(col)
+    if r:
+        axS.axhspan(r["q25"], r["q75"], color="0.55", alpha=0.18, zorder=0,
+                    label=f"TF-unresponsive IQR (n={r['n']:,})")
+        axS.axhline(r["median"], color="0.35", lw=1.5, ls="--", zorder=2,
+                    label=f"TF-unresponsive median ({r['median']:+.2f} Hz)")
+
     # main scatter coloured by width + decile trend
     axS.scatter(sub[WIDTH], sub[col], c=sub[WIDTH], cmap="viridis", s=16, alpha=0.7,
                 edgecolors="none", zorder=1)
@@ -157,7 +172,19 @@ def main():
     axS.axhline(0, color="0.6", lw=0.8, ls=":")
     axS.set_xlabel("kernel FWHM (s)  — transient ↔ sustained")
     axS.set_ylabel(clab)
-    axS.legend(frameon=False, fontsize=8, loc="upper left")
+    # Y-CLIP (disclosed): a handful of extreme cells stretch the axis to ~[-20,+30] and squash
+    # the 0-8 Hz band where the trend and the unresponsive baseline actually live. Clip to the
+    # 1-99th percentile of the responsive cells and SAY how many points fall outside — never
+    # silently. The statistic (Spearman, rank-based) uses every point regardless.
+    ylo, yhi = np.percentile(sub[col], [1, 99])
+    pad = 0.12 * (yhi - ylo)
+    n_out = int(np.sum((sub[col] < ylo - pad) | (sub[col] > yhi + pad)))
+    axS.set_ylim(ylo - pad, yhi + pad)
+    if n_out:
+        axS.text(0.985, 0.015, f"{n_out}/{len(sub)} cells outside axis range\n"
+                               f"(stats use all points)",
+                 transform=axS.transAxes, ha="right", va="bottom", fontsize=7, color="0.35")
+    axS.legend(frameon=False, fontsize=7.6, loc="upper right")
     # align marginal x to scatter x
     axM.set_xlim(axS.get_xlim())
 
@@ -165,6 +192,28 @@ def main():
     lines += ["", f"width vs {col}: Spearman rho={rho:+.3f} p={p:.2e} n={len(sub)}",
               f"width distribution: n={len(width)} median={np.median(width):.3f}s "
               f"range {width.min():.3f}-{width.max():.3f}s"]
+
+    # ── is the NARROW end already at the TF-unresponsive baseline? ──────────────
+    if r:
+        from scipy.stats import mannwhitneyu
+        unresp = pd.read_csv(Path(REPO) / "FIGURES/tf_glm_bg046/latency_outcome_coupling/"
+                             "latency_outcome_metrics_unresponsive.csv")
+        uv = unresp[col].replace([np.inf, -np.inf], np.nan).dropna().values
+        lines += ["", "TF-UNRESPONSIVE REFERENCE (same windows/clamp; ~4.5% of cells are responsive)",
+                  f"  unresponsive {col}: median={r['median']:+.3f} IQR[{r['q25']:+.3f},{r['q75']:+.3f}] n={r['n']}"]
+        # narrowest vs broadest responsive bin, each vs the unresponsive baseline
+        for lab, sel in (("narrowest bin", binid == 0), ("broadest bin", binid == N_BINS - 1)):
+            v = d.loc[sel, col].replace([np.inf, -np.inf], np.nan).dropna().values
+            if v.size:
+                u, pu = mannwhitneyu(v, uv)
+                # verdict must respect significance, not just which median is larger
+                if pu >= 0.05:
+                    verdict = "-> INDISTINGUISHABLE from the unresponsive baseline"
+                else:
+                    verdict = ("-> significantly ABOVE baseline" if np.median(v) > r["median"]
+                               else "-> significantly BELOW baseline")
+                lines.append(f"  {lab:14s} median={np.median(v):+.3f} (n={v.size}) "
+                             f"vs unresponsive: MWU p={pu:.2e}  {verdict}")
 
     fig.suptitle("The transient→sustained TF-kernel width axis (denoised summary; replaces the "
                  "noisy per-cell PETH heatmap)", fontsize=13, y=1.02)
