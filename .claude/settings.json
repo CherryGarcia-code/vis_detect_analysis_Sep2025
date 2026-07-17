@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"E:/python_analysis/git_repos/vis_detect_analysis_Sep2025/.claude/hooks/guard_recursive_delete.ps1\"",
+            "timeout": 30,
+            "statusMessage": "Scanning delete target for junctions..."
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(py -m pytest:*)",
+      "Bash(PYTHONPATH=src py -m pytest:*)",
+      "Bash(PYTHONPATH=src py scripts/:*)",
+      "Bash(py -c:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git show:*)"
+    ]
+  },
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "claude-opus-4-8[1m]"
+  }
+}

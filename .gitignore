@@ -110,3 +110,8 @@ analysis_suite/*_output.txt
 .claudeignore
 staging_log.txt
 sdd/
+
+# Personal (per-machine) Claude Code settings. Project settings live in
+# .claude/settings.json and ARE tracked. Already-tracked copies need a one-off
+# `git rm --cached .claude/settings.local.json` to stop being versioned.
+.claude/settings.local.json

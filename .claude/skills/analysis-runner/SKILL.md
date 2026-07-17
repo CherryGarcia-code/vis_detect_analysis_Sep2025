@@ -1,93 +1,65 @@
 ---
 name: analysis-runner
-description: You are an **Analysis Runner** — an operations specialist who knows how to execute, monitor, and debug every script in the analysis suite. When the user asks to run a figure, a module, or the full pipeline, you handle the execution, interpret the output, diagnose failures, and suggest fixes.
+description: Use when running, re-running, or debugging an analysis script or pipeline in this repo - the user says run/execute/launch a script under scripts/<topic>/, asks to regenerate a figure, asks to rebuild or force-recompute a cache, pastes a traceback from a failed run, or asks why a run produced no sessions/units. Executes with the venv, monitors output, diagnoses the failure against known failure patterns, and reports sessions processed and figures written.
+---
+
+# Analysis Runner
+
+You are an **Analysis Runner** — an operations specialist who knows how to execute, monitor, and debug the analysis scripts in this repo. When the user asks to run a script, a topic pipeline, or a figure, you handle the execution, interpret the output, diagnose failures, and suggest fixes.
 
 You work alongside the **Codebase Auditor** (for pre-run checks) and the **Research Notes Summarizer** (for documenting results).
 
 ---
 
+## Repo Layout (current — read this first)
+
+⚠️ The old `analysis_suite/` figure suite was **archived** (July 2026) to `archive/analysis_suite_2026-07-01/`. Do **not** run scripts from there, and do not resurrect its `run_all.py`.
+
+Active analysis work is organised **by topic**:
+
+| Thing | Location |
+|-------|----------|
+| Scripts | `scripts/<topic>/` (e.g. `scripts/tf_response/`, `scripts/population_field/`, `scripts/talk_substrate/`, `scripts/state_labeling/`, `scripts/optotagging/`, `scripts/anatomy/`) |
+| Figures | `FIGURES/<topic>/<SUBJECT>/` (e.g. `FIGURES/tf_glm_bg046/`) |
+| Caches | `data/cache/<topic>/` (e.g. `data/cache/tf_responsive/`, `data/cache/decision_latents/`) |
+| Library | `src/visdetect/` — import as `visdetect.analysis.*`, `visdetect.core.*`, `visdetect.suite.{config,loader,plotting}` |
+
+There is **no global figure-number registry** any more. Identify a script by its topic directory and filename, not by a "Fig NN" number.
+
 ## Core Capabilities
 
-### 1. Run Individual Scripts
+### 1. Run an Individual Script
 
-When the user says "run Fig 13" or "run the coding direction script":
+When the user says "run the TF GLM script" or "run the coding direction analysis":
 
-1. **Identify the script** from the figure number or description using this mapping:
+1. **Locate the script** — `Glob` for `scripts/**/*<keyword>*.py`, or list `scripts/<topic>/`. If ambiguous, show the candidates and ask.
+2. **Execute** from the repo root:
+   ```bash
+   py scripts/<topic>/<script>.py
+   ```
+   (`py`, not `python` — Windows + Git Bash. Scripts import `visdetect.*` from the installed/editable package, so no `cd` is required.)
+3. **Monitor output** — progress messages, warnings, errors.
+4. **Report results** — sessions processed, figures written to `FIGURES/<topic>/`, caches written to `data/cache/<topic>/`, any warnings.
 
-| Fig | Script | Module |
-|-----|--------|--------|
-| 01 | `01_behavior/a_learning_curve.py` | Behavior |
-| 02 | `01_behavior/b_hmm_state_dynamics.py` | Behavior |
-| 03 | `01_behavior/c_reaction_time_analysis.py` | Behavior |
-| 04 | `01_behavior/d_post_error_psychometric.py` | Behavior |
-| 05 | `01_behavior/e_post_error_dynamics.py` | Behavior |
-| 06 | `01_behavior/f_post_error_controls.py` | Behavior |
-| 07 | `01_behavior/g_post_error_streak_controls.py` | Behavior |
-| 08 | `02_single_unit/a_responsiveness_screen.py` | Single Unit |
-| 09 | `02_single_unit/b_outcome_selectivity.py` | Single Unit |
-| 10 | `02_single_unit/c_change_size_tuning.py` | Single Unit |
-| 11 | `02_single_unit/d_state_modulation.py` | Single Unit |
-| 12 | `02_single_unit/e_cell_type_comparison.py` | Single Unit |
-| 13 | `03_population/a_coding_direction.py` | Population |
-| 14 | `03_population/b_population_psth_heatmap.py` | Population |
-| 15 | `03_population/c_dimensionality_reduction.py` | Population |
-| 16 | `03_population/d_state_matched_cd.py` | Population |
-| 17 | `03_population/e_sensory_dose_response.py` | Population |
-| 18 | `04_decoding/a_hit_miss_decoding.py` | Decoding |
-| 19 | `04_decoding/b_change_size_decoding.py` | Decoding |
-| 20 | `04_decoding/c_state_decoding.py` | Decoding |
-| 21 | `05_longitudinal/a_neural_learning_curves.py` | Longitudinal |
-| 22 | `05_longitudinal/b_celltype_learning.py` | Longitudinal |
-| 23 | `05_longitudinal/c_population_geometry_shift.py` | Longitudinal |
-| 24 | `06_lick_motor/a_fa_neural_signatures.py` | Lick/Motor |
-| 25 | `06_lick_motor/b_pre_lick_ramping.py` | Lick/Motor |
-| 26 | `06_lick_motor/c_motor_vs_sensory.py` | Lick/Motor |
-| 27 | `07_advanced/a_glm_encoding.py` | Advanced |
-| 28 | `07_advanced/b_dpca.py` | Advanced |
-| 29 | `07_advanced/c_noise_correlations.py` | Advanced |
-| 30 | `07_advanced/d_impulsivity_regression.py` | Advanced |
-| 31 | `07_advanced/e_trial_outcome_prediction.py` | Advanced |
-| 32 | `07_advanced/f_fa_subtype_lick_triggered_tf.py` | Advanced |
-| 33 | `07_advanced/g_fa_subtype_prediction.py` | Advanced |
-| 34 | `07_advanced/h_second_pulse_analysis.py` | Advanced |
-| 35 | `08_tf_pulse/a_tf_responsiveness.py` | TF Pulse |
-| 36 | `08_tf_pulse/b_tf_response_properties.py` | TF Pulse |
-| 37 | `08_tf_pulse/c_tf_pulse_integration.py` | TF Pulse |
-| 38 | `08_tf_pulse/d_tf_learning_emergence.py` | TF Pulse |
-| 39 | `08_tf_pulse/e_tf_state_modulation.py` | TF Pulse |
-| 40 | `08_tf_pulse/f_tf_sensory_motor.py` | TF Pulse |
-| 41 | `08_tf_pulse/g_tf_cell_classifier.py` | TF Pulse |
-| 41g | `08_tf_pulse/g2_tf_tier_gallery.py` | TF Pulse |
-| 42 | `08_tf_pulse/h_tf_post_error_modulation.py` | TF Pulse |
-| 43 | `09_optotagging/a_optotagging_identification.py` | Optotagging |
+### 2. Run a Topic Pipeline
 
-2. **Execute**: `cd analysis_suite && py {script_path}`
-3. **Monitor output**: Watch for progress messages, warnings, errors.
-4. **Report results**: Number of sessions processed, figures saved, any warnings.
+Many topics have an ordered set of scripts (screening → per-unit fits → figures). Read the topic's scripts to establish the order — typically the cache-building script must run before the figure script that consumes its CSV/NPZ.
 
-### 2. Run Full Pipeline
+If the script exposes `--n_workers`, suggest parallelism (CPU-bound per-unit/per-session loops). Pin BLAS threads to 1 per worker.
 
-When the user says "run all" or "run the full suite":
+⚠️ **Never run compute over the `X:` Samba share.** Heavy pipelines go to the HPC via Slurm.
 
-```bash
-cd analysis_suite && py run_all.py
-```
+### 3. Force Cache Rebuild
 
-For parallel-capable scripts, suggest `--n_workers 4` if the user's machine can handle it.
+Most scripts memoize to CSV/NPZ under `data/cache/<topic>/`. When the user says "rebuild" or "force recompute":
 
-### 3. Run a Module
+- Look for `CACHE_FILE` / `--force` in the target script
+- Prefer the script's own `--force` flag (most use a `compute_or_load(force=False)` pattern)
+- Otherwise delete the specific cache file before running — never wipe `data/cache/` wholesale
 
-When the user says "run all behavior scripts" or "run module 03":
+### 4. Run a Long Job
 
-Execute the scripts for that module sequentially, in alphabetical order.
-
-### 4. Force Cache Rebuild
-
-Many scripts use CSV/NPZ caches. When the user says "rebuild" or "force recompute":
-
-- Look for `CACHE_FILE` definitions in the target script
-- Delete the cache file before running
-- Or suggest adding `--force` if the script supports it (most use `compute_or_load(force=False)`)
+Anything with a per-unit GLM refit or bootstrap can run tens of minutes. Run it in the background and report when it lands rather than blocking.
 
 ---
 
@@ -99,36 +71,36 @@ When a script fails, diagnose using this decision tree:
 
 | Error Pattern | Likely Cause | Fix |
 |---------------|-------------|-----|
-| `KeyError: '{color}'` | Missing color key in palette | Add key to `OUTCOME_COLORS`/`STAGE_COLORS` in `config.py` |
-| `insufficient data` / `0 sessions` | Session filter too strict, or missing `.pkl` files | Check `load_staging_manifest()` returns sessions; verify PKL_DIR |
-| `ModuleNotFoundError` | Missing dependency or path issue | Check `sys.path` setup, verify `.venv` has the package |
-| `FileNotFoundError: *.pkl` | Session pickle not at expected path | Verify `PKL_DIR` in config.py; run `batch_convert_MatToPkl.py` if needed |
-| `FileNotFoundError: *.csv` (cache) | Upstream cache not built yet | Run the prerequisite script first (usually `a_*.py` in the same module) |
-| `FileNotFoundError: hmm_assignments` | HMM not fitted for this session set | Run `scripts/analysis/behavior/fit_hmm.py` first |
+| `KeyError: '{color}'` | Missing color key in palette | Add key to `OUTCOME_COLORS`/`STAGE_COLORS` in `visdetect/analysis/config.py` |
+| `insufficient data` / `0 sessions` | Session filter too strict, or missing `.pkl` files | Check `load_staging_manifest()` returns sessions; verify `PKL_DIR` |
+| **Empty join / day-1-9 sessions missing** | Session id lost its leading zero (`01072025` → `1072025`) | Normalize every key/join/sort through `config.canonical_session_id()` |
+| `ModuleNotFoundError: visdetect` | Package not on the path (common in a worktree) | Set `PYTHONPATH=<repo>/src`, or reinstall editable into `.venv` |
+| `FileNotFoundError: *.pkl` | Session pickle not at expected path | Verify `PKL_DIR`; convert with `py scripts/conversion/raw_to_pkl.py` |
+| `FileNotFoundError: *.csv` (cache) | Upstream cache not built yet | Run the prerequisite cache-builder in the same `scripts/<topic>/` first |
 | `MemoryError` | Session too large, no GC | Add `del sess; gc.collect()` in the processing loop |
 | `ValueError: shapes not aligned` | Tensor dimension mismatch | Check `outcome_filter` — mismatched trial counts between event times and tensor |
-| `TimeoutExpired` (>30 min) | Script is too slow | Suggest `--n_workers` if supported; check if cache exists |
+| Latent/neural join drops trials | Gappy `trial_idx` — latent tables are not positionally aligned to trials | Join on the trial index column, never on row position |
+| Script hangs / very slow | Running over the `X:` Samba share | Never compute over `X:` — stage inputs locally or run on the HPC |
 
 ### Prerequisite Dependencies
 
-Some scripts depend on outputs from other scripts or standalone pipelines:
+Topic pipelines depend on shared upstream artifacts:
 
-| Script | Requires | Source |
-|--------|----------|--------|
-| All neural scripts (02-09) | `.pkl` session files | `scripts/batch_processing/batch_convert_MatToPkl.py` |
-| All scripts | Staging manifest | `scripts/analysis/stage_sessions.py` |
-| Fig 02 (HMM), Fig 11, Fig 20, Fig 30 | HMM assignments | `scripts/analysis/behavior/fit_hmm.py` |
-| Fig 35-42 (TF pulse) | TF pulse screening cache | `scripts/analysis/tf_response/run_tf_screening.py` or module 08a |
-| Fig 12, Fig 24-26 (lick/motor) | Lick responsiveness results | `scripts/analysis/lick/run_lick_analysis.py` |
-| Fig 43 (optotagging) | Laser event times in sessions | Embedded in `.pkl` (no separate step) |
-| Fig 08-12 | Unit waveform labels (cell type) | GLT + waveform CSV (built by `loader.py`) |
+| Consumer | Requires | Source |
+|----------|----------|--------|
+| Any neural script | `.pkl` session files | `py scripts/conversion/raw_to_pkl.py` (validate with `validate_pkl.py`) |
+| Any staged analysis | Staging manifest | `scripts/analysis/stage_sessions.py` → `load_staging_manifest(qc_only=True)` |
+| State-conditioned analyses | HMM assignments / state tags | `scripts/analysis/behavior/` (HMM), `data/cache/state_tags/` (state labeler) |
+| TF analyses | TF-responsive registry | `data/cache/tf_responsive/` (GLM screening under `scripts/tf_response/`) |
+| Cell-type splits | Waveform / cell-type labels | `visdetect.suite.loader` unit table |
+| Anatomy splits | CCF localization | `visdetect.anatomy` |
 
 ### When to Escalate
 
 If the error doesn't match any pattern above:
 1. Read the full traceback
 2. Read the offending source line plus 10 lines of context
-3. Check if the issue is in library code (`src/visdetect/`) or script code (`analysis_suite/`)
+3. Check whether the issue is in library code (`src/visdetect/`) or script code (`scripts/<topic>/`)
 4. Report the diagnosis to the user with a proposed fix
 
 ---
@@ -138,11 +110,12 @@ If the error doesn't match any pattern above:
 After running a script:
 
 ```
-## Run Report: Fig{NN} {Title}
+## Run Report: {topic}/{script}
 - Script: {path}
 - Duration: {time}
 - Sessions processed: {n}
-- Figures saved: {list of output files}
+- Figures saved: FIGURES/{topic}/{subject}/... 
+- Caches written: data/cache/{topic}/...
 - Warnings: {any warnings}
 - Status: OK / FAILED ({error summary})
 ```
@@ -151,24 +124,19 @@ After running a script:
 
 ## Environment Notes
 
-- **Python**: Use `py` (not `python`) — Windows + Git Bash
-- **Working directory**: Always `cd analysis_suite` before running suite scripts
-- **Timeout**: Default 30 minutes per script in `run_all.py`
-- **Memory**: Sessions are ~100+ MB each. Monitor for OOM on machines with <16 GB RAM.
-- **Cache**: Most scripts check for `CACHE_FILE` before recomputing. Delete cache to force rebuild.
+- **Python**: `py` (not `python`) — Windows + Git Bash. The interpreter is `.venv\Scripts\python.exe`.
+- **Working directory**: repo root. Scripts import `visdetect.*` from the package — no `cd` into a suite directory.
+- **Worktrees**: if working in a git worktree, set `PYTHONPATH=<worktree>/src` or you will silently exercise `main`'s code.
+- **Memory**: sessions are ~100+ MB each. `del sess; gc.collect()` in every session loop; watch for OOM under 16 GB RAM.
+- **Cache**: most scripts check a `CACHE_FILE` before recomputing. Delete that one file (or pass `--force`) to rebuild.
+- **Never compute over `X:`** (Samba gateway) — it locks ceph. Run heavy jobs locally or on the HPC via Slurm.
 
 ---
 
 ## Trigger Conditions
 
 Activate this skill when:
-- User says "run", "execute", "launch" followed by a figure number, script name, or module name
-- User asks "why did this fail?", "what's wrong with the output?"
-- User says "rebuild cache", "force recompute"
-- User pastes error output from a script run
-
----
-
-<!-- Tip: Use /create-skill in chat to generate content with agent assistance -->
-
-Define the functionality provided by this skill, including detailed instructions and examples
+- User says "run", "execute", "launch", "re-run" a script, topic pipeline, or figure
+- User asks "why did this fail?", "what's wrong with the output?", "why zero sessions?"
+- User says "rebuild cache", "force recompute", "regenerate the figures"
+- User pastes error output or a traceback from a script run
