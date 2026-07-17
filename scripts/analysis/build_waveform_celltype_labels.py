@@ -15,7 +15,10 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import pandas as pd  # noqa: E402
 
-from visdetect.analysis.config import RAW_WF_DIR, WAVEFORM_LABELS_PATH  # noqa: E402
+from visdetect.analysis.config import (                                 # noqa: E402
+    RAW_WF_DIR, WAVEFORM_LABELS_PATH,
+    canonical_session_id, canonicalize_session_column, chronological_sort,
+)
 from visdetect.suite.loader import load_staging_manifest                # noqa: E402
 from visdetect.analysis.tracking_qc import (                            # noqa: E402
     load_raw_mean_waveform, extract_peak_channel,
@@ -43,8 +46,11 @@ def session_unit_ids(session_str: str):
 def main():
     manifest = load_staging_manifest(qc_only=True)
     rows = []
-    for sess_int in sorted(manifest["session_name"].astype(int)):
-        sess_str = str(sess_int).zfill(8)
+    # Canonical 8-digit ids, in CHRONOLOGICAL order (a raw sort on DDMMYYYY orders by
+    # day-of-month; an int cast drops the leading-zero day of days 1-9).
+    for sess_str in chronological_sort(
+        canonical_session_id(s) for s in manifest["session_name"]
+    ):
         ids = session_unit_ids(sess_str)
         if not ids:
             print(f"  {sess_str}: no RawWaveforms"); continue
@@ -55,7 +61,7 @@ def main():
                 continue
             peak_chan = extract_peak_channel(mean_wf)
             feats = compute_waveform_features(mean_wf[:, peak_chan])
-            rows.append({"session_date": sess_int, "cluster_id": int(kid),
+            rows.append({"session_date": sess_str, "cluster_id": int(kid),
                          "t2p_ms": feats["t2p_ms"], "half_width_ms": feats["half_width_ms"]})
             n += 1
         print(f"  {sess_str}: {n} units")
@@ -70,7 +76,8 @@ def main():
           f"n={info['n']}; counts={df['celltype'].value_counts().to_dict()}")
 
     os.makedirs(os.path.dirname(WAVEFORM_LABELS_PATH), exist_ok=True)
-    df[["session_date", "cluster_id", "celltype"]].to_csv(WAVEFORM_LABELS_PATH, index=False)
+    out = canonicalize_session_column(df[["session_date", "cluster_id", "celltype"]].copy())
+    out.to_csv(WAVEFORM_LABELS_PATH, index=False)
     print(f"Wrote labels: {WAVEFORM_LABELS_PATH}  ({len(df)} units)")
 
     os.makedirs(os.path.dirname(STATS_PATH), exist_ok=True)

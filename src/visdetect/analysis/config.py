@@ -324,6 +324,73 @@ def canonical_session_id(session) -> str:
     return str(session).strip()
 
 
+SESSION_ID_COLUMNS = ("session_name", "session_date", "session", "session_id")
+
+
+def restore_session_token(value) -> str:
+    """Return `value` as a string with any int-stripped leading-zero DAY restored.
+
+    WIDTH-PRESERVING, unlike :func:`canonical_session_id`. The repo carries two
+    session-token families:
+
+      * 8-digit ``DDMMYYYY``  (BG_046, BG_038, anatomy, most caches)
+      * 6-digit ``DDMMYY``    (BG_031 / BG_039 raw tokens)
+
+    An ``int()`` cast strips the leading-zero day of days 1-9 from either family,
+    yielding a 7- or 5-digit token respectively. Both widths are unambiguous (a
+    ``DDMMYY`` can never be 7 digits), so the stripped zero can be restored without
+    knowing the subject::
+
+        1072025  -> '01072025'    (7 -> 8, DDMMYYYY)
+          50325  -> '050325'      (5 -> 6, DDMMYY)
+
+    Anything else -- already-correct 8/6-digit ids, subject-prefixed tokens
+    (``BG_012_01112023_pr``), re-recording suffixes (``01042025_v2``, ``19052025_b``)
+    -- passes through unchanged.
+
+    Use :func:`canonical_session_id` to force the 8-digit ``DDMMYYYY`` form for
+    joins on a single DDMMYYYY subject; use THIS when normalizing a column that may
+    span subjects (it will not mangle a 6-digit ``DDMMYY`` into ``00050325``).
+    """
+    s = str(value).strip()
+    if s.endswith(".0") and s[:-2].isdigit():   # CSV float round-trip: '1072025.0'
+        s = s[:-2]
+    if s.isdigit() and len(s) in (5, 7):        # stripped leading-zero DAY
+        return s.zfill(len(s) + 1)
+    return s
+
+
+def canonicalize_session_column(df, col: Optional[str] = None):
+    """Make a DataFrame's session-id column safe to write to CSV. Returns `df`.
+
+    Casts the column to width-preserving STRINGS via :func:`restore_session_token`,
+    so that ``to_csv`` cannot emit an int64 that has silently dropped the leading-zero
+    day of a day-1-9 session.
+
+    ALWAYS call this immediately before ``to_csv()`` on any table carrying a session
+    id. An all-numeric session column round-trips through pandas as int64, which is
+    how 38,730 rows across 19 deliverables were corrupted (see
+    ``tests/test_session_id_csv_integrity.py``).
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+    col : str, optional
+        Column to fix. If None, every column named in :data:`SESSION_ID_COLUMNS`
+        that is present is fixed.
+
+    Examples
+    --------
+    >>> df = canonicalize_session_column(df)
+    >>> df.to_csv(path, index=False)     # now safe
+    """
+    cols = [col] if col else [c for c in SESSION_ID_COLUMNS if c in df.columns]
+    for c in cols:
+        if c in df.columns:
+            df[c] = df[c].map(restore_session_token)
+    return df
+
+
 def parse_session_date(session_int) -> Tuple[int, int, int]:
     """Convert a DDMMYYYY session id to a sortable (year, month, day) tuple.
 
@@ -449,9 +516,15 @@ def load_staging_manifest(
 
 
 def load_valid_sessions() -> set:
-    """Return set of session-name ints for all filtered valid sessions."""
+    """Return the set of CANONICAL session-id STRINGS for all filtered valid sessions.
+
+    Ids are the 8-digit ``DDMMYYYY`` string form (``'01072025'``), NOT ints: an int
+    cast drops the leading-zero DAY of days 1-9, so a membership test against an
+    int-domain set silently excludes those sessions. Compare against
+    :func:`canonical_session_id` of whatever id you hold.
+    """
     manifest = load_staging_manifest(qc_only=True, apply_filter=True)
-    return set(manifest["session_name"].astype(int).tolist())
+    return {canonical_session_id(s) for s in manifest["session_name"]}
 
 
 def load_filtered_manifest(

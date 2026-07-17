@@ -32,6 +32,7 @@ from .config import (
     SUBJECT,
     VALID_STAGES,
     WAVEFORM_LABELS_PATH,
+    canonical_session_id,
     chronological_sort,
     parse_session_date,
 )
@@ -144,19 +145,28 @@ def load_session(session_name) -> "Session":
 
 def session_iterator(
     stages: Tuple[str, ...] = ("Naive", "Learning", "Expert"),
-) -> Iterator[Tuple[int, str, "Session"]]:
-    """Yield (session_name_int, stage, Session) in chronological order.
+) -> Iterator[Tuple[str, str, "Session"]]:
+    """Yield (session_id, stage, Session) in CHRONOLOGICAL order.
 
-    Processes one session at a time and garbage-collects after each yield
-    to keep memory manageable.
+    ``session_id`` is the CANONICAL 8-digit ``DDMMYYYY`` STRING (e.g. ``'01072025'``),
+    not an int -- an int cast silently drops the leading-zero DAY of days 1-9, and any
+    downstream join/dict-key on that value then misses those sessions. Use the yielded
+    id directly as a key; do not re-cast it.
+
+    Processes one session at a time and frees it after each yield, so a loop over all
+    ~45 sessions (~100+ MB each) stays flat in memory. Prefer this over a hand-rolled
+    ``for ... load_session(...)`` loop: it gets the id form, the ordering, and the
+    memory hygiene right by construction.
     """
     manifest = load_staging_manifest(qc_only=True)
     manifest = manifest[manifest["stage"].isin(set(stages))]
-    for _, row in manifest.iterrows():
-        session_name = int(row["session_name"])
-        stage = row["stage"]
-        sess = load_session(session_name)
-        yield session_name, stage, sess
+    stage_by_id = {
+        canonical_session_id(row["session_name"]): row["stage"]
+        for _, row in manifest.iterrows()
+    }
+    for session_id in chronological_sort(stage_by_id):
+        sess = load_session(session_id)
+        yield session_id, stage_by_id[session_id], sess
         del sess
         gc.collect()
 
