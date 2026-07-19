@@ -84,6 +84,24 @@ class LabelRecord:
 
 # ── Label I/O ──────────────────────────────────────────────────────────
 
+def _restore_session_token(value) -> str:
+    """Width-preserving leading-zero-day restore for a session id.
+
+    Inlined here (rather than importing config.restore_session_token) because this
+    module deliberately avoids importing visdetect.analysis.config — that import
+    flips matplotlib to the Agg backend and kills the labeling GUI (see module
+    header). Mirrors config.restore_session_token exactly; keep the two in sync.
+    A stripped DDMMYYYY reads back as 7 digits, a stripped DDMMYY as 5; both are
+    unambiguous, so restoring the leading zero is safe for either subject family.
+    """
+    s = str(value).strip()
+    if s.endswith(".0") and s[:-2].isdigit():   # CSV float round-trip: '1072025.0'
+        s = s[:-2]
+    if s.isdigit() and len(s) in (5, 7):
+        return s.zfill(len(s) + 1)
+    return s
+
+
 def load_labels(path: Optional[str] = None) -> pd.DataFrame:
     """Load existing manual labels, or return empty DataFrame."""
     path = path or LABELS_PATH
@@ -115,6 +133,11 @@ def save_label(record: LabelRecord, path: Optional[str] = None) -> None:
             df.at[idx, col] = val
     else:
         df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+
+    # session_name is typed int on LabelRecord and read back as int64 by
+    # load_labels, so a day-1-9 session (01072025) would write as 7 digits.
+    # Restore the leading-zero day at the CSV boundary.
+    df["session_name"] = df["session_name"].map(_restore_session_token)
 
     # Atomic write: write to temp, then rename
     tmp_path = path + ".tmp"

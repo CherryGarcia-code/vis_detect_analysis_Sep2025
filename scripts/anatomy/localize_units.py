@@ -15,6 +15,7 @@ from typing import Dict, List
 import pandas as pd
 
 from visdetect.anatomy.peak_channel import unit_peak_channel
+from visdetect.analysis.config import canonicalize_session_column
 
 UNIT_COLS = ["session_name", "cluster_id", "peak_channel", "shank", "depth_um",
              "ccf_ap", "ccf_ml", "ccf_dv", "region_acronym", "region_name",
@@ -58,8 +59,14 @@ def localize_subject_units(subject, atlas_csv, sig_csv, raw_wf_root,
 
 def append_unit_anatomy(df: pd.DataFrame, out_csv) -> None:
     out_csv = Path(out_csv); out_csv.parent.mkdir(parents=True, exist_ok=True)
+    # Canonicalize the session id to its width-preserving string form BEFORE the
+    # upsert. This (a) makes day-1-9 sessions dedup correctly -- a raw int64
+    # 1072025 read from the existing CSV would otherwise not match a freshly built
+    # '01072025' -- and (b) guarantees the written file never carries a
+    # leading-zero-stripped 7-digit id.
+    df = canonicalize_session_column(df)
     if out_csv.exists():
-        prev = pd.read_csv(out_csv)
+        prev = canonicalize_session_column(pd.read_csv(out_csv))
         combined = pd.concat([prev, df], ignore_index=True)
         combined = combined.drop_duplicates(subset=["session_name", "cluster_id"], keep="last")
     else:

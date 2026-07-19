@@ -134,6 +134,27 @@ def test_canonicalize_session_column_leaves_non_ddmmyyyy_tokens_alone():
     assert out["session_name"].tolist() == ["BG_012_01112023_pr", "01042025_v2", "19052025_b"]
 
 
+def test_canonicalize_session_column_does_not_mutate_input():
+    """Must return a NEW frame, never mutate the caller's.
+
+    Regression: an in-place version silently changed session_name to string mid-call
+    in an incremental upsert that aliased its argument (append_unit_anatomy), so the
+    dedup compared an int id against a string id and duplicated the row.
+    """
+    pd = pytest.importorskip("pandas")
+    from visdetect.analysis.config import canonicalize_session_column
+
+    df = pd.DataFrame({"session_name": [1072025, 23062025], "x": [1, 2]})
+    before_dtype = df["session_name"].dtype
+    out = canonicalize_session_column(df)
+    # input untouched: still int64 with the original values
+    assert df["session_name"].dtype == before_dtype
+    assert df["session_name"].tolist() == [1072025, 23062025]
+    # returned frame is the canonicalized copy
+    assert out["session_name"].tolist() == ["01072025", "23062025"]
+    assert out is not df
+
+
 def test_restore_session_token_is_width_preserving():
     """restore_session_token must NOT promote a 6-digit DDMMYY to 8 digits.
 

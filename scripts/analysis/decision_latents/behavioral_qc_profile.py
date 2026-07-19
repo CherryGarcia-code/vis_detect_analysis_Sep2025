@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
 from visdetect.suite.plotting import setup_style
-from visdetect.analysis.config import ROOT, SUBJECT, STATE_LABEL_COLORS, CHANGE_SIZES
+from visdetect.analysis.config import ROOT, SUBJECT, STATE_LABEL_COLORS, CHANGE_SIZES, canonicalize_session_column
 from visdetect.analysis import decision_latents as dl
 from visdetect.analysis.decision_latents import (
     _logistic, compute_cell_qc,
@@ -275,6 +275,7 @@ if __name__ == "__main__":
         print(f"    {mood:<11}: {int((cellqc['usable_generative'] & m).sum()):>3}/{int(m.sum())} usable_generative")
 
     out_csv = os.path.join(CACHE_DIR, "behavioral_qc_cell_table.csv")
+    cellqc = canonicalize_session_column(cellqc)
     cellqc.to_csv(out_csv, index=False)
     print("\nfigure:", fig_qc(trials, cellqc))
     print("generative-QC figure:", fig_generative_qc(cellqc))

@@ -91,7 +91,7 @@ except Exception:  # pragma: no cover
 
 from visdetect.suite.loader import load_session
 from visdetect.suite.plotting import setup_style          # styling only
-from visdetect.analysis.config import ROOT, SUBJECT
+from visdetect.analysis.config import ROOT, SUBJECT, canonicalize_session_column
 from visdetect.analysis import decision_latents as dl
 from visdetect.analysis import decision_latents_generative as dlg
 
@@ -734,6 +734,7 @@ def write_fallback_table(out_csv):
     df["trust_timing"] = "descriptive"
     df["generative_omitted"] = True
     df["latent_trust"] = "descriptive"
+    df = canonicalize_session_column(df)
     df.to_csv(out_csv, index=False)
     print(f"[fallback] wrote Phase-1 proxies (descriptive) -> {out_csv}")
     return df
@@ -1022,6 +1023,7 @@ def main(argv=None):
         raise SystemExit(
             "FATAL: fitted anchors written as generative_omitted (session-key "
             f"mismatch between anchor_fits and the deliverable): {omitted_fits}")
+    appended = canonicalize_session_column(appended)
     appended.to_csv(out_csv, index=False)
     n_gen = int((~appended["generative_omitted"]).sum())
     print(f"[append] wrote {len(appended)} rows ({n_gen} with a fitted anchor); "

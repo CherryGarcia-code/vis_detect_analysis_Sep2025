@@ -12,7 +12,7 @@ import os, sys, gc, warnings, numpy as np, pandas as pd, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 from visdetect.suite.loader import load_session
 from visdetect.suite.plotting import setup_style          # styling only
-from visdetect.analysis.config import ROOT, SUBJECT, STATE_LABEL_COLORS  # canonical new-labeler mood palette
+from visdetect.analysis.config import ROOT, SUBJECT, STATE_LABEL_COLORS, canonicalize_session_column  # canonical new-labeler mood palette
 from visdetect.analysis import decision_latents as dl
 setup_style()
 FIG_DIR = os.path.join(ROOT, "FIGURES", "decision_latents", SUBJECT)
@@ -320,6 +320,8 @@ if __name__ == "__main__":
     sidx = {s.zfill(8): i for i, s in enumerate(dl.enumerate_valid_sessions())}
     cells["session_idx"] = cells["session_name"].astype(str).str.zfill(8).map(sidx)
     lat = dl.descriptive_latent_table(all_trials, cells)
+    cells = canonicalize_session_column(cells)
+    lat = canonicalize_session_column(lat)
     cells.to_csv(os.path.join(CACHE_DIR, "decision_latents_cell_scores.csv"), index=False)
     lat.to_csv(CACHE, index=False)
     # F1 split into F1A (two stage-split variants) + F1B; F5 redesigned.

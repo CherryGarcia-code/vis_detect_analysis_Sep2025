@@ -372,6 +372,10 @@ def canonicalize_session_column(df, col: Optional[str] = None):
     how 38,730 rows across 19 deliverables were corrupted (see
     ``tests/test_session_id_csv_integrity.py``).
 
+    Returns a NEW frame; the input is never modified in place (mutating a caller's
+    frame is a footgun -- e.g. an incremental upsert that aliases its argument would
+    see the session column silently change dtype mid-call).
+
     Parameters
     ----------
     df : pandas.DataFrame
@@ -384,6 +388,7 @@ def canonicalize_session_column(df, col: Optional[str] = None):
     >>> df = canonicalize_session_column(df)
     >>> df.to_csv(path, index=False)     # now safe
     """
+    df = df.copy()
     cols = [col] if col else [c for c in SESSION_ID_COLUMNS if c in df.columns]
     for c in cols:
         if c in df.columns:

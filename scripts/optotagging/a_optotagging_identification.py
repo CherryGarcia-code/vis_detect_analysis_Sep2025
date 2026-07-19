@@ -42,7 +42,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from visdetect.analysis.config import STAGE_ORDER
+from visdetect.analysis.config import STAGE_ORDER, canonicalize_session_column
 from visdetect.suite.loader import load_staging_manifest, load_session, load_waveform_labels
 from visdetect.analysis.utils import get_good_cluster_ids
 from visdetect.suite.plotting import setup_style
@@ -196,6 +196,7 @@ def main():
             return
 
         df_all = pd.DataFrame(all_rows)
+        df_all = canonicalize_session_column(df_all)
         df_all.to_csv(cache_path, index=False)
         print(f"  Saved {len(df_all)} rows to {cache_path}")
 
@@ -243,6 +244,7 @@ def main():
         })
     units = pd.DataFrame(unit_rows)
     units_path = os.path.join(CACHE_DIR, "optotagging_unit_tags.csv")
+    units = canonicalize_session_column(units)
     units.to_csv(units_path, index=False)
     print(f"  Saved unit tags to {units_path}")
 
