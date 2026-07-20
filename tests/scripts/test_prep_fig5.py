@@ -42,3 +42,19 @@ def test_unit_lick_ztrace_flat_unit_no_onset():
                                  lick_win=(-2.0, 1.5), base_win=(-2.0, 0.0),
                                  bin_s=0.025, sigma_bins=1.0)
     assert np.isnan(P.cell_onset(t, z))  # no sustained supra-threshold activity
+
+
+def test_label_shuffle_flattens_onset_gradient():
+    """The null machinery must FLATTEN a genuine onset-decreases-with-width gradient:
+    a real negative onset~width correlation must exceed the 95th percentile of the
+    width-shuffled null (otherwise the null is not actually breaking the link)."""
+    import nulls_and_hardening as H  # noqa: E402
+    rng = np.random.default_rng(0)
+    # synthetic: onset genuinely decreases with width (wider -> earlier / more negative)
+    width = np.linspace(0.03, 0.5, 200)
+    onset = -0.2 * (width - 0.03) / 0.47 + rng.normal(0, 0.02, 200)
+    r_obs = H.width_onset_corr(width, onset)
+    assert r_obs < 0                                    # real effect is negative
+    null = H.width_shuffle_corr_null(onset, width, n=300, seed=1)
+    assert np.nanmedian(np.abs(null)) < abs(r_obs)      # null flattens toward 0
+    assert abs(r_obs) > np.percentile(np.abs(null), 95)  # observed beats shuffled labels
