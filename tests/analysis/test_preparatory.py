@@ -9,6 +9,17 @@ def test_baseline_mean_sd_guards_tiny_sd():
     assert sd == pytest.approx(3.0)  # sd<1e-6 -> max(mu,1)=3.0
 
 
+def test_baseline_mean_sd_uses_trial_averaged_trace():
+    # mean trace has SD 1 across bins; single trials are very noisy. sd must be
+    # ~1 (trial-averaged trace), NOT the ~5 pooled single-trial SD.
+    rng = np.random.default_rng(0)
+    base_pattern = np.array([1, 1, 1, 3, 3, 3], float)
+    B = base_pattern[None, :] + rng.normal(0, 5, (400, 6))
+    mu, sd = P.baseline_mean_sd(B)
+    assert mu == pytest.approx(2.0, abs=0.3)   # mean of pattern
+    assert sd == pytest.approx(1.0, abs=0.5)   # trial-averaged trace SD, not ~5
+
+
 def test_zscore_and_active_mask():
     z = P.zscore_trace(np.array([0.0, 5.0, -5.0]), mu=0.0, sd=1.0)
     m = P.active_mask(z)  # |z|>2.576

@@ -15,12 +15,23 @@ Z_ACTIVE = 2.576  # |z| threshold, P<0.01 two-sided (Fig 5e z-test)
 
 
 def baseline_mean_sd(baseline_binned) -> tuple[float, float]:
-    """mu, sd of pooled pre-change baseline firing (trials x bins). sd<1e-6 -> max(mu,1)."""
-    v = np.asarray(baseline_binned, float).ravel()
-    v = v[np.isfinite(v)]
-    if v.size == 0:
+    """mu, sd of the TRIAL-AVERAGED pre-change baseline PETH across time bins.
+
+    Khilkevich & Lohse Fig 5 z-score the trial-MEAN PETH by "the mean and s.d.
+    estimated from activity during 2 s before the change onset" — i.e. of the
+    (trial-averaged) baseline firing-rate trace, NOT of pooled single-trial bins.
+    Pooling single trials inflates sd by ~sqrt(n_trials) of Poisson noise and
+    collapses the fraction-active far below the paper's scale (verified: pooled
+    peaks at 0.08 vs the paper's 0.5-0.9; the trial-averaged trace peaks ~0.83).
+
+    Accepts (n_trials, n_bins) or a 1-D trace. sd<1e-6 -> max(mu, 1).
+    """
+    B = np.asarray(baseline_binned, float)
+    trace = B if B.ndim == 1 else np.nanmean(B, axis=0)  # trial-average first
+    trace = trace[np.isfinite(trace)]
+    if trace.size == 0:
         return 0.0, 1.0
-    mu, sd = float(np.mean(v)), float(np.std(v))
+    mu, sd = float(np.mean(trace)), float(np.std(trace))
     if not np.isfinite(sd) or sd < 1e-6:
         sd = max(mu, 1.0)
     return mu, sd
