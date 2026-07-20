@@ -76,3 +76,35 @@ def test_pulse_half_peak_width_triangle():
     w, pk = P.pulse_half_peak_width(resp, t)
     assert pk == pytest.approx(0.2, abs=0.02)
     assert w == pytest.approx(0.1, abs=0.02)
+
+
+def test_first_sustained_matches_scalar_loop():
+    # codifies the vectorized helper == the scalar loop (the DRY-drift risk from the
+    # duplicated copies that fig5h / nulls_and_hardening now import instead of re-implementing)
+    rng = np.random.default_rng(0)
+    for _ in range(3000):
+        cond = rng.random(int(rng.integers(5, 60))) < rng.uniform(0.1, 0.9)
+        win = int(rng.integers(2, 6))
+        need = int(rng.integers(1, win + 1))
+        ref = -1
+        for i in range(len(cond)):
+            if cond[i] and cond[i:min(len(cond), i + win)].sum() >= need:
+                ref = i
+                break
+        assert P.first_sustained(cond, win, need) == ref
+
+
+def test_population_onset_requires_ci_lo_gate():
+    # isolate the ci_lo>0 gate: mean_frac clears 0.1 everywhere, but lower-CI does not
+    t = np.arange(-2, 1, 0.025)
+    frac = np.full_like(t, 0.5)
+    assert np.isnan(P.population_onset(t, frac, np.zeros_like(t)))      # ci_lo==0 -> no onset
+    assert np.isfinite(P.population_onset(t, frac, np.full_like(t, 0.1)))  # ci_lo>0 -> onset
+
+
+def test_width_deciles_nan_gets_minus_one():
+    w = np.array([0.1, np.nan, 0.2, 0.3, np.nan])
+    idx, edges = P.width_deciles(w, n=2)
+    assert idx[1] == -1 and idx[4] == -1              # NaN width -> bin -1
+    assert set(int(i) for i in idx[[0, 2, 3]]) <= {0, 1}  # finite -> valid bin
+    assert len(edges) == 3

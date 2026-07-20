@@ -38,7 +38,8 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 import prep_common as C  # noqa: E402
 from visdetect.analysis.preparatory import (  # noqa: E402
-    active_mask, bootstrap_fraction_ci, population_onset, cell_onset, width_deciles)
+    active_mask, bootstrap_fraction_ci, population_onset, cell_onset, width_deciles,
+    first_sustained, onset_win_need)
 
 FIGROOT = C.REPO / "FIGURES/preparatory_fig5"
 REGIONS = [("pooled", None), ("DMS", "DMS"), ("VMS", "VMS")]
@@ -49,16 +50,8 @@ CLS_COLORS = {"transient": "#3182bd", "intermediate": "#756bb1", "sustained": "#
 NONTF_COLOR = "#969696"
 
 
-# ── vectorized "first sustained crossing" (matches preparatory._first_sustained) ──
-def _first_sustained_vec(cond, win=4, need=3):
-    cond = np.asarray(cond, bool)
-    n = len(cond)
-    cs = np.concatenate(([0], np.cumsum(cond.astype(int))))
-    idx = np.arange(n)
-    end = np.minimum(idx + win, n)
-    ok = cond & ((cs[end] - cs[idx]) >= need)
-    w = np.where(ok)[0]
-    return int(w[0]) if w.size else -1
+# onset-rule bin counts (100 ms/80 ms @ BIN) — single source of truth in preparatory
+_WIN, _NEED = onset_win_need(0.1, 0.08, C.BIN)
 
 
 def _analytic_decile_onsets(A_resp, w_resp, t, base_mask):
@@ -79,7 +72,7 @@ def _analytic_decile_onsets(A_resp, w_resp, t, base_mask):
         se = np.sqrt(np.clip(p * (1.0 - p), 0.0, None) / max(n, 1))
         lo = (p - 1.96 * se) - base
         cond = (lo > 0) & (frac > 0.1)
-        i = _first_sustained_vec(cond)
+        i = first_sustained(cond, _WIN, _NEED)
         if i >= 0:
             onsets[d] = float(t[i])
         medws[d] = float(np.median(w_resp[sel]))
@@ -177,9 +170,9 @@ def main(lick: str = "hit") -> None:
             dslope, dintercept = np.nan, np.nan
         # CI over cells (analytic onset for tractable 10,000x)
         boot_r, boot_sl = _boot_decile_ci(A_resp, w_resp, t, base_mask)
-        d_ci = (float(np.percentile(boot_sl, 2.5)), float(np.percentile(boot_sl, 97.5))) \
+        d_ci = (float(np.nanpercentile(boot_sl, 2.5)), float(np.nanpercentile(boot_sl, 97.5))) \
             if boot_sl.size else (np.nan, np.nan)
-        d_r_ci = (float(np.percentile(boot_r, 2.5)), float(np.percentile(boot_r, 97.5))) \
+        d_r_ci = (float(np.nanpercentile(boot_r, 2.5)), float(np.nanpercentile(boot_r, 97.5))) \
             if boot_r.size else (np.nan, np.nan)
 
         # ── SUPPLEMENT: per-cell ─────────────────────────────────────────────
@@ -190,7 +183,7 @@ def main(lick: str = "hit") -> None:
         else:
             cslope = np.nan
         boot_csl = _boot_cell_slope_ci(cell_on[cm], w_resp[cm]) if cm.sum() >= 3 else np.array([])
-        c_ci = (float(np.percentile(boot_csl, 2.5)), float(np.percentile(boot_csl, 97.5))) \
+        c_ci = (float(np.nanpercentile(boot_csl, 2.5)), float(np.nanpercentile(boot_csl, 97.5))) \
             if boot_csl.size else (np.nan, np.nan)
         # non-TF onset rug
         g_sel = rmask & (~resp)

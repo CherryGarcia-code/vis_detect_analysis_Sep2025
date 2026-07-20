@@ -46,7 +46,8 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 import prep_common as C  # noqa: E402
 from visdetect.analysis.preparatory import (  # noqa: E402
-    active_mask, bootstrap_fraction_ci, population_onset, cell_onset)
+    active_mask, bootstrap_fraction_ci, population_onset, cell_onset,
+    first_sustained, onset_win_need)
 
 FIGROOT = C.REPO / "FIGURES/preparatory_fig5"
 OUTDIR = FIGROOT / "hardening"
@@ -83,16 +84,8 @@ def width_shuffle_corr_null(onset, width, n=N_SHUFFLE, seed=0) -> np.ndarray:
     return np.array([width_onset_corr(w[rng.permutation(w.size)], o) for _ in range(n)])
 
 
-def _first_sustained_idx(cond, win=4, need=3) -> int:
-    """Earliest i where cond[i] and >=need of cond[i:i+win] are True (100ms/80ms)."""
-    cond = np.asarray(cond, bool)
-    n = len(cond)
-    cs = np.concatenate(([0], np.cumsum(cond.astype(int))))
-    idx = np.arange(n)
-    end = np.minimum(idx + win, n)
-    ok = cond & ((cs[end] - cs[idx]) >= need)
-    w = np.where(ok)[0]
-    return int(w[0]) if w.size else -1
+# onset-rule bin counts (100 ms/80 ms @ BIN) — single source of truth in preparatory
+_WIN, _NEED = onset_win_need(0.1, 0.08, C.BIN)
 
 
 def _analytic_pop_onset(Ag, t, base_mask) -> float:
@@ -107,7 +100,7 @@ def _analytic_pop_onset(Ag, t, base_mask) -> float:
     frac = p - base
     se = np.sqrt(np.clip(p * (1.0 - p), 0.0, None) / n)
     lo = (p - 1.96 * se) - base
-    i = _first_sustained_idx((lo > 0) & (frac > 0.1))
+    i = first_sustained((lo > 0) & (frac > 0.1), _WIN, _NEED)
     return float(t[i]) if i >= 0 else np.nan
 
 

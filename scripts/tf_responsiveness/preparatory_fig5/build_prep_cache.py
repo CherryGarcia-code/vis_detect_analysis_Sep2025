@@ -22,7 +22,9 @@ from visdetect.analysis.preparatory import baseline_mean_sd, zscore_trace
 
 def unit_lick_ztrace(spikes, lick_times, change_times, *, lick_win, base_win, bin_s, sigma_bins):
     """Return (z, t, n_licks). z = (smoothed mean lick-PETH - mu_bl)/sd_bl, with
-    (mu_bl, sd_bl) from pooled pre-change baseline bins (unsmoothed)."""
+    (mu_bl, sd_bl) from the TRIAL-AVERAGED pre-change baseline trace (baseline_mean_sd);
+    the SAME pre-change baseline is reused for the hit- and fa-lick alignments
+    (shared-baseline golden rule — the compared conditions do not each get their own)."""
     lick_times = [x for x in lick_times if np.isfinite(x)]
     change_times = [x for x in change_times if np.isfinite(x)]
     if len(lick_times) < 1 or len(change_times) < 1 or len(spikes) == 0:
@@ -84,6 +86,14 @@ def main(lick="hit", n_workers=10):
             for r in width.itertuples()}
     tasks = []
     for subj, _ in C.MICE:
+        reg = C.load_registry(subj)
+        gd = C.good_dates(subj)
+        reg_sess = set(reg.session_date.unique())
+        dropped = sorted(reg_sess - gd)  # registry sessions absent from manifest OR >=50% Disengaged
+        print(f"  [{subj}] sessions registry {len(reg_sess)} -> good_dates-kept "
+              f"{len(reg_sess & gd)} (dropped {len(dropped)}: {dropped[:8]}"
+              f"{'...' if len(dropped) > 8 else ''}); units {len(reg)} -> "
+              f"{int(reg.session_date.isin(gd).sum())}", flush=True)
         for resp in (True, False):
             sel = _select(subj, resp)
             for sess, g in sel.groupby("session"):
@@ -129,7 +139,7 @@ def main(lick="hit", n_workers=10):
     n_non = int((~resp_flag).sum())
     n_width = int(np.isfinite(interp).sum())
     print(f"wrote {outp} | {len(rows)} cells (resp {n_resp} / non-TF {n_non}; "
-          f"{n_width} resp with interp_fwhm) | dropped {dropped} (<{C.MIN_LICKS} licks) | "
+          f"{n_width} resp with interp_fwhm) | dropped {dropped} (no-spike/no-lick/<{C.MIN_LICKS}-licks) | "
           f"{len(errs)} session errors", flush=True)
     print(f"per region: {pd.Series(out['region']).value_counts().to_dict()}", flush=True)
     if errs:

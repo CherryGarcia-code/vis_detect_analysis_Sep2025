@@ -68,13 +68,31 @@ def bootstrap_fraction_ci(active_matrix, baseline_bins=None, n=5000, seed=42):
     return base, np.percentile(boots, 2.5, 0), np.percentile(boots, 97.5, 0)
 
 
+def first_sustained(cond, win, need) -> int:
+    """First index i where cond[i] is True AND >= `need` of the `win`-bin window
+    cond[i:i+win] are True; -1 if none. Vectorized; the single source of truth for
+    the 100 ms/80 ms onset rule (bin counts derived once from bin_s via
+    onset_win_need). Callers must NOT re-implement this."""
+    cond = np.asarray(cond, bool)
+    n = len(cond)
+    if n == 0:
+        return -1
+    cs = np.concatenate(([0], np.cumsum(cond.astype(int))))
+    idx = np.arange(n)
+    end = np.minimum(idx + win, n)
+    ok = cond & ((cs[end] - cs[idx]) >= need)
+    w = np.where(ok)[0]
+    return int(w[0]) if w.size else -1
+
+
+def onset_win_need(window_s, sustain_s, bin_s) -> tuple[int, int]:
+    """(win, need) bin counts for the sustained-onset rule (e.g. 100 ms/80 ms @ 25 ms → (4, 3))."""
+    return int(round(window_s / bin_s)), int(round(sustain_s / bin_s))
+
+
 def _first_sustained(cond, window_s, sustain_s, bin_s):
-    need = int(round(sustain_s / bin_s))
-    win = int(round(window_s / bin_s))
-    for i in range(len(cond)):
-        if cond[i] and cond[i:min(len(cond), i + win)].sum() >= need:
-            return i
-    return -1
+    win, need = onset_win_need(window_s, sustain_s, bin_s)
+    return first_sustained(np.asarray(cond, bool), win, need)
 
 
 def population_onset(t, mean_frac, ci_lo, *, window_s=0.1, sustain_s=0.08,
