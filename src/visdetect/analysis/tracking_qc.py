@@ -729,6 +729,10 @@ PSTH_CONDITIONS: Dict[str, Dict] = {
     "change_on_sm_hit":   {"event": "Change_ON",   "outcomes": {"hit"},        "sizes": SMALL_POOL, "window": (-0.5, 0.5)},
     "change_on_sm_miss":  {"event": "Change_ON",   "outcomes": {"miss"},       "sizes": SMALL_POOL, "window": (-0.5, 0.5)},
     "hit_lick":           {"event": "Hit",         "outcomes": {"hit"},        "sizes": None,       "window": (-2.0, 1.0)},
+    # FA (early/anticipatory) lick, motor-aligned. Window matches hit_lick and spans
+    # the canonical FA baseline (-1.75,-1.25) in EVENT_RESPONSIVENESS_WINDOWS so a
+    # baseline-subtracted FA PSTH can be taken without re-deriving the window per script.
+    "fa_lick":            {"event": "FA",          "outcomes": {"fa"},         "sizes": None,       "window": (-2.0, 1.0)},
 }
 
 

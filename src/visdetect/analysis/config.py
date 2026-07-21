@@ -497,10 +497,10 @@ def load_staging_manifest(
     else:
         manifest = manifest[manifest["stage"] != "Excluded"].copy()
 
-    # Chronological sort
-    manifest["_sort"] = manifest["session_name"].apply(
-        lambda x: parse_session_date(int(x))
-    )
+    # Chronological sort. Use session_date_key (string-safe, all token formats) rather
+    # than parse_session_date(int(x)): the int() cast strips the leading-zero DAY and
+    # mangles 6-digit DDMMYY subject tokens (BG_031/039); session_date_key restores it.
+    manifest["_sort"] = manifest["session_name"].apply(session_date_key)
     manifest = manifest.sort_values("_sort").reset_index(drop=True)
     manifest.drop(columns=["_sort"], inplace=True)
 
