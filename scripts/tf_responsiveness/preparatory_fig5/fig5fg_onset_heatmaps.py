@@ -27,7 +27,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
-from matplotlib.colors import Normalize
+from matplotlib.colors import Normalize, ListedColormap
 from matplotlib.cm import ScalarMappable
 
 _HERE = str(Path(__file__).resolve().parent)
@@ -41,7 +41,8 @@ FIGROOT = C.REPO / "FIGURES/preparatory_fig5"
 REGIONS = [("pooled", None), ("DMS", "DMS"), ("VMS", "VMS")]
 N_DEC = 10
 N_BOOT = 5000
-HEAT_CMAP = "magma"          # sequential fraction/active map (distinct from viridis width strip)
+HEAT_CMAP = "magma"          # panel f: sequential mean-fraction map
+BIN_CMAP = ListedColormap(["#0b0b0b", "#f0a848"])  # panel g: per-cell BINARY active (inactive/active)
 
 
 def _panel_f_deciles(A_resp, interp, t, base_mask):
@@ -99,7 +100,7 @@ def main(lick: str = "hit") -> None:
         A_resp = A[f_sel]
         w_resp = interp[f_sel]
         mat, onset, medw, ncell = _panel_f_deciles(A_resp, w_resp, t, base_mask)
-        order_f = _sort_by_onset(onset)
+        order_f = np.argsort(np.where(np.isfinite(medw), medw, np.inf))  # narrow->broad; onset via line
         mat_s = mat[order_f]
         onset_s = onset[order_f]
         medw_s = medw[order_f]
@@ -114,7 +115,7 @@ def main(lick: str = "hit") -> None:
         G = A_non[order_g].astype(float)
         onset_g_sorted = onset_cell[order_g]
 
-        # shared colour scale (panel g uses same scale as f)
+        # panel f uses a mean-fraction scale; panel g is per-cell BINARY (own cmap/scale)
         vmax = float(np.nanmax(mat)) if np.any(np.isfinite(mat)) else 1.0
         vmax = max(vmax, 1e-3)
         norm = Normalize(vmin=0.0, vmax=vmax)
@@ -133,33 +134,38 @@ def main(lick: str = "hit") -> None:
             axF.plot(onset_s[fin], yrows[fin], "-o", color="k", lw=1.4, ms=5, zorder=5)
         axF.axvline(0, color="w", lw=1.0, ls="--")
         axF.set_xlabel(f"time from {lick_lbl} lick (s)")
-        axF.set_ylabel("width decile (sorted by onset)")
+        axF.set_ylabel("width decile (narrow -> broad)")
         axF.set_yticks([])
-        axF.set_title("f  TF-responsive — width-decile onset heatmap",
-                      fontsize=13, loc="left")
+        axF.set_title("f  TF-responsive — deciles narrow->broad; onset = black line",
+                      fontsize=12.5, loc="left")
 
         # median-width viridis strip (rows match sorted order)
         strip = axF.inset_axes([-0.055, 0.0, 0.022, 1.0])
         strip.imshow(medw_s[:, None], aspect="auto", origin="upper", cmap=C.WIDTH_CMAP,
                      interpolation="nearest")
         strip.set_xticks([]); strip.set_yticks([])
-        strip.set_title("width", fontsize=9, pad=3)
+        strip.set_title("narrow", fontsize=8, pad=3)
+        strip.set_xlabel("broad", fontsize=8, labelpad=2)
 
         # ── Panel g ──────────────────────────────────────────────────────────
         axG = fig.add_subplot(gs[0, 1])
         ng = G.shape[0]
-        axG.imshow(G, aspect="auto", cmap=HEAT_CMAP, norm=norm,
+        axG.imshow(G, aspect="auto", cmap=BIN_CMAP, vmin=0, vmax=1,
                    extent=[float(t[0]), float(t[-1]), ng, 0], interpolation="nearest")
         axG.axvline(0, color="w", lw=1.0, ls="--")
         axG.set_xlabel(f"time from {lick_lbl} lick (s)")
-        axG.set_ylabel(f"non-TF cells (n={ng}, sorted by onset)")
+        axG.set_ylabel(f"non-TF cells (n={ng}, sorted by own onset)")
         axG.set_yticks([])
-        axG.set_title("g  non-TF reference — cells by own onset (no width gradient)",
-                      fontsize=13, loc="left")
+        axG.set_title("g  non-TF — per-cell active(|z|>2.576) raster (BINARY)",
+                      fontsize=11.5, loc="left")
 
-        sm = ScalarMappable(norm=norm, cmap=HEAT_CMAP)
-        cb = fig.colorbar(sm, ax=[axF, axG], fraction=0.020, pad=0.015)
-        cb.set_label("fraction active above baseline")
+        smf = ScalarMappable(norm=norm, cmap=HEAT_CMAP)
+        cbf = fig.colorbar(smf, ax=axF, fraction=0.030, pad=0.02)
+        cbf.set_label("f: mean fraction active above baseline", fontsize=10)
+        smg = ScalarMappable(norm=Normalize(0, 1), cmap=BIN_CMAP)
+        cbg = fig.colorbar(smg, ax=axG, fraction=0.030, pad=0.02, ticks=[0.25, 0.75])
+        cbg.ax.set_yticklabels(["inactive", "active"])
+        cbg.set_label("g: unit active (|z|>2.576), per cell", fontsize=10)
 
         fig.suptitle(
             f"Fig5 f/g  preparatory-activity onset — {rname} ({lick_lbl}); "
