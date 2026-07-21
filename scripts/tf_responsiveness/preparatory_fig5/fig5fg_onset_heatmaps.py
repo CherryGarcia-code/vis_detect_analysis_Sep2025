@@ -150,10 +150,9 @@ def main(lick: str = "hit") -> None:
             axF.plot(onset_s[fin], yrows[fin], "-o", color="k", lw=1.4, ms=5, zorder=5)
         axF.axvline(0, color="w", lw=1.0, ls="--")
         axF.set_xlabel(f"time from {lick_lbl} lick (s)")
-        axF.set_ylabel("width decile (narrow -> broad)")
+        axF.set_ylabel("")
         axF.set_yticks([])
-        axF.set_title("f  TF-responsive — deciles narrow->broad; onset = black line",
-                      fontsize=12.5, loc="left")
+        axF.set_title("f  TF-responsive · width deciles", fontsize=12.5, loc="left", pad=8)
 
         # median-width viridis strip (rows match sorted order)
         strip = axF.inset_axes([-0.055, 0.0, 0.022, 1.0])
@@ -172,10 +171,9 @@ def main(lick: str = "hit") -> None:
             axG.plot(onsetg_s[finG], yrows[finG], "-o", color="k", lw=1.4, ms=5, zorder=5)
         axG.axvline(0, color="w", lw=1.0, ls="--")
         axG.set_xlabel(f"time from {lick_lbl} lick (s)")
-        axG.set_ylabel("firing-activity decile (low -> high)")
+        axG.set_ylabel("")
         axG.set_yticks([])
-        axG.set_title("g  non-TF — deciles by firing activity (no kernel width); onset = black line",
-                      fontsize=11.0, loc="left")
+        axG.set_title("g  non-TF · firing-activity deciles (no width)", fontsize=12.5, loc="left", pad=8)
         stripg = axG.inset_axes([-0.055, 0.0, 0.022, 1.0])
         stripg.imshow(medg_s[:, None], aspect="auto", origin="upper", cmap="cividis",
                       interpolation="nearest")

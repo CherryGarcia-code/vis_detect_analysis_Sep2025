@@ -116,6 +116,14 @@ smoothing; pseudoreplication/single-mouse; statistics/multiple-comparisons. Clai
 = 5 SURVIVES + 1 PARTIAL; Claim 2 = 2 SURVIVES + 3 PARTIAL. Every mandatory caveat
 below comes from this pass.
 
+**Non-parametric corroboration.** Replacing the parametric `|z|>2.576` with a
+PERMUTATION single-unit test (active = observed lick-aligned deviation beyond the 99th
+percentile of a random-time shuffle null; no z-scoring) reproduces both conclusions:
+ordering sustained>transient>non-TF (ties in VMS), and per-cell onset~width DMS Spearman
+ρ=−0.41 (p=6e-9, identical to parametric), pooled weak, VMS null. Neither claim depends
+on the parametric significance choice. `permutation_significance_control.py`;
+`FIGURES/preparatory_fig5/permutation/`.
+
 ## 5. Mandatory caveats (carry into any talk/paper)
 
 1. **"Recruited earliest" = "engaged most strongly."** The ordering is a
