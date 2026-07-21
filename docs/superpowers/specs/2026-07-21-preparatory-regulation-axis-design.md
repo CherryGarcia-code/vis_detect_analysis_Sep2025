@@ -87,7 +87,12 @@ cross-animal test.
   that session's regulation coordinate after accounting for animal (mixed model)?
 - **Q3 (cross-animal, region-confound-resistant).** At **matched** behavioural coordinates,
   is the within-session lead the same regardless of animal/region — i.e., is the neural
-  geometry set by behaviour rather than animal? 
+  geometry set by behaviour rather than animal?
+- **Q4 (states — overlay & robustness).** Does behavioural-state occupancy (StimSens /
+  Impulsive / Disengaged) vary along the regulation axis as expected, and does the Q1/Q2
+  regulation effect **survive controlling for state occupancy** (i.e., is it more than a
+  state-mixture proxy)? Trial-level within-session state contrasts are secondary and
+  circularity-caveated. 
 - **Decomposition (mandatory).** For every "lead grows" result, report an **amplitude-
   normalized (timing)** version alongside the **absolute-threshold (magnitude)** version,
   because the parent effect is a magnitude/reliability ordering, not a proven latency one.
@@ -122,8 +127,10 @@ from these arrays. Both **hit** (decision) and **fa** (impulsive) licks are anal
   that exact function; if unavailable, define impulsivity = fraction of trials with a
   `trialoutcome=='fa'` anticipatory lick, computed once and cached.
 - **Circularity guard:** the axis uses **raw** behavioural rates only. Behavioural *state
-  labels* (Impulsive/StimSens/Disengaged) are ~relabels of FA rate and are NEVER used as
-  the axis (interpretive overlay only). [[state_labeler_circularity_caveat]]
+  labels* are computed from lick/outcome features (`f_inapplick`, `f_hit_hard`, …) — hence
+  ~relabels of FA rate, mechanically coupled to the very lick our preparatory measure aligns
+  to — and are NEVER the axis; they enter only as overlay/robustness (§5.4).
+  [[state_labeler_circularity_caveat]]
 
 **4.5 Per-cell preparatory scalars** (from each cell's z-trace, reusing parent windows /
 `preparatory.active_mask`):
@@ -134,6 +141,15 @@ from these arrays. Both **hit** (decision) and **fa** (impulsive) licks are anal
 Both are per-cell, so the primary stat (E2) aggregates them with a cell-level mixed model
 rather than a per-session median — necessary because per-session **sustained** N is only
 ~1–4 cells (§9), too few for a stable per-session sustained median.
+
+**4.6 Behavioural state tags (role-a overlay/robustness).** Per-**trial** state labels exist
+for every session (`data/cache/state_tags/<subj>/<date>.csv`; `trial_idx`, `state_label` ∈
+StimSens / Impulsive / Disengaged / Abort; BG_046 46 / BG_039 30 / BG_031 42 sessions).
+Two derived quantities are used: (i) per-session **state occupancy** = fraction of trials in
+each state (cache-free); (ii) per-lick **trial state**, joinable to licks by `trial_idx`, for
+the optional trial-level contrast (§5.4-S3). ⚠️ `state_label` is derived from lick/outcome
+features, so it is mechanically coupled to the lick alignment — states serve overlay/
+robustness, never the primary axis.
 
 ---
 
@@ -170,6 +186,22 @@ sustained median) and test whether it differs by animal/region:
 `scalar ~ group * animal` within matched cells, and a matched-cell-level
 `lead ~ (1 | matched_cell) + animal`. If behaviour sets geometry, the animal/region term is
 ~0. Drift- and region-confound-resistant, doable now with 3 animals.
+
+### 5.4 Behavioural states — overlay & robustness (role a)
+
+- **S1 (overlay, cache-free).** Plot per-session state occupancy (%StimSens / %Impulsive /
+  %Disengaged) against the regulation coordinate, and colour the E1/E2 session points by
+  dominant state. Makes the behaviour↔state tie explicit (well-regulated ⇒ more StimSens).
+  Use `config.STATE_LABEL_COLORS`. [[reference_state_label_colors]]
+- **S2 (robustness, cache-free — the key state use).** Re-fit the E2 model adding session
+  state-occupancy fractions as covariates; the `group:regulation` interaction (Q1/Q2) must
+  **survive**. If it vanishes, the regulation effect was just a state-mixture proxy.
+- **S3 (optional, heavier — bridge to future).** Trial-level state-conditioned preparatory
+  recompute: rebuild per-cell z-traces from spikes using only **StimSens** licks (and
+  separately Impulsive), then compare the sustained-vs-non-TF lead across states. Requires a
+  state-split recompute (local ProcessPool, like `build_prep_cache.py`) and further thins
+  per-cell trial counts; Disengaged excluded (near-zero hits). Flagged, not required for the
+  first pass.
 
 **Sign convention:** lead > 0 ⇒ sustained leads/exceeds non-TF (magnitude: larger ramp;
 timing: earlier onset ⇒ define as nonTF_onset − sustained_onset).
@@ -209,6 +241,8 @@ timing: earlier onset ⇒ define as nonTF_onset − sustained_onset).
 - **Figures** (`FIGURES/preparatory_fig5/regulation/{pooled,DMS,VMS}/`): E1 lead-vs-regulation
   curve; E2 within-session-lead scatter + fit (stage as colour overlay only); E3
   behaviour-matched cross-animal panel; per-animal slope panel; magnitude-vs-timing pair.
+- **State overlay/robustness (§5.4):** `.../regulation/states/` — occupancy-vs-regulation
+  figure (S1) + state-covariate robustness table (S2); S3 artifacts only if run.
 - **Stats CSVs** next to each figure; **null** results under `.../regulation/hardening/`.
 - **Write-up:** `docs/science/2026-07-21-preparatory-vs-regulation.md` (honest, caveated,
   null-friendly). Update memory `prep_activity_transient_sustained_jul2026` with the outcome.
@@ -220,8 +254,14 @@ timing: earlier onset ⇒ define as nonTF_onset − sustained_onset).
 - Tracked-unit within-neuron learning trajectories (needs curation / better tracker).
 - Transient-class per-bin split (N too small).
 - Movement-regressed / change-aligned re-derivation (parent's open control; future).
-- Per-behavioural-STATE and state×learning designs (state-null already; circularity;
-  sparse Disengaged hits) — parked.
+- **State-conditioned analyses & tracking alignment (future, user-flagged).** Restricting to
+  a **single** behavioural state (e.g. StimSens-only, or Impulsive-only) before comparing
+  across learning should remove the state-mixture confound and make within-neuron
+  **tracking-across-learning** more apples-to-apples (same behavioural mode at both ends).
+  Enabled by §5.4-S3's state-split recompute; pairs with the tracking-curation work. The
+  §5.4 overlay/robustness (S1/S2) IS in scope now; deeper single-state-only designs are not.
+- Full state×learning factorial designs (state-null already; circularity; sparse Disengaged
+  hits) — parked.
 - Any compute over the X: (Samba) drive; any non-Opus/Fable subagent (project rules).
 
 ---
