@@ -81,6 +81,17 @@ def main(lick: str = "hit") -> None:
     resp = np.asarray(D["resp"], bool)
     region = D["region"].astype(str)
     interp = np.asarray(D["interp_fwhm"], float)
+    meta_subj = D["meta_subject"].astype(str)
+    meta_sess = D["meta_session"].astype(str)
+    meta_unit = np.asarray(D["meta_unit"], int)
+    # firing activity (n_spikes) per cell from the registry — non-TF cells have NO kernel
+    # width, so firing activity is the continuous analog used to bin panel g (faithful 5g).
+    nsp_map = {}
+    for _subj, _ in C.MICE:
+        for r in C.load_registry(_subj).itertuples():
+            nsp_map[(_subj, str(r.session), int(r.unit))] = float(r.n_spikes)
+    nspikes = np.array([nsp_map.get((meta_subj[i], meta_sess[i], meta_unit[i]), np.nan)
+                        for i in range(len(meta_unit))])
 
     A = active_mask(z)
     base_mask = (t >= C.BASE_FRAC_WIN[0]) & (t <= C.BASE_FRAC_WIN[1])
@@ -106,14 +117,19 @@ def main(lick: str = "hit") -> None:
         medw_s = medw[order_f]
         ncell_s = ncell[order_f]
 
-        # Panel g population: TF-non-responsive cells, own pre-lick onset
-        g_sel = rmask & (~resp)
+        # Panel g population: TF-non-responsive cells binned into deciles by FIRING
+        # ACTIVITY (n_spikes) — non-TF cells have no kernel width, so firing activity is
+        # the continuous analog; g is a FRACTION heatmap parallel to f (faithful Fig 5g).
+        g_sel = rmask & (~resp) & np.isfinite(nspikes)
         A_non = A[g_sel]
-        z_non = z[g_sel]
-        onset_cell = np.array([cell_onset(t, z_non[i]) for i in range(A_non.shape[0])])
-        order_g = _sort_by_onset(onset_cell)
-        G = A_non[order_g].astype(float)
-        onset_g_sorted = onset_cell[order_g]
+        nsp_non = nspikes[g_sel]
+        ng = int(g_sel.sum())
+        matg, onsetg, medg, ncellg = _panel_f_deciles(A_non, nsp_non, t, base_mask)
+        order_g = np.argsort(np.where(np.isfinite(medg), medg, np.inf))  # low->high firing
+        matg_s = matg[order_g]
+        onsetg_s = onsetg[order_g]
+        medg_s = medg[order_g]
+        ncellg_s = ncellg[order_g]
 
         # panel f uses a mean-fraction scale; panel g is per-cell BINARY (own cmap/scale)
         vmax = float(np.nanmax(mat)) if np.any(np.isfinite(mat)) else 1.0
@@ -147,30 +163,35 @@ def main(lick: str = "hit") -> None:
         strip.set_title("narrow", fontsize=8, pad=3)
         strip.set_xlabel("broad", fontsize=8, labelpad=2)
 
-        # ── Panel g ──────────────────────────────────────────────────────────
+        # ── Panel g (faithful 5g: fraction heatmap; non-TF binned by firing activity) ──
         axG = fig.add_subplot(gs[0, 1])
-        ng = G.shape[0]
-        axG.imshow(G, aspect="auto", cmap=BIN_CMAP, vmin=0, vmax=1,
-                   extent=[float(t[0]), float(t[-1]), ng, 0], interpolation="nearest")
+        axG.imshow(matg_s, aspect="auto", cmap=HEAT_CMAP, norm=norm,
+                   extent=[float(t[0]), float(t[-1]), N_DEC, 0], interpolation="nearest")
+        finG = np.isfinite(onsetg_s)
+        if finG.any():
+            axG.plot(onsetg_s[finG], yrows[finG], "-o", color="k", lw=1.4, ms=5, zorder=5)
         axG.axvline(0, color="w", lw=1.0, ls="--")
         axG.set_xlabel(f"time from {lick_lbl} lick (s)")
-        axG.set_ylabel(f"non-TF cells (n={ng}, sorted by own onset)")
+        axG.set_ylabel("firing-activity decile (low -> high)")
         axG.set_yticks([])
-        axG.set_title("g  non-TF — per-cell active(|z|>2.576) raster (BINARY)",
-                      fontsize=11.5, loc="left")
+        axG.set_title("g  non-TF — deciles by firing activity (no kernel width); onset = black line",
+                      fontsize=11.0, loc="left")
+        stripg = axG.inset_axes([-0.055, 0.0, 0.022, 1.0])
+        stripg.imshow(medg_s[:, None], aspect="auto", origin="upper", cmap="cividis",
+                      interpolation="nearest")
+        stripg.set_xticks([]); stripg.set_yticks([])
+        stripg.set_title("low", fontsize=8, pad=3)
+        stripg.set_xlabel("high", fontsize=8, labelpad=2)
 
-        smf = ScalarMappable(norm=norm, cmap=HEAT_CMAP)
-        cbf = fig.colorbar(smf, ax=axF, fraction=0.030, pad=0.02)
-        cbf.set_label("f: mean fraction active above baseline", fontsize=10)
-        smg = ScalarMappable(norm=Normalize(0, 1), cmap=BIN_CMAP)
-        cbg = fig.colorbar(smg, ax=axG, fraction=0.030, pad=0.02, ticks=[0.25, 0.75])
-        cbg.ax.set_yticklabels(["inactive", "active"])
-        cbg.set_label("g: unit active (|z|>2.576), per cell", fontsize=10)
+        # shared fraction colorbar — f and g are BOTH fraction-active heatmaps (faithful 5f/g)
+        sm = ScalarMappable(norm=norm, cmap=HEAT_CMAP)
+        cb = fig.colorbar(sm, ax=[axF, axG], fraction=0.020, pad=0.02)
+        cb.set_label("fraction active above baseline")
 
         fig.suptitle(
             f"Fig5 f/g  preparatory-activity onset — {rname} ({lick_lbl}); "
-            f"f: {int(f_sel.sum())} TF-responsive cells / {N_DEC} width deciles; "
-            f"g: {ng} non-TF cells",
+            f"f: {int(f_sel.sum())} TF-responsive / width deciles; "
+            f"g: {ng} non-TF / firing-activity deciles",
             fontsize=13, y=1.00)
 
         outdir = FIGROOT / rname
@@ -185,16 +206,17 @@ def main(lick: str = "hit") -> None:
             rows.append({"panel": "f", "region": rname, "row_id": i,
                          "decile_median_width": float(medw_s[i]) if np.isfinite(medw_s[i]) else np.nan,
                          "onset_s": onset_s[i], "n_units": int(ncell_s[i])})
-        for i in range(ng):
+        for i in range(N_DEC):
             rows.append({"panel": "g", "region": rname, "row_id": i,
                          "decile_median_width": np.nan,
-                         "onset_s": onset_g_sorted[i], "n_units": 1})
+                         "decile_median_nspikes": float(medg_s[i]) if np.isfinite(medg_s[i]) else np.nan,
+                         "onset_s": onsetg_s[i], "n_units": int(ncellg_s[i])})
         pd.DataFrame(rows).to_csv(outdir / f"fig5fg_{lick}_stats.csv", index=False)
 
         n_on_f = int(np.isfinite(onset).sum())
-        n_on_g = int(np.isfinite(onset_cell).sum())
-        print(f"[{rname}] f: {int(f_sel.sum())} resp cells, {n_on_f}/{N_DEC} deciles with finite onset; "
-              f"g: {ng} non-TF cells, {n_on_g} with finite onset", flush=True)
+        n_on_g = int(np.isfinite(onsetg).sum())
+        print(f"[{rname}] f: {int(f_sel.sum())} resp, {n_on_f}/{N_DEC} width-deciles w/ onset; "
+              f"g: {ng} non-TF, {n_on_g}/{N_DEC} firing-deciles w/ onset", flush=True)
 
     print(f"wrote {FIGROOT}/{{pooled,DMS,VMS}}/fig5fg_{lick}.{{png,pdf}} (+_stats.csv)", flush=True)
 
