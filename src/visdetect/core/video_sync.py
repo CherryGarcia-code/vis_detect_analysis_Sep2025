@@ -1919,6 +1919,33 @@ def load_video_sync(
         return json.load(f)
 
 
+def archive_sync_artifacts(
+    session_name: str,
+    subject: Optional[str] = None,
+    sync_dir: Optional[str] = None,
+    when: Optional[str] = None,
+) -> Optional[str]:
+    """Move existing sync + anchor JSONs into ``<sync_dir>/_archive/<when>/``.
+
+    Called before a re-fit so a re-tag never silently clobbers a prior fit
+    (spec migration policy). Returns the archive dir, or None if nothing moved.
+    """
+    import shutil
+    from visdetect.analysis.config import subject_video_sync_dir, canonical_camera_session
+    out_dir = sync_dir or subject_video_sync_dir(subject)
+    sn = canonical_camera_session(session_name)
+    when = when or _dt.date.today().isoformat()
+    moved = False
+    arch = os.path.join(out_dir, "_archive", when)
+    for suffix in ("_video_sync.json", "_anchor.json"):
+        src = os.path.join(out_dir, f"{sn}{suffix}")
+        if os.path.exists(src):
+            os.makedirs(arch, exist_ok=True)
+            shutil.move(src, os.path.join(arch, f"{sn}{suffix}"))
+            moved = True
+    return arch if moved else None
+
+
 # =====================================================================
 # Diagnostic figure
 # =====================================================================
