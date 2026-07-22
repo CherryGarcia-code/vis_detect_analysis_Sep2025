@@ -941,6 +941,57 @@ def find_camera_files(
 
 
 # =====================================================================
+# Local video staging (read-only X: source -> local scratch)
+# =====================================================================
+
+
+def _staging_dir(session_name: str, subject: Optional[str], staging_dir: Optional[str]) -> str:
+    from visdetect.analysis.config import VIDEO_STAGING_DIR, SUBJECT, canonical_camera_session
+    base = staging_dir or VIDEO_STAGING_DIR
+    return os.path.join(base, subject or SUBJECT, canonical_camera_session(session_name))
+
+
+def stage_session_video(
+    session_name: str,
+    subject: Optional[str] = None,
+    cams=("eye_cam",),
+    camera_root: Optional[str] = None,
+    staging_dir: Optional[str] = None,
+    force: bool = False,
+) -> Dict[str, Dict[str, str]]:
+    """Copy a session's camera video+metadata from X: (read-only) to local scratch.
+
+    Bulk sequential read only; never writes to CAMERA_ROOT. Returns the same
+    dict shape as find_camera_files but with LOCAL paths.
+    """
+    import shutil
+    src = find_camera_files(session_name, camera_root=camera_root, subject=subject)
+    dst_dir = _staging_dir(session_name, subject, staging_dir)
+    os.makedirs(dst_dir, exist_ok=True)
+    out: Dict[str, Dict[str, str]] = {}
+    for cam in cams:
+        if cam not in src:
+            continue
+        out[cam] = {}
+        for kind, spath in src[cam].items():
+            dpath = os.path.join(dst_dir, os.path.basename(spath))
+            if force or not os.path.exists(dpath):
+                shutil.copy2(spath, dpath)  # copy2, never move -> source intact
+            out[cam][kind] = dpath
+    return out
+
+
+def unstage_session_video(
+    session_name: str, subject: Optional[str] = None,
+    staging_dir: Optional[str] = None) -> None:
+    """Delete the local staged copy for a session (frees disk)."""
+    import shutil
+    dst_dir = _staging_dir(session_name, subject, staging_dir)
+    if os.path.isdir(dst_dir):
+        shutil.rmtree(dst_dir)
+
+
+# =====================================================================
 # Luminance extraction (diagnostic / full-session)
 # =====================================================================
 
