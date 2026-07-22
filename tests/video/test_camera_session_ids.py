@@ -29,3 +29,28 @@ def test_subject_dirs_are_namespaced(monkeypatch):
     assert d046.endswith(os.path.join("video_sync", "BG_046"))
     assert d031.endswith(os.path.join("video_sync", "BG_031"))
     assert d046 != d031
+
+
+from visdetect.core import video_sync
+
+
+def _make_cam_dir(tmp_path, subject, token, cams=("Eye_cam", "Front_cam")):
+    d = tmp_path / f"{subject}_{token}"
+    d.mkdir()
+    for c in cams:
+        (d / f"{subject}_{token}_{c}.mp4").write_bytes(b"x")
+        (d / f"{subject}_{token}_{c}_metadata.csv").write_text("Timestamp (ms)\n")
+    return d
+
+
+def test_find_camera_files_6digit_subject(tmp_path):
+    _make_cam_dir(tmp_path, "BG_031", "050325")
+    files = video_sync.find_camera_files(
+        "050325", camera_root=str(tmp_path), subject="BG_031")
+    assert "eye_cam" in files and "front_cam" in files
+    assert files["eye_cam"]["video"].endswith("Eye_cam.mp4")
+
+
+def test_camera_dir_to_session_tolerates_suffix():
+    assert video_sync.camera_dir_to_session("BG_039_010425_b") == "01042025"
+    assert video_sync.camera_dir_to_session("BG_046_010725") == "01072025"

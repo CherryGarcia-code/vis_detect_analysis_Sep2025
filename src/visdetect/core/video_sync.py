@@ -775,20 +775,17 @@ def write_reconstructed_metadata(csv_path: str, frame_count: int, fps: float) ->
     df.to_csv(csv_path, index=False)
 
 
-def camera_dir_to_session(dirname: str, subject: str = "BG_046") -> str:
-    """Convert camera directory name ``BG_046_DDMMYY`` -> session ``DDMMYYYY``."""
-    parts = dirname.split("_")
-    date6 = parts[-1]  # e.g. "010725"
-    if len(date6) != 6:
-        raise ValueError(f"Cannot parse 6-digit date from '{dirname}'")
-    dd, mm, yy = date6[:2], date6[2:4], date6[4:6]
-    return f"{dd}{mm}20{yy}"
+def camera_dir_to_session(dirname: str, subject: str = None) -> str:
+    """Convert a camera directory name (``BG_046_DDMMYY``, possibly with a
+    re-record suffix like ``BG_039_010425_b``) to session ``DDMMYYYY``."""
+    from visdetect.analysis.config import canonical_camera_session
+    return canonical_camera_session(dirname)
 
 
 def find_camera_files(
     session_name: str,
     camera_root: Optional[str] = None,
-    subject: str = "BG_046",
+    subject: str = None,
 ) -> Dict[str, Dict[str, str]]:
     """Locate video + metadata files for a session.
 
@@ -797,15 +794,13 @@ def find_camera_files(
         {"eye_cam": {"video": "path.mp4", "metadata": "path.csv"},
          "front_cam": {"video": "path.mp4", "metadata": "path.csv"}}
 
-    Note: keys are only present if both video and metadata files are found.
-    Callers should check ``"eye_cam" in result`` before accessing.
+    Keys are present only if both video and metadata files are found.
     """
+    from visdetect.analysis.config import SUBJECT, camera_dir_token
     root = camera_root or CAMERA_ROOT
-
-    sn = str(session_name).zfill(8)
-    dd, mm, yyyy = sn[:2], sn[2:4], sn[4:]
-    yy = yyyy[2:]
-    cam_dir = os.path.join(root, f"{subject}_{dd}{mm}{yy}")
+    subject = subject or SUBJECT
+    token = camera_dir_token(session_name)
+    cam_dir = os.path.join(root, f"{subject}_{token}")
 
     if not os.path.isdir(cam_dir):
         raise FileNotFoundError(f"Camera directory not found: {cam_dir}")
