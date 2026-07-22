@@ -864,6 +864,28 @@ def write_reconstructed_metadata(csv_path: str, frame_count: int, fps: float) ->
     df.to_csv(csv_path, index=False)
 
 
+def local_reconstructed_metadata_path(
+    session_name: str, cam_label: str, subject: Optional[str] = None) -> str:
+    """LOCAL path for a reconstructed metadata CSV (never on X:/CAMERA_ROOT).
+
+    ``<subject_video_sync_dir>/<DDMMYYYY>_<cam_label>_metadata.reconstructed.csv``.
+    """
+    from visdetect.analysis.config import subject_video_sync_dir, canonical_camera_session
+    sn = canonical_camera_session(session_name)
+    return os.path.join(
+        subject_video_sync_dir(subject), f"{sn}_{cam_label}_metadata.reconstructed.csv")
+
+
+def write_local_reconstructed_metadata(
+    session_name: str, cam_label: str, frame_count: int, fps: float,
+    subject: Optional[str] = None) -> str:
+    """Write reconstructed steady-fps metadata to LOCAL cache (never X:)."""
+    out = local_reconstructed_metadata_path(session_name, cam_label, subject)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    write_reconstructed_metadata(out, frame_count, fps)  # existing writer, local path
+    return out
+
+
 def camera_dir_to_session(dirname: str, subject: str = None) -> str:
     """Convert a camera directory name (``BG_046_DDMMYY``, possibly with a
     re-record suffix like ``BG_039_010425_b``) to session ``DDMMYYYY``."""
@@ -905,6 +927,15 @@ def find_camera_files(
                 meta = os.path.join(cam_dir, f)
         if video and meta:
             result[cam_label] = {"video": video, "metadata": meta}
+
+    # Prefer a LOCAL reconstructed metadata CSV (X: stays read-only). The video
+    # path always stays on CAMERA_ROOT; only the metadata is redirected local.
+    from visdetect.analysis.config import canonical_camera_session
+    sn = canonical_camera_session(session_name)
+    for cam_label in list(result.keys()):
+        local_meta = local_reconstructed_metadata_path(sn, cam_label, subject)
+        if os.path.exists(local_meta):
+            result[cam_label]["metadata"] = local_meta
 
     return result
 
