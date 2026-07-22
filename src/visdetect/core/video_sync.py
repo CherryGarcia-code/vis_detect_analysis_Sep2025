@@ -542,6 +542,20 @@ class SyncResult:
         if self.detection_method == "manual_slope_fit":
             return "good" if (self.slope > 0 and self.n_anchors >= 2) else "failed"
 
+        if self.detection_method == "manual_multianchor":
+            from visdetect.analysis.constants import (
+                VIDEO_SYNC_MANUAL_GOOD_CV_MS, VIDEO_SYNC_MANUAL_REVIEW_CV_MS,
+                VIDEO_SYNC_MANUAL_MIN_ANCHORS, VIDEO_SYNC_MAX_DRIFT_PPM,
+            )
+            if self.slope <= 0 or self.n_anchors < VIDEO_SYNC_MANUAL_MIN_ANCHORS:
+                return "failed"
+            low_drift = abs(self.slope_ppm) < VIDEO_SYNC_MAX_DRIFT_PPM
+            if self.cv_rmse_ms < VIDEO_SYNC_MANUAL_GOOD_CV_MS and low_drift:
+                return "good"
+            if self.cv_rmse_ms < VIDEO_SYNC_MANUAL_REVIEW_CV_MS and low_drift:
+                return "review"
+            return "failed"
+
         good_rmse = self.rmse_ms < _GOOD_RMSE_MS
         good_maxres = self.max_residual_ms < VIDEO_SYNC_MAX_RESIDUAL_MS
         good_dw = _GOOD_DW_RANGE[0] <= self.durbin_watson <= _GOOD_DW_RANGE[1]
@@ -669,6 +683,81 @@ def fit_2anchor_clock(
         slope_ppm=float((slope - 1.0) * 1e6),
         durbin_watson=2.0,  # N/A for this fit type; report the neutral value
         detection_method="manual_slope_fit",
+    )
+
+
+def _loo_cv(cam_s: np.ndarray, nidaq_s: np.ndarray) -> float:
+    """Leave-one-out CV RMSE (ms) for the linear clock. Requires n >= 3.
+
+    For sparse manual anchors the dense 5-fold ``_temporal_cv`` leaves ~1
+    anchor/fold (and returns its 999 sentinel below 20 anchors), so we use
+    LOO: fit on all-but-one, predict the held-out anchor, RMS the errors.
+    """
+    n = len(cam_s)
+    if n < 3:
+        return float("nan")
+    errs = []
+    for i in range(n):
+        m = np.ones(n, dtype=bool)
+        m[i] = False
+        A = np.column_stack([cam_s[m], np.ones(m.sum())])
+        params, _, _, _ = np.linalg.lstsq(A, nidaq_s[m], rcond=None)
+        pred = params[0] * cam_s[i] + params[1]
+        errs.append(((nidaq_s[i] - pred) * 1000.0) ** 2)
+    return float(np.sqrt(np.mean(errs)))
+
+
+def fit_multianchor_clock(
+    anchors: List[dict],
+    n_baseline_on: int,
+    outlier_sigma: float = VIDEO_SYNC_OUTLIER_SIGMA,
+) -> SyncResult:
+    """Fit a validated linear clock from >=3 manual anchors (any event type).
+
+    Orientation matches ``camera_to_nidaq``: ``nidaq_s = slope*cam_s + offset``
+    where ``cam_s = anchor['video_time_s']`` and ``nidaq_s`` is the anchor's
+    ``nidaq_event_s`` (falling back to ``nidaq_baseline_on_s`` for legacy).
+    Theil-Sen fit -> MAD outlier rejection -> LOO CV. detection_method =
+    "manual_multianchor". Raises ValueError on <3 anchors or non-positive slope.
+    """
+    from scipy.stats import theilslopes
+    if len(anchors) < 3:
+        raise ValueError(
+            f"fit_multianchor_clock needs >=3 anchors; got {len(anchors)}")
+
+    cam_s = np.array([float(a["video_time_s"]) for a in anchors], dtype=np.float64)
+    nidaq_s = np.array(
+        [float(a.get("nidaq_event_s", a.get("nidaq_baseline_on_s"))) for a in anchors],
+        dtype=np.float64)
+    order = np.argsort(cam_s)
+    cam_s, nidaq_s = cam_s[order], nidaq_s[order]
+
+    slope, intercept, _, _ = theilslopes(nidaq_s, cam_s)
+    resid_ms = (nidaq_s - (slope * cam_s + intercept)) * 1000.0
+    mad = np.median(np.abs(resid_ms - np.median(resid_ms))) or 1.0
+    keep = np.abs(resid_ms - np.median(resid_ms)) <= outlier_sigma * 1.4826 * mad
+    if keep.sum() >= 3 and keep.sum() < len(keep):
+        cam_s, nidaq_s = cam_s[keep], nidaq_s[keep]
+        slope, intercept, _, _ = theilslopes(nidaq_s, cam_s)
+        resid_ms = (nidaq_s - (slope * cam_s + intercept)) * 1000.0
+
+    if slope <= 0:
+        raise ValueError(f"Computed slope {slope} is non-positive; check anchors.")
+
+    return SyncResult(
+        slope=float(slope),
+        offset=float(intercept),
+        n_anchors=int(len(cam_s)),
+        n_baseline_on=int(n_baseline_on),
+        rmse_ms=float(np.sqrt(np.mean(resid_ms ** 2))),
+        max_residual_ms=float(np.max(np.abs(resid_ms))),
+        cv_rmse_ms=_loo_cv(cam_s, nidaq_s),
+        slope_ppm=float((slope - 1.0) * 1e6),
+        durbin_watson=2.0,
+        detection_method="manual_multianchor",
+        residuals_ms=resid_ms,
+        matched_cam_ms=cam_s * 1000.0,
+        matched_nidaq_s=nidaq_s,
     )
 
 

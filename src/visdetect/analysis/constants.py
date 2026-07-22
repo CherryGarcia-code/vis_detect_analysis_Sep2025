@@ -167,6 +167,11 @@ VIDEO_SYNC_DERIV_PRE_FRAMES: int = 20       # Frames before expected onset for b
 VIDEO_SYNC_DERIV_SEARCH_FRAMES: int = 30    # Frames before/after expected onset to search
 VIDEO_SYNC_OUTLIER_N_ITER: int = 10         # Iterative MAD outlier rejection passes
 VIDEO_SYNC_OUTLIER_SIGMA: float = 3.0       # MAD multiplier for outlier rejection
+
+# Sparse manual multi-anchor sync (video_sync.fit_multianchor_clock)
+VIDEO_SYNC_MANUAL_GOOD_CV_MS: float = 20.0    # cv_rmse below this = "good"
+VIDEO_SYNC_MANUAL_REVIEW_CV_MS: float = 40.0  # cv_rmse below this = "review"
+VIDEO_SYNC_MANUAL_MIN_ANCHORS: int = 3        # need >=3 for a LOO-validated fit
 # Default ROI for BG_046 eye camera: two strips of background glow to the
 # right of the frame, above and below the mouse head (which blocks y~250-750).
 # Multi-polygon format: [[[x,y], ...], [[x,y], ...]]
