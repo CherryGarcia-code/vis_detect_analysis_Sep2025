@@ -2776,6 +2776,19 @@ def _migrate_anchor_v1_to_v2(d: dict) -> dict:
     }
 
 
+def _migrate_anchor_to_v3(d: dict) -> dict:
+    """Add event_type/nidaq_event_s to v2 baseline-only anchors (idempotent)."""
+    d = _migrate_anchor_v1_to_v2(d)
+    if d.get("schema_version") == 3:
+        return d
+    for a in d["anchors"]:
+        a.setdefault("event_type", "baseline_on")
+        a.setdefault("nidaq_event_s", float(a.get("nidaq_baseline_on_s")))
+    d = dict(d)
+    d["schema_version"] = 3
+    return d
+
+
 def compute_implied_offset(anchor: dict) -> float:
     """Return ``video_time_s - nidaq_baseline_on_s`` for a single anchor entry.
 
@@ -2802,6 +2815,28 @@ def _build_anchor_entry(
     }
 
 
+def _build_change_anchor_entry(
+    change_on_s: float,
+    ts_ms: np.ndarray,
+    trial_index: int,
+    frame_idx: int,
+    change_size: float,
+    outcome: str,
+) -> dict:
+    """Build a v3 change-onset anchor entry from a clicked frame index."""
+    fi = int(frame_idx)
+    return {
+        "trial_index": int(trial_index),
+        "event_type": "change_on",
+        "nidaq_event_s": float(change_on_s),
+        "change_size": float(change_size),
+        "outcome": str(outcome),
+        "video_frame_idx": fi,
+        "video_time_s": float(ts_ms[fi] / 1000.0),
+        "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
+    }
+
+
 def _build_v2_anchor_file(
     session_name: str,
     fps: float,
@@ -2821,13 +2856,16 @@ def _build_v2_anchor_file(
 def _merge_anchor_into_file(base: dict, new_entry: dict) -> dict:
     """Return a copy of *base* with *new_entry* merged into its anchors list.
 
-    Replaces any existing anchor with the same ``trial_index``. The result is
-    sorted by ``trial_index``.
+    Replaces an existing anchor with the same ``(trial_index, event_type)``
+    (default event_type ``baseline_on`` for legacy entries). Sorted by
+    ``(trial_index, event_type)``.
     """
-    new_idx = int(new_entry["trial_index"])
-    kept = [a for a in base["anchors"] if int(a["trial_index"]) != new_idx]
+    def key(a):
+        return (int(a["trial_index"]), a.get("event_type", "baseline_on"))
+    nk = key(new_entry)
+    kept = [a for a in base["anchors"] if key(a) != nk]
     kept.append(new_entry)
-    kept.sort(key=lambda a: int(a["trial_index"]))
+    kept.sort(key=key)
     out = dict(base)
     out["anchors"] = kept
     return out
@@ -2855,18 +2893,18 @@ def load_anchor(
     session_name: str,
     sync_dir: Optional[str] = None,
 ) -> Optional[dict]:
-    """Read the anchor JSON for *session_name* and return it in v2 form.
+    """Read the anchor JSON for *session_name* and return it in v3 form.
 
-    Legacy v1 JSONs are migrated in memory (the on-disk file is NOT rewritten
-    by this read; it gets rewritten next time :func:`save_anchor` is called).
-    Returns ``None`` if no file exists.
+    Legacy v1/v2 JSONs are migrated in memory (the on-disk file is NOT
+    rewritten by this read; it gets rewritten next time :func:`save_anchor`
+    is called). Returns ``None`` if no file exists.
     """
     path = _anchor_path(session_name, sync_dir=sync_dir)
     if not os.path.exists(path):
         return None
     with open(path, "r") as f:
         raw = json.load(f)
-    return _migrate_anchor_v1_to_v2(raw)
+    return _migrate_anchor_to_v3(raw)
 
 
 def compute_predicted_frame_idx(

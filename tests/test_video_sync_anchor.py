@@ -45,8 +45,8 @@ def test_load_anchor_returns_saved_dict(tmp_path):
 
     loaded = vs.load_anchor("123", sync_dir=str(tmp_path))
 
-    # load_anchor now migrates v1 -> v2 in memory; compare to migrated form.
-    assert loaded == vs._migrate_anchor_v1_to_v2(anchor)
+    # load_anchor now migrates legacy anchors up to v3 in memory; compare form.
+    assert loaded == vs._migrate_anchor_to_v3(anchor)
 
 
 def test_load_anchor_returns_none_when_missing(tmp_path):
@@ -374,7 +374,7 @@ def test_load_anchor_migrates_v1_file_in_memory(tmp_path):
 
     loaded = vs.load_anchor("09092025", sync_dir=str(tmp_path))
 
-    assert loaded["schema_version"] == 2
+    assert loaded["schema_version"] == 3
     assert loaded["anchors"][0]["trial_index"] == 0
     # On-disk file should NOT have been rewritten (load is read-only)
     on_disk = json.loads(p.read_text())
