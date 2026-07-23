@@ -20,6 +20,23 @@ def test_archive_noop_when_nothing_exists(tmp_path):
     assert vs.archive_sync_artifacts("01072025", sync_dir=str(tmp_path)) is None
 
 
+def test_archive_include_anchor_false_keeps_live_anchor(tmp_path):
+    # A re-fit must archive only the sync JSON and leave the anchor it reads
+    # in place, so fit_sync is repeatable.
+    d = tmp_path
+    (d / "01072025_video_sync.json").write_text(json.dumps({"session_name": "01072025"}))
+    (d / "01072025_anchor.json").write_text(json.dumps({"anchors": []}))
+    arch = vs.archive_sync_artifacts(
+        "01072025", sync_dir=str(d), when="2026-07-21", include_anchor=False)
+    assert arch is not None
+    # sync JSON moved to the archive...
+    assert not (d / "01072025_video_sync.json").exists()
+    assert os.path.exists(os.path.join(arch, "01072025_video_sync.json"))
+    # ...but the live anchor stays put and is NOT archived.
+    assert (d / "01072025_anchor.json").exists()
+    assert not os.path.exists(os.path.join(arch, "01072025_anchor.json"))
+
+
 def test_reconstruction_writes_local_not_camera_root(tmp_path, monkeypatch):
     # Camera root is treated as READ-ONLY: a reconstructed CSV must NOT appear there.
     cam_root = tmp_path / "X"

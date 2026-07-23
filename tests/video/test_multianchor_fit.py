@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 from visdetect.core import video_sync as vs
 
 
@@ -57,3 +56,18 @@ def test_quality_manual_multianchor_review_and_failed():
     assert good.quality == "good"
     assert review.quality == "review"
     assert failed.quality == "failed"
+
+
+def test_quality_manual_multianchor_strict_boundaries():
+    # Thresholds are strict `<`: cv==GOOD_CV (20) is NOT good but IS review;
+    # cv==REVIEW_CV (40) is NOT review -> failed.
+    at_good = vs.SyncResult(slope=1.0, offset=0.0, n_anchors=6, n_baseline_on=6,
+                            rmse_ms=10, max_residual_ms=15, cv_rmse_ms=20.0,
+                            slope_ppm=5, durbin_watson=2.0,
+                            detection_method="manual_multianchor")
+    at_review = vs.SyncResult(slope=1.0, offset=0.0, n_anchors=6, n_baseline_on=6,
+                              rmse_ms=10, max_residual_ms=15, cv_rmse_ms=40.0,
+                              slope_ppm=5, durbin_watson=2.0,
+                              detection_method="manual_multianchor")
+    assert at_good.quality == "review"
+    assert at_review.quality == "failed"

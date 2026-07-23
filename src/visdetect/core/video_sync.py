@@ -585,6 +585,12 @@ class SyncResult:
             return "failed"
 
     def to_dict(self) -> dict:
+        # ORIENTATION CONTRACT: the persisted slope/offset orientation is
+        # detection_method-dependent. ``manual_multianchor`` / ``derivative``
+        # store  nidaq = slope*cam + offset  (the orientation camera_to_nidaq /
+        # nidaq_to_camera assume); legacy ``manual_slope_fit`` stores the
+        # INVERSE  video = slope*nidaq + offset. Downstream consumers must
+        # branch on detection_method before applying those converters.
         d = {
             "slope": self.slope,
             "offset": self.offset,
@@ -1932,14 +1938,36 @@ def select_anchors(
 # =====================================================================
 
 
+# ---------------------------------------------------------------------------
+# ORIENTATION CONTRACT (read before applying these converters)
+# ---------------------------------------------------------------------------
+# The ``slope``/``offset`` stored on a SyncResult are NOT a single fixed
+# orientation — they depend on ``detection_method``:
+#   * ``derivative`` / ``manual_multianchor``  -> store  nidaq = slope*cam + offset
+#       (the orientation the two converters below ASSUME).
+#   * legacy ``manual_slope_fit``               -> store the INVERSE
+#       video = slope*nidaq + offset.
+# Downstream consumers MUST branch on ``detection_method`` and invert
+# (slope' = 1/slope, offset' = -offset/slope) for a ``manual_slope_fit`` result
+# BEFORE passing slope/offset to camera_to_nidaq / nidaq_to_camera.
 def camera_to_nidaq(t_camera_ms, slope: float, offset: float):
-    """Convert camera timestamp(s) (ms) to NI-DAQ time (seconds)."""
+    """Convert camera timestamp(s) (ms) to NI-DAQ time (seconds).
+
+    Assumes the ``nidaq = slope*cam + offset`` orientation (see ORIENTATION
+    CONTRACT above): valid for ``derivative`` / ``manual_multianchor`` results.
+    For a legacy ``manual_slope_fit`` result invert slope/offset first.
+    """
     t = np.asarray(t_camera_ms, dtype=np.float64)
     return slope * (t / 1000.0) + offset
 
 
 def nidaq_to_camera(t_nidaq_s, slope: float, offset: float):
-    """Convert NI-DAQ time (seconds) to camera timestamp(s) (ms)."""
+    """Convert NI-DAQ time (seconds) to camera timestamp(s) (ms).
+
+    Assumes the ``nidaq = slope*cam + offset`` orientation (see ORIENTATION
+    CONTRACT above): valid for ``derivative`` / ``manual_multianchor`` results.
+    For a legacy ``manual_slope_fit`` result invert slope/offset first.
+    """
     t = np.asarray(t_nidaq_s, dtype=np.float64)
     return ((t - offset) / slope) * 1000.0
 
@@ -2006,11 +2034,21 @@ def archive_sync_artifacts(
     subject: Optional[str] = None,
     sync_dir: Optional[str] = None,
     when: Optional[str] = None,
+    include_anchor: bool = True,
 ) -> Optional[str]:
-    """Move existing sync + anchor JSONs into ``<sync_dir>/_archive/<when>/``.
+    """Move existing sync (+ optionally anchor) JSONs into ``<sync_dir>/_archive/<when>/``.
 
     Called before a re-fit so a re-tag never silently clobbers a prior fit
     (spec migration policy). Returns the archive dir, or None if nothing moved.
+
+    Parameters
+    ----------
+    include_anchor : bool
+        When True (default), archive BOTH ``_video_sync.json`` and
+        ``_anchor.json`` (the §3.14 migration semantics used by Plan 2's future
+        tagger). When False, archive ONLY ``_video_sync.json`` and leave the
+        live anchor in place — required so a re-fit (fit_sync) is repeatable
+        without stranding the anchor it reads.
     """
     import shutil
     from visdetect.analysis.config import subject_video_sync_dir, canonical_camera_session
@@ -2019,7 +2057,8 @@ def archive_sync_artifacts(
     when = when or _dt.date.today().isoformat()
     moved = False
     arch = os.path.join(out_dir, "_archive", when)
-    for suffix in ("_video_sync.json", "_anchor.json"):
+    suffixes = ("_video_sync.json", "_anchor.json") if include_anchor else ("_video_sync.json",)
+    for suffix in suffixes:
         src = os.path.join(out_dir, f"{sn}{suffix}")
         if os.path.exists(src):
             os.makedirs(arch, exist_ok=True)
@@ -2979,10 +3018,18 @@ def _migrate_anchor_to_v3(d: dict) -> dict:
     d = _migrate_anchor_v1_to_v2(d)
     if d.get("schema_version") == 3:
         return d
+    # Copy each entry so a passed-in v2 dict's caller entries are not mutated
+    # in place. Only derive nidaq_event_s from nidaq_baseline_on_s when that
+    # key is present (a change-type entry may lack it -> avoid float(None)).
+    new_anchors = []
     for a in d["anchors"]:
+        a = dict(a)
         a.setdefault("event_type", "baseline_on")
-        a.setdefault("nidaq_event_s", float(a.get("nidaq_baseline_on_s")))
+        if "nidaq_event_s" not in a and "nidaq_baseline_on_s" in a:
+            a["nidaq_event_s"] = float(a["nidaq_baseline_on_s"])
+        new_anchors.append(a)
     d = dict(d)
+    d["anchors"] = new_anchors
     d["schema_version"] = 3
     return d
 

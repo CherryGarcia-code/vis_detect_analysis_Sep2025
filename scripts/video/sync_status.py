@@ -23,7 +23,6 @@ import sys
 from visdetect.analysis.config import (
     load_staging_manifest,
     chronological_sort,
-    session_int_to_iso,
     canonical_camera_session,
     subject_video_sync_dir,
 )
@@ -50,9 +49,13 @@ def _session_status(session_int: int, sync_dir: str) -> dict:
         n_over = 0
         status = "PARTIAL" if n_anchors >= 1 else "TODO"
 
+    # Derive iso from the 8-digit `name` (DDMMYYYY) directly. Routing the raw
+    # int through session_int_to_iso zero-pads 6-digit subjects wrongly
+    # (50325 -> 00050325 -> 0325-05-00); `name` already canonicalised above.
+    iso = f"{name[4:]}-{name[2:4]}-{name[:2]}"
     return {
         "session": name,
-        "iso": session_int_to_iso(session_int),
+        "iso": iso,
         "status": status,
         "n_anchors": n_anchors,
         "slope_ppm": slope_ppm,

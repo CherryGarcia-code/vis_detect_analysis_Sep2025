@@ -37,6 +37,7 @@ import json
 import logging
 import sys
 from datetime import datetime
+from typing import Optional
 
 import numpy as np
 
@@ -71,7 +72,7 @@ def _probe_video(video_path: str):
 
 def reconstruct_camera(
     session_name: str, cam_label: str, video_path: str, meta_path: str,
-    force: bool = False, dry_run: bool = False, subject: str = None,
+    force: bool = False, dry_run: bool = False, subject: Optional[str] = None,
 ) -> bool:
     """Reconstruct one camera's metadata to LOCAL cache. Returns True if written.
 

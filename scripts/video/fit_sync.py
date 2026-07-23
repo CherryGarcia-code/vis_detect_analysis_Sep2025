@@ -64,7 +64,11 @@ def main() -> int:
     parser.add_argument("--subject", default=None, help="Subject (default: config.SUBJECT).")
     args = parser.parse_args()
 
-    session_name = canonical_camera_session(args.session)
+    try:
+        session_name = canonical_camera_session(args.session)
+    except (ValueError, TypeError):
+        logger.error("Session name '%s' could not be parsed to a date.", args.session)
+        return 2
     sync_dir = subject_video_sync_dir(args.subject)
 
     anchor_file = load_anchor(session_name, sync_dir=sync_dir)
@@ -104,8 +108,10 @@ def main() -> int:
         if prior:
             sync_result.per_trial_overrides = {int(k): int(v) for k, v in prior.items()}
 
-    # Never silent-overwrite: archive the prior sync+anchor before writing.
-    archive_sync_artifacts(session_name, sync_dir=sync_dir)
+    # Never silent-overwrite: archive the prior sync JSON before writing.
+    # include_anchor=False leaves the live anchor in place so a re-fit is
+    # repeatable (fit_sync re-reads that anchor on the next run).
+    archive_sync_artifacts(session_name, sync_dir=sync_dir, include_anchor=False)
 
     out_path = save_video_sync(
         session_name=session_name, eye_cam=sync_result, sync_dir=sync_dir)
@@ -148,6 +154,15 @@ def main() -> int:
     montage_path = os.path.join(
         FIGS_DIR, f"{session_name}_barcode_montage_slopefit.png",
     )
+    # render_barcode_montage expects the fit_2anchor orientation
+    # (video_time_s = slope*nidaq + offset_s). fit_multianchor_clock stores the
+    # INVERSE (nidaq = slope*cam + offset), so invert before handing it over.
+    if sync_result.detection_method == "manual_multianchor":
+        montage_slope = 1.0 / sync_result.slope
+        montage_offset = -sync_result.offset / sync_result.slope
+    else:
+        montage_slope = sync_result.slope
+        montage_offset = sync_result.offset
     render_barcode_montage(
         session_name=session_name,
         anchor=sentinel_anchor,
@@ -156,8 +171,8 @@ def main() -> int:
         ts_ms=ts_ms,
         fps=fps,
         out_path=montage_path,
-        slope=sync_result.slope,
-        offset_s=sync_result.offset,
+        slope=montage_slope,
+        offset_s=montage_offset,
     )
     print(f"Montage:   {montage_path}")
     return 0
