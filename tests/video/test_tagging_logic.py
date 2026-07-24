@@ -92,3 +92,18 @@ def test_eye_zoom_crop_from_roi_and_fallback():
     assert (y0, y1, x0, x1) == (300, 400, 500, 600)
     yy0, yy1, xx0, xx1 = tg.eye_zoom_crop([300, 400, 500, 600], pad=0.10)
     assert yy0 == 290 and yy1 == 410 and xx0 == 490 and xx1 == 610  # 10% of 100 each side
+
+
+# ---------------------------------------------------------------------------
+# Task 2: v3 anchor-file builder
+# ---------------------------------------------------------------------------
+
+
+def test_build_v3_anchor_file_stamps_v3_and_baseline_event_type():
+    ts_ms = np.arange(1000, dtype=float) * 20.0
+    base = vs._build_anchor_entry(np.array([5.0, 9.0]), ts_ms, trial_index=0, frame_idx=100)
+    f = vs._build_v3_anchor_file("01072025", fps=50.0, n_trials=2, anchor_entries=[base])
+    assert f["schema_version"] == 3
+    a = f["anchors"][0]
+    assert a["event_type"] == "baseline_on"
+    assert a["nidaq_event_s"] == a["nidaq_baseline_on_s"]

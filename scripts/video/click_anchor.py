@@ -35,6 +35,7 @@ from visdetect.core.video_sync import (
     compute_implied_offset,
     _build_anchor_entry,
     _build_v2_anchor_file,
+    _build_v3_anchor_file,
     _merge_anchor_into_file,
 )
 from visdetect.analysis.config import VIDEO_SYNC_DIR
@@ -132,7 +133,7 @@ def _build_or_merge_anchor_file(
     )
     existing = load_anchor(session_name)
     if existing is None:
-        return _build_v2_anchor_file(
+        return _build_v3_anchor_file(
             session_name=session_name,
             fps=fps,
             n_trials=int(len(baseline_on)),

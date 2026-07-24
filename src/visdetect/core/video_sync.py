@@ -3098,6 +3098,25 @@ def _build_v2_anchor_file(
     }
 
 
+def _build_v3_anchor_file(session_name, fps, n_trials, anchor_entries) -> dict:
+    """Top-level v3 anchor dict: schema_version 3; every entry carries event_type.
+    Baseline entries (lacking event_type) get event_type='baseline_on' + nidaq_event_s."""
+    entries = []
+    for a in anchor_entries:
+        a = dict(a)
+        a.setdefault("event_type", "baseline_on")
+        if "nidaq_event_s" not in a and "nidaq_baseline_on_s" in a:
+            a["nidaq_event_s"] = float(a["nidaq_baseline_on_s"])
+        entries.append(a)
+    return {
+        "session": str(session_name),
+        "schema_version": 3,
+        "frame_rate_fps": float(fps),
+        "n_trials": int(n_trials),
+        "anchors": list(entries),
+    }
+
+
 def _merge_anchor_into_file(base: dict, new_entry: dict) -> dict:
     """Return a copy of *base* with *new_entry* merged into its anchors list.
 
