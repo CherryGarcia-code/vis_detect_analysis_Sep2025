@@ -201,10 +201,54 @@ sustained median) and test whether it differs by animal/region:
   separately Impulsive), then compare the sustained-vs-non-TF lead across states. Requires a
   state-split recompute (local ProcessPool, like `build_prep_cache.py`) and further thins
   per-cell trial counts; Disengaged excluded (near-zero hits). Flagged, not required for the
-  first pass.
+  first pass. ⚠️ Only the *within-session, cross-state* contrast on **FA-aligned** activity
+  carries a mechanical-coupling caveat (Impulsive trials ≡ FA trials) — there, use hit-aligned
+  or lick-independent signatures. The *across-session, state-fixed* trajectory (which is NOT
+  circular) is §5.5.
 
 **Sign convention:** lead > 0 ⇒ sustained leads/exceeds non-TF (magnitude: larger ramp;
 timing: earlier onset ⇒ define as nonTF_onset − sustained_onset).
+
+### 5.5 Phase 2 (extension) — across-session, state-conditioned signature trajectories
+
+**Goal.** Fix behavioural **state** (segment each session into single-state blocks), then ask how a
+neural **signature** evolves across the recording timeline / regulation axis — pooling state-blocks
+across sessions into learning-ordered bins for power (per-session where dense enough; session
+identity retained).
+
+**Why it is NOT circular (scope correction).** Conditioning on a state and asking whether neural
+activity changes *across sessions within that fixed state* is not circular: the state is a constant
+segmentation criterion, never inferred from the neural data and never the outcome. The one case with
+genuine mechanical coupling is a *within-session, cross-state* contrast on a **lick-aligned** measure
+(e.g. FA-aligned preparatory activity Impulsive-vs-StimSens — Impulsive trials *are* the FA trials).
+Fixing the state across the comparison, or using a lick-independent signature, removes it. **Impulsive-
+state trajectories are in scope.**
+
+**Signatures (not just the preparatory lick-lead).** The evolving quantity may be:
+- **Sensory TF-pulse responses** — fast and/or slow pulse-evoked responses (reuse `tf_pulse` / GLM-TF);
+  lick-independent, cleanest against state.
+- **Coding directions** — sensory / choice-outcome / motor CDs (or new ones): track strength & geometry
+  within a fixed state across sessions.
+- The **sustained-vs-non-TF preparatory lead** (parent signature), state-conditioned.
+
+**Drift discipline (unchanged, load-bearing).** State-conditioning does **not** remove composition
+drift — the probe still samples different cells across weeks (BG_046 89%→15% broad). So the tracked
+quantity must be drift-robust: a **within-session relative/between-group contrast** (e.g. sustained−nonTF)
+or a **normalized population-geometry** measure (angles, not raw magnitudes), never an absolute
+per-session level. Per-animal breakdown + regulation-shuffle null required.
+
+**State × lick pairing.** For across-session trajectories (state fixed) both StimSens+hit and Impulsive+FA
+are usable; the mechanical-coupling caveat applies only to within-session cross-state lick-aligned
+contrasts. Disengaged stays too sparse in hits.
+
+**Cost / status.** Needs the §5.4-S3 state-split recompute from spikes; cross-session binning supplies
+power. Not cache-only. **Second pass** — the §5 first pass ships independently.
+
+**Related in-house work (accurate characterisation).** A separate, **in-development** method registers
+**probe physical locations / channels** — binning activity along the probe rather than tracking
+individual cells — to compare population activity across sessions without cell tracking. It is **not
+finished** and **not purpose-built** for state-conditioned trajectories; a state-conditioned application
+could eventually host this, but verify its status before relying on it — do not assume it fits.
 
 ---
 
@@ -254,12 +298,11 @@ timing: earlier onset ⇒ define as nonTF_onset − sustained_onset).
 - Tracked-unit within-neuron learning trajectories (needs curation / better tracker).
 - Transient-class per-bin split (N too small).
 - Movement-regressed / change-aligned re-derivation (parent's open control; future).
-- **State-conditioned analyses & tracking alignment (future, user-flagged).** Restricting to
-  a **single** behavioural state (e.g. StimSens-only, or Impulsive-only) before comparing
-  across learning should remove the state-mixture confound and make within-neuron
-  **tracking-across-learning** more apples-to-apples (same behavioural mode at both ends).
-  Enabled by §5.4-S3's state-split recompute; pairs with the tracking-curation work. The
-  §5.4 overlay/robustness (S1/S2) IS in scope now; deeper single-state-only designs are not.
+- **Single-state-conditioned within-neuron *tracking* across learning (future).** Restricting
+  to one state before comparing the **same tracked neurons** across learning would remove the
+  state-mixture confound and make tracking apples-to-apples — but needs the tracking-curation
+  work first. The *population-level*, tracking-free version of state-conditioned across-session
+  comparison is now scoped as **Phase 2 (§5.5)** — second-pass, not first-pass.
 - Full state×learning factorial designs (state-null already; circularity; sparse Disengaged
   hits) — parked.
 - Any compute over the X: (Samba) drive; any non-Opus/Fable subagent (project rules).
