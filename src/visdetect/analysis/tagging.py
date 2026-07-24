@@ -32,3 +32,31 @@ def build_change_queue(sess) -> List[ChangeTarget]:
                                 str(tr.trialoutcome).lower()))
     out.sort(key=lambda t: (0 if t.change_size == 4.0 else 1, t.trial_index))
     return out
+
+
+import os
+from typing import Optional
+from visdetect.core import video_sync as _vs
+from visdetect.analysis.config import subject_video_sync_dir, canonical_camera_session
+
+
+def seed_from_archive(session_name, subject: Optional[str] = None,
+                      sync_dir: Optional[str] = None) -> Optional[dict]:
+    """Archive any prior anchor+sync (§3.14 migration), then return the archived
+    anchor file with every entry marked source='legacy' as editable seeds. None if
+    there was nothing to seed."""
+    out_dir = sync_dir or subject_video_sync_dir(subject)
+    sn = canonical_camera_session(session_name)
+    arch = _vs.archive_sync_artifacts(session_name, subject=subject,
+                                      sync_dir=out_dir, include_anchor=True)
+    if arch is None:
+        return None
+    archived_anchor = os.path.join(arch, f"{sn}_anchor.json")
+    if not os.path.exists(archived_anchor):
+        return None
+    seeded = _vs.load_anchor(session_name, sync_dir=arch)  # migrates to v3 in memory
+    if seeded is None:
+        return None
+    for a in seeded["anchors"]:
+        a["source"] = "legacy"
+    return seeded
