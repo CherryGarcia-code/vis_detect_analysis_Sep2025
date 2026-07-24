@@ -323,3 +323,75 @@ could eventually host this, but verify its status before relying on it — do no
 - **Not powered → excluded:** transient per bin; any BG_039 low-d′ bin.
 - **Realistic outcome distribution:** a modest positive regulation slope carried mainly by
   BG_046/BG_031, OR a clean null. Both are acceptable, hardened deliverables.
+
+---
+
+## Appendix A — dataset-expansion inventory (X: sessions not yet in the pipeline)
+
+**Not part of this analysis** — documented here so a *separate* chat can act on it. Read-only X:
+scan on 2026-07-24 (4 Opus agents, listings/existence-checks only; no reads, no writes, no compute
+over the Samba gateway). "Complete" = all 4 data types: raw ephys (`*.imec0.ap.bin`+`.ap.meta`) +
+behaviour (`*__trials.json`) + NIdaq sync (`*_NIdaq_events.mat`) + Kilosort4 sort with TPrime-corrected
+spikes (`spike_times_sec_adj.npy`). "Not included" = no local `data/pkls/<subj>/<subj>_DDMMYYYY.pkl`.
+
+### A.1 Complete but NOT converted — 3 sessions (immediate, no sort needed)
+
+| Subject | Region | Session | Protocol | Note |
+|---|---|---|---|---|
+| BG_031 | VMS (striatum) | `06052025` | standard | Fully sorted+TPrime'd; a single `raw_to_pkl.py` adds it. **Directly relevant to this analysis.** |
+| BG_038 | **cortex (ref)** | `31072025` | standard\* | Two separate recording blocks of 31 Jul, both fully sorted. |
+| BG_038 | **cortex (ref)** | `31072025_b` | standard\* | \* protocol *name-inferred* (settings files not read under read-only rule). |
+
+BG_039 and BG_046: **0** complete-but-unconverted (their pipelines converted every sorted session).
+
+### A.2 Near-complete — missing ONLY the Kilosort4/TPrime sort — 34 sessions
+
+Each has raw ephys + behaviour + NIdaq_events; the `Kilosort&Phy` folder holds only CatGT-prep stubs
+(`*_g0_fyi.txt`). Running KS4+TPrime **on HPC (never over X:)** would make them convertible.
+
+- **BG_031 (17, VMS):** `31012025`, `05022025`, `07022025`, `11022025`, `19022025`, `20022025`,
+  `20022025_b`, `20022025_c`, `21022025`, `04032025`, `26032025_v2`, `31032025`, `11042025`,
+  `29042025_v2`, `13052025`, `23052025`, `27052025`. (Jan/Feb = early-naive → extend the
+  high-impulsivity end; May = expert-range.)
+- **BG_039 (9, DMS):** `01042025`, `11042025`, `14042025`, `24032025`, `26032025`, `31032025`,
+  `27052025`, `03062025_v2`, `17062025_v2`. (Several are 2nd penetrations of days whose other
+  recording IS converted.)
+- **BG_038 (6, cortex):** `01042025`, `01082025`, `24032025`, `25032025`, `26032025`, `28032025_v2`.
+- **BG_046 (2, DMS):** `30072025`, `01082025` (behaviour is loose in the subject root, not `Session/`).
+  Plus `07072025` (needs sort AND its `.ap.meta` reunified from its `_v2` twin).
+
+### A.3 Dead / not rescuable (for the record)
+
+- **BG_046:** `05092025` (empty dup — real one is converted `05092025_b`); `22082025` (behaviour-only,
+  ephys never saved); `22082025_v2` (empty); `07072025_v2` (dup, no behaviour/sort).
+- **BG_031:** empty/aborted shells `050325_v2`, `15042025_v2`, `270125`, laser `09042025_laser`,
+  `09042025_laser_v2`; + ~23 Raw-only early-training/variant folders (missing ≥2 types).
+- **BG_039:** laser `20052025_2ndlaserSNr`, `25042025`, + 8 Raw-only folders (missing ≥2 types).
+- **BG_038:** `17062025` (Nidaq empty), `280325` (behaviour-only), + 12 Raw-only folders.
+
+### A.4 Per-subject completeness signature (reusable path knowledge)
+
+General layout (matches CLAUDE.md), `<sess>` = `<subj>_DDMMYYYY`:
+- **EPHYS** `Raw data/<sess>/EphysNidaq/<sess>_g0_imec0/*.imec0.ap.bin` + `.ap.meta`
+- **BEHAVIOUR** `Raw data/<sess>/Session/*__trials.json` **OR** loose `<subj>_YYYYMMDD_*__trials.json`
+  in the subject root (BG_046 `30072025`/`01082025` use the loose form; `Session/` empty)
+- **NIDAQ** `Processed data/<sess>/Nidaq/<sess>_NIdaq_events.mat`
+- **SORT+TPRIME** `Processed data/<sess>/Kilosort&Phy/<sess>_g0_imec0/kilosort4/spike_times_sec_adj.npy`
+  (BG_046 also `concat_sort/final_output/<sess>/`)
+
+### A.5 Caveats for whoever acts on this
+
+1. **The Samba gateway returned inconsistent listings** — a bulk glob falsely reported sorted spikes
+   present for several folders; direct `ls` disproved it. All A.1–A.3 booleans are from the
+   direct-`ls`-confirmed pass. **Re-verify any specific session with a direct listing before
+   converting/sorting it.**
+2. **`spike_times_sec_adj.npy` is not a universal marker** — BG_039's *converted* `17062025` lacks it
+   (has `spike_times_sec.npy` only). Didn't change any A.1/A.2 count (candidates had no sort at all).
+3. **BG_038 protocol tags are name-inferred**; BG_038 is the **cortical reference** subject, not striatum.
+4. **Session-id normalisation:** X: mixes 8-digit `DDMMYYYY` and 6-digit `DDMMYY` (early sessions →
+   insert '20'); strip variant suffixes (`_v2`/`_b`/`_c`) for the pkl match but treat variants as
+   *separate* recordings. Never run any sort/convert over X: — stage to HPC/Slurm
+   ([[feedback_no_compute_over_samba_gateway]]).
+
+**Net for this analysis:** the one free, directly-relevant add is **BG_031 `06052025`** (VMS, one
+`raw_to_pkl.py` run); everything else needs an HPC KS4 sort first and is a separate effort.
