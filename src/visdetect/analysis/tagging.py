@@ -60,3 +60,14 @@ def seed_from_archive(session_name, subject: Optional[str] = None,
     for a in seeded["anchors"]:
         a["source"] = "legacy"
     return seeded
+
+
+def nidaq_to_frame_oriented(nidaq_s: float, slope: float, offset: float,
+                            fps: float, detection_method: str) -> int:
+    """NI time -> video frame, respecting the detection_method-dependent clock
+    orientation (see Global Constraints)."""
+    if detection_method == "manual_slope_fit":
+        video_time_s = slope * float(nidaq_s) + offset          # inverse-orientation legacy
+    else:
+        video_time_s = (float(nidaq_s) - offset) / slope        # camera_to_nidaq orientation
+    return int(round(video_time_s * fps))

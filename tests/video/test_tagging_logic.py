@@ -61,3 +61,20 @@ def test_seed_from_archive_archives_and_marks_legacy(tmp_path):
 
 def test_seed_from_archive_none_when_empty(tmp_path):
     assert tg.seed_from_archive("01072025", sync_dir=str(tmp_path)) is None
+
+
+# ---------------------------------------------------------------------------
+# Task 4: orientation-aware nidaq->frame
+# ---------------------------------------------------------------------------
+from visdetect.analysis import tagging as tg
+
+
+def test_nidaq_to_frame_orientation_branches():
+    # manual_slope_fit: video = slope*nidaq + offset
+    f1 = tg.nidaq_to_frame_oriented(10.0, slope=1.0, offset=2.0, fps=50.0,
+                                    detection_method="manual_slope_fit")
+    assert f1 == round((1.0 * 10.0 + 2.0) * 50.0)   # 600
+    # manual_multianchor: video = (nidaq - offset)/slope
+    f2 = tg.nidaq_to_frame_oriented(12.0, slope=1.0, offset=2.0, fps=50.0,
+                                    detection_method="manual_multianchor")
+    assert f2 == round(((12.0 - 2.0) / 1.0) * 50.0)  # 500
