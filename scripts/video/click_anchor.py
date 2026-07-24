@@ -232,6 +232,12 @@ import matplotlib
 matplotlib.use("TkAgg", force=True)  # interactive backend; force=True for resilience vs other modules' Agg setup
 import matplotlib.pyplot as plt
 
+# Shared scrubber/HUD primitive. Sits in this same directory; the sys.path
+# insertion makes the import resolve whether this file is run as a script or
+# loaded via importlib.spec_from_file_location.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _tagger_ui import ScrubberConfig, run_scrubber
+
 
 def _show_grid_and_get_click(
     frames: list[np.ndarray],
@@ -376,27 +382,11 @@ def _run_scrub(
     *existing* anchor when present, otherwise from the current scrub frame
     itself (so jumps remain meaningful as the user navigates).
     """
-    # Capture state via mutable containers so closures can mutate it.
-    state = {
-        "frame_idx": int(np.clip(start_frame, 0, n_frames - 1)),
-        "saved_anchor": None,  # Optional[dict]
-    }
-
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise IOError(f"Could not open video: {video_path}")
-    y0, y1, x0, x1 = EYE_REGION_CROP_BG046
-
-    def _read_frame(fi: int) -> np.ndarray:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(fi))
-        ok, frame = cap.read()
-        if not ok or frame is None:
-            return np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        return gray[y0:y1, x0:x1]
-
-    def _implied_offset_for_jumps() -> float:
-        """Use existing anchor's offset if present, else compute from current frame."""
+    # Jump/offset helpers close over this session's arrays. They take the
+    # current frame index explicitly, since the shared scrubber owns the
+    # ``state`` dict (see _tagger_ui.run_scrubber).
+    def _implied_offset_for_jumps(frame_idx: int) -> float:
+        """Use existing anchor's offset if present, else compute from *frame_idx*."""
         if existing_anchor is not None:
             # Always use the trial-0 anchor for jump offset (slope=1 approximation).
             # --anchor-last intentionally passes the full v2 file; trial-0 remains the
@@ -404,38 +394,22 @@ def _run_scrub(
             entry0 = existing_anchor["anchors"][0]
             return compute_implied_offset(entry0)
         # Fall back: pretend current frame anchors trial 0.
-        return float(ts_ms[state["frame_idx"]] / 1000.0 - float(baseline_on[0]))
+        return float(ts_ms[frame_idx] / 1000.0 - float(baseline_on[0]))
 
     def _nearest_trial_idx(frame_idx: int) -> int:
         """Find the trial whose predicted video frame is closest to *frame_idx*."""
-        offs = _implied_offset_for_jumps()
+        offs = _implied_offset_for_jumps(frame_idx)
         # Predicted video time of each trial in ms
         predicted_ms = (baseline_on + offs) * 1000.0
         actual_ms = ts_ms[frame_idx]
         return int(np.argmin(np.abs(predicted_ms - actual_ms)))
 
-    fig = plt.figure(figsize=(8, 10))
-    gs = fig.add_gridspec(2, 1, height_ratios=[5, 1], hspace=0.1)
-    ax_frame = fig.add_subplot(gs[0])
-    ax_hud = fig.add_subplot(gs[1])
-    ax_hud.axis("off")
-
-    im = ax_frame.imshow(_read_frame(state["frame_idx"]), cmap="gray",
-                         vmin=0, vmax=255, interpolation="nearest")
-    ax_frame.set_xticks([]); ax_frame.set_yticks([])
-
-    hud_text = ax_hud.text(
-        0.02, 0.5, "", fontsize=9, family="monospace",
-        verticalalignment="center", transform=ax_hud.transAxes,
-    )
-
-    def _refresh():
-        fi = state["frame_idx"]
-        im.set_data(_read_frame(fi))
-        # Build HUD
+    def _hud_fn(frame_idx: int) -> str:
+        """Build the HUD text for *frame_idx* (was ``_refresh``'s text body)."""
+        fi = frame_idx
         video_time_s = float(ts_ms[fi] / 1000.0)
         trial_idx = _nearest_trial_idx(fi)
-        offs_jumps = _implied_offset_for_jumps()
+        offs_jumps = _implied_offset_for_jumps(fi)
         predicted_frame = jump_to_predicted_frame(
             trial_idx, baseline_on, offs_jumps, ts_ms
         )
@@ -464,82 +438,39 @@ def _run_scrub(
             "J / K = next/prev predicted trial    Home/End = first/last trial    R = re-render montage",
             "Space / Enter = save anchor    Q / ESC = quit",
         ]
-        hud_text.set_text("\n".join(lines))
-        fig.canvas.draw_idle()
+        return "\n".join(lines)
 
-    def on_key(event):
+    def _on_key_extra(event, state) -> bool:
+        """Handle the click_anchor-specific keys (J/K/Home/End/R).
+
+        Mutates ``state["frame_idx"]`` for the jump keys and returns ``True``
+        when the key was consumed so the scrubber redraws.
+        """
         key = event.key
-        if key in ("q", "escape"):
-            plt.close(fig); return
-
-        step = 0
-        if key == "left":
-            step = -1
-        elif key == "right":
-            step = +1
-        elif key in ("shift+left", "pageup"):
-            step = -10
-        elif key in ("shift+right", "pagedown"):
-            step = +10
-        elif key in ("ctrl+left",):
-            step = -100
-        elif key in ("ctrl+right",):
-            step = +100
-
-        if step != 0:
-            state["frame_idx"] = int(np.clip(state["frame_idx"] + step, 0, n_frames - 1))
-            _refresh()
-            return
-
         if key == "j":
             trial_idx = _nearest_trial_idx(state["frame_idx"])
             new_trial = min(len(baseline_on) - 1, trial_idx + 1)
             state["frame_idx"] = jump_to_predicted_frame(
-                new_trial, baseline_on, _implied_offset_for_jumps(), ts_ms
+                new_trial, baseline_on, _implied_offset_for_jumps(state["frame_idx"]), ts_ms
             )
-            _refresh()
-            return
+            return True
         if key == "k":
             trial_idx = _nearest_trial_idx(state["frame_idx"])
             new_trial = max(0, trial_idx - 1)
             state["frame_idx"] = jump_to_predicted_frame(
-                new_trial, baseline_on, _implied_offset_for_jumps(), ts_ms
+                new_trial, baseline_on, _implied_offset_for_jumps(state["frame_idx"]), ts_ms
             )
-            _refresh()
-            return
+            return True
         if key == "home":
             state["frame_idx"] = jump_to_predicted_frame(
-                0, baseline_on, _implied_offset_for_jumps(), ts_ms
+                0, baseline_on, _implied_offset_for_jumps(state["frame_idx"]), ts_ms
             )
-            _refresh()
-            return
+            return True
         if key == "end":
             state["frame_idx"] = jump_to_predicted_frame(
-                len(baseline_on) - 1, baseline_on, _implied_offset_for_jumps(), ts_ms
+                len(baseline_on) - 1, baseline_on, _implied_offset_for_jumps(state["frame_idx"]), ts_ms
             )
-            _refresh()
-            return
-
-        if key in (" ", "enter"):
-            fi = state["frame_idx"]
-            anchor = _build_or_merge_anchor_file(
-                session_name, baseline_on, ts_ms, fps,
-                trial_index=int(anchor_trial_index),
-                frame_idx=state["frame_idx"],
-            )
-            save_anchor(session_name, anchor)
-            state["saved_anchor"] = anchor
-            saved_entry = next(
-                a for a in anchor["anchors"]
-                if int(a["trial_index"]) == int(anchor_trial_index)
-            )
-            logger.info(
-                "Anchor saved via scrub: frame %d (video time %.4fs); implied offset = %.4fs",
-                fi, saved_entry["video_time_s"], compute_implied_offset(saved_entry),
-            )
-            plt.close(fig)
-            return
-
+            return True
         if key == "r":
             # Render montage with current frame as candidate anchor (no save)
             candidate_file = _build_or_merge_anchor_file(
@@ -576,15 +507,39 @@ def _run_scrub(
                 out_path=montage_path,
             )
             logger.info("Preview montage written: %s", montage_path)
+            return True
+        return False
 
-    fig.canvas.mpl_connect("key_press_event", on_key)
-    try:
-        _refresh()
-        plt.show()
-    finally:
-        cap.release()
+    def _on_save(frame_idx: int) -> Optional[dict]:
+        """Build+persist the anchor for *frame_idx* (was the Space/Enter branch)."""
+        anchor = _build_or_merge_anchor_file(
+            session_name, baseline_on, ts_ms, fps,
+            trial_index=int(anchor_trial_index),
+            frame_idx=frame_idx,
+        )
+        save_anchor(session_name, anchor)
+        saved_entry = next(
+            a for a in anchor["anchors"]
+            if int(a["trial_index"]) == int(anchor_trial_index)
+        )
+        logger.info(
+            "Anchor saved via scrub: frame %d (video time %.4fs); implied offset = %.4fs",
+            frame_idx, saved_entry["video_time_s"], compute_implied_offset(saved_entry),
+        )
+        return anchor
 
-    return state["saved_anchor"]
+    cfg = ScrubberConfig(
+        video_path=video_path,
+        ts_ms=ts_ms,
+        fps=fps,
+        n_frames=n_frames,
+        start_frame=start_frame,
+        crop=EYE_REGION_CROP_BG046,
+        hud_fn=_hud_fn,
+        on_key_extra=_on_key_extra,
+        on_save=_on_save,
+    )
+    return run_scrubber(cfg)
 
 
 # ---------------------------------------------------------------------------
