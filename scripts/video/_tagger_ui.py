@@ -152,7 +152,16 @@ def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
             _refresh()
             return
 
-        if key in (" ", "enter"):
+        if key == "enter":
+            state["result"] = cfg.on_save(state["frame_idx"])
+            plt.close(fig)
+            return
+        if key == " ":
+            # Let a tool bind space first (e.g. tag_session play/pause).
+            if cfg.on_key_extra(event, state):
+                _refresh()
+                return
+            # Default: space still saves (click_anchor behavior).
             state["result"] = cfg.on_save(state["frame_idx"])
             plt.close(fig)
             return
