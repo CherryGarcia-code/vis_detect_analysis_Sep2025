@@ -78,3 +78,17 @@ def test_nidaq_to_frame_orientation_branches():
     f2 = tg.nidaq_to_frame_oriented(12.0, slope=1.0, offset=2.0, fps=50.0,
                                     detection_method="manual_multianchor")
     assert f2 == round(((12.0 - 2.0) / 1.0) * 50.0)  # 500
+
+
+# ---------------------------------------------------------------------------
+# Task 5: per-session eye-zoom crop
+# ---------------------------------------------------------------------------
+from visdetect.analysis import tagging as tg
+
+
+def test_eye_zoom_crop_from_roi_and_fallback():
+    assert tg.eye_zoom_crop(None) == (200, 420, 320, 540)
+    y0, y1, x0, x1 = tg.eye_zoom_crop([300, 400, 500, 600], pad=0.0)
+    assert (y0, y1, x0, x1) == (300, 400, 500, 600)
+    yy0, yy1, xx0, xx1 = tg.eye_zoom_crop([300, 400, 500, 600], pad=0.10)
+    assert yy0 == 290 and yy1 == 410 and xx0 == 490 and xx1 == 610  # 10% of 100 each side

@@ -71,3 +71,14 @@ def nidaq_to_frame_oriented(nidaq_s: float, slope: float, offset: float,
     else:
         video_time_s = (float(nidaq_s) - offset) / slope        # camera_to_nidaq orientation
     return int(round(video_time_s * fps))
+
+
+def eye_zoom_crop(eye_roi, pad: float = 0.15,
+                  fallback: Tuple[int, int, int, int] = (200, 420, 320, 540)
+                  ) -> Tuple[int, int, int, int]:
+    """(y0,y1,x0,x1) eye-zoom crop from an eye ROI box (padded), else the fallback."""
+    if eye_roi is None:
+        return fallback
+    y0, y1, x0, x1 = [int(v) for v in eye_roi]
+    dy, dx = int(round((y1 - y0) * pad)), int(round((x1 - x0) * pad))
+    return (y0 - dy, y1 + dy, x0 - dx, x1 + dx)
