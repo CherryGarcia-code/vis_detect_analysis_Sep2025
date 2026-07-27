@@ -153,6 +153,15 @@ def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
             return
 
         if key == "enter":
+            # Let a tool bind enter first (e.g. tag_session save-keep-open),
+            # mirroring the space routing below. If the hook consumes enter
+            # (returns True), do NOT close -- multi-anchor tagging keeps the
+            # window open. click_anchor's hook has no enter case -> returns
+            # False -> the default save-and-close below runs unchanged.
+            if cfg.on_key_extra(event, state):
+                _refresh()
+                return
+            # Default: enter saves and closes (click_anchor behavior).
             state["result"] = cfg.on_save(state["frame_idx"])
             plt.close(fig)
             return
@@ -170,6 +179,15 @@ def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
         if cfg.on_key_extra(event, state):
             _refresh()
         return
+
+    # Neutralize matplotlib's default key bindings that collide with our hooks
+    # (s=save-dialog, f=fullscreen, k/L=xscale->log garbles the frame,
+    # c/left=back, v/right=forward, plus home/pan/zoom/grid/yscale), so on_key
+    # is the sole handler for these keys.
+    for _k in ("keymap.save", "keymap.fullscreen", "keymap.xscale", "keymap.yscale",
+               "keymap.back", "keymap.forward", "keymap.home", "keymap.pan",
+               "keymap.zoom", "keymap.grid"):
+        plt.rcParams[_k] = []
 
     fig.canvas.mpl_connect("key_press_event", on_key)
     try:

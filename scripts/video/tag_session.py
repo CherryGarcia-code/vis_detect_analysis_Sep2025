@@ -14,13 +14,15 @@ Composed primitives
 * ``scripts/video/_tagger_ui.py`` — ``run_scrubber(cfg)`` / ``ScrubberConfig``
   (Task 6): the shared keyboard scrubber + HUD core.
 * ``visdetect.core.video_sync`` — ``stage_session_video``, ``find_camera_files``,
-  ``load_camera_metadata``, ``fit_multianchor_clock`` (live cv_rmse), the v3
-  anchor writers (``_build_anchor_entry``, ``_build_change_anchor_entry``,
-  ``_build_v3_anchor_file``, ``_merge_anchor_into_file``), ``save_anchor``,
-  ``compute_implied_offset``.
+  ``load_camera_metadata``, ``compute_predicted_frame_idx`` (baseline jump math),
+  ``fit_multianchor_clock`` (live cv_rmse), the v3 anchor writers
+  (``_build_anchor_entry``, ``_build_change_anchor_entry``,
+  ``_build_v3_anchor_file``, ``_merge_anchor_into_file``), ``save_anchor``.
 * ``visdetect.analysis.config`` — ``canonical_camera_session``,
-  ``subject_video_sync_dir``, ``SUBJECT``.
-* ``visdetect.suite.loader.load_session`` — behavioural session (by name).
+  ``subject_video_sync_dir``, ``ROOT``, ``SUBJECT``.
+* ``visdetect.suite.loader.list_pkl_sessions`` +
+  ``visdetect.core.session.load_session`` — subject-aware behavioural PKL load
+  (by ``--subject``, not the frozen ``config.SUBJECT`` env).
 
 Keybindings (see docs/superpowers/specs/2026-07-23-camera-tagger-ux-design.md)
 ------------------------------------------------------------------------------
@@ -32,10 +34,9 @@ Keybindings (see docs/superpowers/specs/2026-07-23-camera-tagger-ux-design.md)
   c                       toggle baseline <-> change target mode
   home / end              first / last target
   d                       delete this target's anchor (current mode's type)
-  s                       save anchor and KEEP the window open (multi-anchor flow)
-  enter                   save anchor and close (design's stated save key; the
-                          shared scrubber hard-closes on enter, so ``s`` is the
-                          keep-open path — see the save-key note below)
+  enter                   save anchor and KEEP the window open (design-primary;
+                          the shared scrubber now routes enter through the hook
+                          before its default save-and-close). ``s`` is an alias.
   q / esc                 quit without saving the current frame
 
 Run:  py scripts/video/tag_session.py --subject BG_031 --session 09042025
@@ -68,26 +69,29 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _tagger_ui import ScrubberConfig, run_scrubber  # noqa: E402
 
 # NOTE: we intentionally do NOT `from click_anchor import ...`; click_anchor
-# forces TkAgg at import time, which would break the headless spec-import. The
-# one pure helper we need from it (predicted-frame math) is small and replicated
-# below as ``_predicted_frame`` with a pointer back to the original.
+# forces TkAgg at import time, which would break the headless spec-import.
+# Baseline predicted-frame math comes from the library
+# (video_sync.compute_predicted_frame_idx), not a local reimplementation.
 
-from visdetect.suite.loader import load_session  # noqa: E402
+# Behavioural PKL is loaded by SUBJECT (not the frozen config.SUBJECT env): we
+# resolve the subject's pkl path ourselves (list_pkl_sessions convention) and
+# load via the PATH-based core loader.
+from visdetect.suite.loader import list_pkl_sessions  # noqa: E402
+from visdetect.core.session import load_session as _load_session_path  # noqa: E402
 from visdetect.analysis import config  # noqa: E402
 from visdetect.analysis.tagging import (  # noqa: E402
     build_change_queue,
     seed_from_archive,
     eye_zoom_crop,
     nidaq_to_frame_oriented,
-    ChangeTarget,  # noqa: F401  (documented composed type)
 )
 from visdetect.core.video_sync import (  # noqa: E402
     find_camera_files,
     load_camera_metadata,
     stage_session_video,
+    compute_predicted_frame_idx,
     fit_multianchor_clock,
     save_anchor,
-    compute_implied_offset,  # noqa: F401  (kept for parity / debugging)
     _build_anchor_entry,
     _build_change_anchor_entry,
     _build_v3_anchor_file,
@@ -108,21 +112,21 @@ DEFAULT_COARSE_OFFSET_S = 15.0
 # ---------------------------------------------------------------------------
 
 
-def _predicted_frame(trial_idx: int, baseline_on: np.ndarray,
-                     implied_offset_s: float, ts_ms: np.ndarray) -> int:
-    """Nearest video frame to *trial_idx*'s predicted Baseline_ON.
+def _resolve_subject_pkl(session: str, subject: Optional[str]) -> Optional[str]:
+    """Path to *subject*'s behavioural PKL for canonical *session*, or None.
 
-    Predicted video time = ``baseline_on[trial_idx] + implied_offset_s``;
-    returns the closest frame in ``ts_ms`` (clamped). Inlined mirror of
-    ``click_anchor.jump_to_predicted_frame`` (not imported, to keep the module's
-    import headless — click_anchor forces TkAgg at import).
+    Subject-aware (unlike ``suite.loader.resolve_session_pkl``, which is frozen to
+    ``config.SUBJECT``). Reuses ``list_pkl_sessions`` (the on-disk pkl convention
+    ``data/pkls/<subject>/<subject>_<token>.pkl``) and matches each token by
+    ``canonical_camera_session`` so 6-vs-8-digit tokens and leading-zero days both
+    resolve.
     """
-    target_ms = (float(baseline_on[trial_idx]) + implied_offset_s) * 1000.0
-    if target_ms <= ts_ms[0]:
-        return 0
-    if target_ms >= ts_ms[-1]:
-        return int(len(ts_ms) - 1)
-    return int(np.argmin(np.abs(ts_ms - target_ms)))
+    subj = subject or config.SUBJECT
+    pkl_dir = os.path.join(config.ROOT, "data", "pkls", subj)
+    for token in list_pkl_sessions(subj):
+        if config.canonical_camera_session(token) == session:
+            return os.path.join(pkl_dir, f"{subj}_{token}.pkl")
+    return None
 
 
 def _entry_implied_offset(a: dict) -> float:
@@ -190,22 +194,21 @@ def main(argv=None) -> int:
     session = config.canonical_camera_session(args.session)
     sync_dir = config.subject_video_sync_dir(subject)
 
-    # Cross-subject caveat: the behavioural PKL loader (suite.loader.load_session)
-    # resolves the subject from config.SUBJECT (the VISDETECT_SUBJECT env), NOT
-    # from --subject. --subject correctly namespaces camera files + the sync dir.
-    if subject is not None and subject != config.SUBJECT:
-        logger.warning(
-            "--subject=%s differs from config.SUBJECT=%s; the behavioural PKL "
-            "load uses config.SUBJECT. Set VISDETECT_SUBJECT=%s so load_session "
-            "resolves the right subject's session.",
-            subject, config.SUBJECT, subject,
+    # --- Behavioural session -> baseline_on + change queue. Resolve the PKL by
+    #     --subject (NOT the frozen config.SUBJECT env). Load BEFORE seeding so a
+    #     not-found session does not archive the user's prior anchors first.
+    pkl_path = _resolve_subject_pkl(session, subject)
+    if pkl_path is None:
+        raise SystemExit(
+            f"No PKL for subject {subj_display} session {session} under "
+            f"{os.path.join(config.ROOT, 'data', 'pkls', subj_display)} "
+            f"(expected {subj_display}_<token>.pkl)."
         )
+    sess = _load_session_path(pkl_path)
 
     # --- Migrate + seed (§5): archive prior anchors, pre-load as editable seeds.
     seed = seed_from_archive(session, subject)  # v3 dict with source='legacy', or None
 
-    # --- Behavioural session -> baseline_on times + change queue.
-    sess = load_session(session)
     baseline_on = np.asarray(sess.ni_events.get("Baseline_ON", []), dtype=float)
     baseline_on = baseline_on[baseline_on > 0]
     n_task_trials = len(sess.trials)
@@ -420,8 +423,12 @@ def main(argv=None) -> int:
             if tag.queue:
                 state["frame_idx"] = _change_frame(tag.queue_pos)
         else:
-            state["frame_idx"] = _predicted_frame(
-                tag.baseline_pos, baseline_on, _baseline_implied_offset(), ts_ms)
+            # compute_predicted_frame_idx maps NI time -> frame as
+            # (nidaq - coarse_offset); our baseline implied offset is
+            # (video - nidaq), so pass its negation as the coarse offset.
+            state["frame_idx"] = compute_predicted_frame_idx(
+                float(baseline_on[tag.baseline_pos]),
+                -_baseline_implied_offset(), ts_ms)
 
     def _toggle_mode(state) -> bool:
         tag.mode = "change" if tag.mode == "baseline" else "baseline"
@@ -524,8 +531,9 @@ def main(argv=None) -> int:
         else:
             mode_line = f"{subj_display}  {session}   MODE: BASELINE"
             pos, ntot, trial_no = tag.baseline_pos + 1, len(baseline_on), tag.baseline_pos
-            pred = _predicted_frame(
-                tag.baseline_pos, baseline_on, _baseline_implied_offset(), ts_ms)
+            pred = compute_predicted_frame_idx(
+                float(baseline_on[tag.baseline_pos]),
+                -_baseline_implied_offset(), ts_ms)
         delta = fi - pred
 
         entries = tag.anchors["anchors"] if tag.anchors else []
@@ -541,8 +549,8 @@ def main(argv=None) -> int:
         else:
             qc = "cv_rmse: need >=3 anchors"
 
-        legend = ("[space]play [<]/[>]spd {:g}x [f]full/zoom [j/k]jump "
-                  "[c]base<->chg [s]save [enter]save+close [d]del [q]quit"
+        legend = ("[space]play  '['/']'spd {:g}x  [f]full/zoom  [j/k]jump  "
+                  "[c]base<->chg  [enter]save  [d]del  [q]quit"
                   ).format(tag.speed)
         return "\n".join([
             mode_line,
@@ -583,7 +591,10 @@ def main(argv=None) -> int:
             return _goto_end(state, first=False)
         if key == "d":
             return _delete_current()
-        if key == "s":
+        if key in ("enter", "s"):
+            # enter = design-primary save that KEEPS the window open (the shared
+            # scrubber now routes enter through this hook before its default
+            # save-and-close); 's' is a documented alias (keymap.save is cleared).
             return _save_keepopen(state)
         return False
 
@@ -592,7 +603,8 @@ def main(argv=None) -> int:
     # fallback is BG_046-specific and this pilot runs on BG_031/039/038, so
     # full-frame is the cross-subject-safe startup view (f toggles the zoom).
     # ---------------------------------------------------------------------
-    start_frame = _predicted_frame(0, baseline_on, _baseline_implied_offset(), ts_ms)
+    start_frame = compute_predicted_frame_idx(
+        float(baseline_on[0]), -_baseline_implied_offset(), ts_ms)
     cfg = ScrubberConfig(
         video_path=video_path,
         ts_ms=ts_ms,
@@ -602,7 +614,7 @@ def main(argv=None) -> int:
         crop=None,               # full-frame default
         hud_fn=_hud_fn,
         on_key_extra=_on_key_extra,
-        on_save=_do_save,        # primitive routes enter -> _do_save (save + close)
+        on_save=_do_save,        # enter falls back here only if the hook declines
     )
 
     logger.info("Tagging %s / %s: %d baseline trials, %d change targets, %d frames.",
