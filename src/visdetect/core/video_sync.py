@@ -628,25 +628,40 @@ def fit_2anchor_clock(
     Parameters
     ----------
     anchors : list of dict
-        Each dict must have ``nidaq_baseline_on_s`` and ``video_time_s`` keys.
-        The fit uses ``video_time_s`` directly; ``fps`` is currently unused and
-        reserved for forward compatibility.
+        Each dict must have ``video_time_s`` plus a nidaq time — either
+        ``nidaq_baseline_on_s`` (baseline anchors) or ``nidaq_event_s`` (change
+        anchors). The fit uses ``video_time_s`` directly; ``fps`` is currently
+        unused and reserved for forward compatibility.
     fps : float
         Camera frame rate (reserved; not used in the fit calculation).
     n_baseline_on : int
         Total number of Baseline_ON events in the session (for coverage reporting).
 
     Returns a SyncResult with detection_method = "manual_slope_fit".
-    Raises ValueError on fewer than 2 anchors, duplicate nidaq times, or
-    non-positive slope.
+    Raises ValueError on fewer than 2 anchors, an anchor missing both nidaq time
+    keys, duplicate nidaq times, or non-positive slope.
     """
     if len(anchors) < 2:
         raise ValueError(
             f"fit_2anchor_clock needs at least 2 anchors; got {len(anchors)}"
         )
 
+    def _anchor_nidaq_s(a: dict) -> float:
+        # Baseline anchors carry ``nidaq_baseline_on_s``; change anchors carry
+        # only ``nidaq_event_s``. Read tolerantly (mirroring fit_multianchor_clock)
+        # so a 2-anchor set that includes a change entry fits instead of raising a
+        # KeyError that fit_sync would not catch. Baseline reads stay identical:
+        # baseline entries store nidaq_baseline_on_s == nidaq_event_s.
+        nidaq = a.get("nidaq_baseline_on_s", a.get("nidaq_event_s"))
+        if nidaq is None:
+            raise ValueError(
+                "Anchor has neither 'nidaq_baseline_on_s' nor 'nidaq_event_s'; "
+                "cannot fit a clock. Check for malformed anchor entries."
+            )
+        return float(nidaq)
+
     x = np.array(
-        [float(a["nidaq_baseline_on_s"]) for a in anchors], dtype=np.float64
+        [_anchor_nidaq_s(a) for a in anchors], dtype=np.float64
     )
     y = np.array(
         [float(a["video_time_s"]) for a in anchors], dtype=np.float64

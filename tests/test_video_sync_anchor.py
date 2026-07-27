@@ -581,6 +581,48 @@ def test_fit_2anchor_clock_max_residual_exceeds_rmse_for_noncollinear():
     assert sr.max_residual_ms > sr.rmse_ms  # strictly greater for non-collinear data
 
 
+def test_fit_2anchor_clock_accepts_change_entry_via_nidaq_event_s():
+    """A 2-anchor set including a CHANGE entry (``nidaq_event_s`` only, no
+    ``nidaq_baseline_on_s``) must fit, not KeyError. The event-time read falls
+    back to ``nidaq_event_s``, so the fit equals the all-baseline twin with the
+    same (nidaq, video) pairs."""
+    fps = 50.0
+    mixed = [
+        {"trial_index": 0, "event_type": "baseline_on", "nidaq_baseline_on_s": 10.0,
+         "nidaq_event_s": 10.0, "video_frame_idx": 500, "video_time_s": 10.0,
+         "clicked_at": "x"},
+        {"trial_index": 3, "event_type": "change_on", "nidaq_event_s": 20.0,
+         "video_frame_idx": 1010, "video_time_s": 20.2, "clicked_at": "x"},  # no baseline key
+    ]
+    sr = vs.fit_2anchor_clock(anchors=mixed, fps=fps, n_baseline_on=101)
+    # slope = (20.2 - 10.0)/(20.0 - 10.0) = 1.02 ; offset = 10 - 1.02*10 = -0.2
+    assert abs(sr.slope - 1.02) < 1e-9
+    assert abs(sr.offset - (-0.2)) < 1e-9
+
+    # Baseline-only twin with identical (nidaq, video) pairs fits byte-identically.
+    baseline_only = [
+        {"trial_index": 0, "nidaq_baseline_on_s": 10.0, "video_frame_idx": 500,
+         "video_time_s": 10.0, "clicked_at": "x"},
+        {"trial_index": 3, "nidaq_baseline_on_s": 20.0, "video_frame_idx": 1010,
+         "video_time_s": 20.2, "clicked_at": "x"},
+    ]
+    sr_base = vs.fit_2anchor_clock(anchors=baseline_only, fps=fps, n_baseline_on=101)
+    assert sr.slope == sr_base.slope
+    assert sr.offset == sr_base.offset
+
+
+def test_fit_2anchor_clock_rejects_anchor_missing_both_nidaq_keys():
+    """An anchor with neither nidaq time key raises ValueError (which fit_sync
+    catches) rather than a KeyError/TypeError that would escape uncaught."""
+    anchors = [
+        {"trial_index": 0, "nidaq_baseline_on_s": 10.0, "video_time_s": 10.0,
+         "clicked_at": "x"},
+        {"trial_index": 1, "video_time_s": 20.2, "clicked_at": "x"},  # no nidaq key
+    ]
+    with pytest.raises(ValueError, match="neither"):
+        vs.fit_2anchor_clock(anchors=anchors, fps=50.0, n_baseline_on=101)
+
+
 def test_predicted_last_trial_frame_from_anchor_0():
     ca = _import_click_anchor()
     ts_ms = np.arange(0.0, 10000000.0, 20.0)  # 50fps, 500k frames

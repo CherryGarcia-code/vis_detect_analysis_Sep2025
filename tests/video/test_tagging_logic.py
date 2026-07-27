@@ -107,3 +107,48 @@ def test_build_v3_anchor_file_stamps_v3_and_baseline_event_type():
     a = f["anchors"][0]
     assert a["event_type"] == "baseline_on"
     assert a["nidaq_event_s"] == a["nidaq_baseline_on_s"]
+
+
+# ---------------------------------------------------------------------------
+# Provisional change-clock seeding math (extracted from tag_session; UX design §8)
+# ---------------------------------------------------------------------------
+
+
+def test_provisional_change_clock_zero_anchors_uses_coarse_offset():
+    slope, offset = tagging.provisional_change_clock([], coarse_offset_s=15.0)
+    assert slope == 1.0
+    assert offset == 15.0
+    # nidaq = 1.0*cam + 15.0  ->  cam(nidaq=15.0) = 0.0 -> frame 0
+    assert tagging.nidaq_to_frame_oriented(15.0, slope, offset, 50.0,
+                                           "manual_multianchor") == 0
+
+
+def test_provisional_change_clock_one_anchor_implied_offset_slope1():
+    # change entry (nidaq_event_s only): offset = nidaq - video = 22 - 4 = 18
+    a = {"event_type": "change_on", "nidaq_event_s": 22.0, "video_time_s": 4.0}
+    slope, offset = tagging.provisional_change_clock([a], coarse_offset_s=15.0)
+    assert slope == 1.0
+    assert offset == 18.0
+    # baseline entry (nidaq_baseline_on_s fallback) gives identical math
+    b = {"event_type": "baseline_on", "nidaq_baseline_on_s": 22.0, "video_time_s": 4.0}
+    assert tagging.provisional_change_clock([b], coarse_offset_s=15.0) == (1.0, 18.0)
+    # feeding nidaq=22 back recovers the anchor's own frame: cam=4.0 -> frame 200 @50fps
+    assert tagging.nidaq_to_frame_oriented(22.0, slope, offset, 50.0,
+                                           "manual_multianchor") == 200
+
+
+def test_provisional_change_clock_three_anchors_uses_multianchor_fit():
+    # Exactly-collinear nidaq = 1.02*cam - 0.2  -> Theil-Sen recovers it exactly,
+    # so the >=3-anchor fit path (not the slope-1.0 fallback) must be taken.
+    anchors = [
+        {"video_time_s": 10.0, "nidaq_event_s": 10.0},   # 1.02*10 - 0.2
+        {"video_time_s": 15.0, "nidaq_event_s": 15.1},   # 1.02*15 - 0.2
+        {"video_time_s": 20.0, "nidaq_event_s": 20.2},   # 1.02*20 - 0.2
+    ]
+    slope, offset = tagging.provisional_change_clock(anchors, coarse_offset_s=15.0)
+    assert abs(slope - 1.02) < 1e-6
+    assert abs(offset - (-0.2)) < 1e-6
+    assert slope != 1.0  # proves the multianchor fit ran, not the offset fallback
+    # nidaq=15.1 -> cam=(15.1+0.2)/1.02 = 15.0 -> frame 750 @50fps
+    assert tagging.nidaq_to_frame_oriented(15.1, slope, offset, 50.0,
+                                           "manual_multianchor") == 750

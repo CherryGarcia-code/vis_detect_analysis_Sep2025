@@ -84,6 +84,7 @@ from visdetect.analysis.tagging import (  # noqa: E402
     seed_from_archive,
     eye_zoom_crop,
     nidaq_to_frame_oriented,
+    provisional_change_clock,
 )
 from visdetect.core.video_sync import (  # noqa: E402
     find_camera_files,
@@ -292,23 +293,11 @@ def main(argv=None) -> int:
         return -float(coarse_offset_s)  # video ~= nidaq - coarse_offset
 
     def _provisional_change_clock():
-        """(slope, offset) in manual_multianchor orientation: nidaq = slope*cam + offset.
-
-        Seeding stages (design §3): coarse -> first anchor's implied offset ->
-        provisional fit_multianchor_clock once >=3 anchors exist.
-        """
+        """(slope, offset) seeding the change jump. Thin GUI wrapper: gathers the
+        live anchor list and delegates to the pure, unit-tested
+        ``tagging.provisional_change_clock`` (design §8)."""
         anchors = tag.anchors["anchors"] if tag.anchors else []
-        if len(anchors) >= 3:
-            try:
-                sync = fit_multianchor_clock(anchors, len(baseline_on))
-                return float(sync.slope), float(sync.offset)
-            except ValueError:
-                pass  # degenerate set -> fall through to the coarser model
-        if anchors:
-            a = anchors[0]
-            nidaq = float(a.get("nidaq_event_s", a.get("nidaq_baseline_on_s")))
-            return 1.0, nidaq - float(a["video_time_s"])  # nidaq = cam + offset
-        return 1.0, float(coarse_offset_s)                 # nidaq = cam + coarse_offset
+        return provisional_change_clock(anchors, coarse_offset_s)
 
     def _change_frame(pos: int) -> int:
         slope, offset = _provisional_change_clock()
