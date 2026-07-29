@@ -486,7 +486,7 @@ def main(argv=None) -> int:
         else:
             qc = "cv_rmse: need >=3 anchors"
 
-        legend = ("[space]play  '['/']'spd {:g}x  [j/k]jump  "
+        legend = ("[space]play  [-/+]spd {:g}x  [j/k]jump  "
                   "[c]base<->chg  [enter]save  [d]del  [q]quit"
                   ).format(tag.speed)
         return "\n".join([
@@ -506,14 +506,16 @@ def main(argv=None) -> int:
         key = event.key
         if key == " ":
             return _toggle_play(event)
-        # Accept BOTH the character and the Tk keysym spellings: matplotlib/Tk on
-        # some platforms delivers "bracketleft"/"bracketright" rather than "["/"]"
-        # (the A1-pilot dead-key report). Accepting both is harmless and robust.
-        if key in ("[", "bracketleft"):
+        # Speed keys. Primary is -/+ because the HUD marks keys as [key], so a
+        # legend reading '['/']' was misread as the "/" key during the A1 pilot
+        # (the brackets were never actually pressed). "+" needs shift on most
+        # layouts, so "=" is accepted too; the original brackets stay as aliases,
+        # incl. the Tk keysym spellings some backends deliver instead of "["/"]".
+        if key in ("-", "[", "bracketleft"):
             tag.speed = max(0.25, tag.speed / 2.0)
             _apply_speed()
             return True
-        if key in ("]", "bracketright"):
+        if key in ("+", "=", "]", "bracketright"):
             tag.speed = min(8.0, tag.speed * 2.0)
             _apply_speed()
             return True
