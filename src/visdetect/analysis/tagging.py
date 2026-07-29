@@ -109,7 +109,14 @@ def provisional_change_clock(anchors, coarse_offset_s, fps=None) -> Tuple[float,
 def eye_zoom_crop(eye_roi, pad: float = 0.15,
                   fallback: Tuple[int, int, int, int] = (200, 420, 320, 540)
                   ) -> Tuple[int, int, int, int]:
-    """(y0,y1,x0,x1) eye-zoom crop from an eye ROI box (padded), else the fallback."""
+    """(y0,y1,x0,x1) eye-zoom crop from an eye ROI box (padded), else the fallback.
+
+    WARNING: the returned crop is UNCLAMPED. Padding an ROI near a frame edge (or
+    the BG_046-specific ``fallback`` on a smaller frame) can yield negative or
+    out-of-frame coords, and numpy slicing then silently WRAPS and returns the
+    wrong crop. Callers MUST clamp to real frame bounds (0<=y0<y1<=H, 0<=x0<x1<=W)
+    before indexing a frame. See docs/superpowers/specs/2026-07-23-camera-tagger-ux-design.md.
+    """
     if eye_roi is None:
         return fallback
     y0, y1, x0, x1 = [int(v) for v in eye_roi]

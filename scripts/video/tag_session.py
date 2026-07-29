@@ -9,8 +9,8 @@ them.
 Composed primitives
 --------------------
 * ``visdetect.analysis.tagging`` — ``build_change_queue`` (Task 1),
-  ``seed_from_archive`` (Task 3), ``eye_zoom_crop`` (Task 5),
-  ``nidaq_to_frame_oriented`` (Task 4), ``ChangeTarget``.
+  ``seed_from_archive`` (Task 3), ``nidaq_to_frame_oriented`` (Task 4),
+  ``provisional_change_clock``, ``ChangeTarget``.
 * ``scripts/video/_tagger_ui.py`` — ``run_scrubber(cfg)`` / ``ScrubberConfig``
   (Task 6): the shared keyboard scrubber + HUD core.
 * ``visdetect.core.video_sync`` — ``stage_session_video``, ``find_camera_files``,
@@ -20,16 +20,20 @@ Composed primitives
   ``_build_v3_anchor_file``, ``_merge_anchor_into_file``), ``save_anchor``.
 * ``visdetect.analysis.config`` — ``canonical_camera_session``,
   ``subject_video_sync_dir``, ``ROOT``, ``SUBJECT``.
-* ``visdetect.suite.loader.list_pkl_sessions`` +
+* ``visdetect.suite.loader.resolve_subject_pkl`` +
   ``visdetect.core.session.load_session`` — subject-aware behavioural PKL load
   (by ``--subject``, not the frozen ``config.SUBJECT`` env).
+
+The tagger is always full-frame in Plan 2a. The eye-zoom / ROI view is deferred
+to Plan 2b: the only zoom crop available here is the BG_046-specific absolute-
+pixel fallback in ``eye_zoom_crop`` (``tag.eye_roi`` is always ``None`` in 2a),
+which lands on the snout on subjects whose camera sits closer to the face.
 
 Keybindings (see docs/superpowers/specs/2026-07-23-camera-tagger-ux-design.md)
 ------------------------------------------------------------------------------
   arrows / shift / ctrl   step +/-1 / +/-10 / +/-100 frames (built into scrubber)
   space                   play/pause forward
   [ / ]                   slower / faster playback
-  f                       toggle full-frame <-> eye-zoom view
   j / k                   next / prev target onset (baseline trial OR change queue)
   c                       toggle baseline <-> change target mode
   home / end              first / last target
@@ -64,16 +68,15 @@ import cv2
 # Baseline predicted-frame math comes from the library
 # (video_sync.compute_predicted_frame_idx), not a local reimplementation.
 
-# Behavioural PKL is loaded by SUBJECT (not the frozen config.SUBJECT env): we
-# resolve the subject's pkl path ourselves (list_pkl_sessions convention) and
-# load via the PATH-based core loader.
-from visdetect.suite.loader import list_pkl_sessions  # noqa: E402
+# Behavioural PKL is loaded by SUBJECT (not the frozen config.SUBJECT env): the
+# subject-aware library resolver (suite.loader.resolve_subject_pkl) finds the
+# subject's pkl path, loaded via the PATH-based core loader.
+from visdetect.suite.loader import resolve_subject_pkl  # noqa: E402
 from visdetect.core.session import load_session as _load_session_path  # noqa: E402
 from visdetect.analysis import config  # noqa: E402
 from visdetect.analysis.tagging import (  # noqa: E402
     build_change_queue,
     seed_from_archive,
-    eye_zoom_crop,
     nidaq_to_frame_oriented,
     provisional_change_clock,
 )
@@ -122,23 +125,6 @@ DEFAULT_COARSE_OFFSET_S = 15.0
 # ---------------------------------------------------------------------------
 
 
-def _resolve_subject_pkl(session: str, subject: Optional[str]) -> Optional[str]:
-    """Path to *subject*'s behavioural PKL for canonical *session*, or None.
-
-    Subject-aware (unlike ``suite.loader.resolve_session_pkl``, which is frozen to
-    ``config.SUBJECT``). Reuses ``list_pkl_sessions`` (the on-disk pkl convention
-    ``data/pkls/<subject>/<subject>_<token>.pkl``) and matches each token by
-    ``canonical_camera_session`` so 6-vs-8-digit tokens and leading-zero days both
-    resolve.
-    """
-    subj = subject or config.SUBJECT
-    pkl_dir = os.path.join(config.ROOT, "data", "pkls", subj)
-    for token in list_pkl_sessions(subj):
-        if config.canonical_camera_session(token) == session:
-            return os.path.join(pkl_dir, f"{subj}_{token}.pkl")
-    return None
-
-
 def _entry_implied_offset(a: dict) -> float:
     """``video_time_s - nidaq`` for an anchor entry (baseline or change).
 
@@ -176,8 +162,7 @@ class TagSessionState:
     queue_pos: int = 0                     # current change-queue index
     queue: list = field(default_factory=list)  # List[ChangeTarget]
     anchors: Optional[dict] = None         # live v3 anchor file (seeded)
-    eye_roi: Optional[tuple] = None        # None in Plan 2a (ROI capture = 2b)
-    full_frame: bool = True                # start on the cross-subject-safe view
+    eye_roi: Optional[tuple] = None        # None in Plan 2a (ROI/zoom capture = 2b)
     speed: float = 1.0                     # playback speed multiplier
     playing: bool = False
     timer: object = None                   # matplotlib canvas timer
@@ -205,9 +190,10 @@ def main(argv=None) -> int:
     sync_dir = config.subject_video_sync_dir(subject)
 
     # --- Behavioural session -> baseline_on + change queue. Resolve the PKL by
-    #     --subject (NOT the frozen config.SUBJECT env). Load BEFORE seeding so a
-    #     not-found session does not archive the user's prior anchors first.
-    pkl_path = _resolve_subject_pkl(session, subject)
+    #     --subject (NOT the frozen config.SUBJECT env) via the shared library
+    #     resolver. Load BEFORE seeding so a not-found session does not archive
+    #     the user's prior anchors first.
+    pkl_path = resolve_subject_pkl(session, subject)
     if pkl_path is None:
         raise SystemExit(
             f"No PKL for subject {subj_display} session {session} under "
@@ -254,8 +240,8 @@ def main(argv=None) -> int:
     if coarse_offset_s is None:
         coarse_offset_s = DEFAULT_COARSE_OFFSET_S
 
-    # Real frame dimensions (for crop clamping). Prefer the container props; fall
-    # back to decoding one frame if the props report 0.
+    # Real frame dimensions (for the full-frame playback placeholder). Prefer the
+    # container props; fall back to decoding one frame if the props report 0.
     probe = cv2.VideoCapture(video_path)
     frame_h = int(probe.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frame_w = int(probe.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -270,25 +256,6 @@ def main(argv=None) -> int:
         return 2
 
     tag = TagSessionState(queue=queue, anchors=seed)
-
-    # ---------------------------------------------------------------------
-    # Crop handling (CRITICAL: eye_zoom_crop can pad past the frame edge and
-    # produce NEGATIVE indices; numpy negative slices wrap silently. Clamp to
-    # real frame bounds so 0<=y0<y1<=H and 0<=x0<x1<=W ALWAYS hold.)
-    # ---------------------------------------------------------------------
-    def _clamp_crop(crop):
-        y0, y1, x0, x1 = [int(v) for v in crop]
-        y0 = max(0, min(y0, frame_h - 1))
-        y1 = max(y0 + 1, min(y1, frame_h))
-        x0 = max(0, min(x0, frame_w - 1))
-        x1 = max(x0 + 1, min(x1, frame_w))
-        return (y0, y1, x0, x1)
-
-    def _current_zoom_crop():
-        # eye_roi is None in Plan 2a -> eye_zoom_crop returns the BG_046 fallback
-        # (200,420,320,540); we clamp it to the real frame so it is safe on
-        # BG_031/039/038 too (ROI-derived crops arrive in Plan 2b).
-        return _clamp_crop(eye_zoom_crop(tag.eye_roi))
 
     # ---------------------------------------------------------------------
     # Provisional clock models
@@ -316,25 +283,18 @@ def main(argv=None) -> int:
 
     # ---------------------------------------------------------------------
     # Frame reader for the playback timer (the scrubber owns its own cap and
-    # exposes no per-tick redraw hook, so playback needs its own capture). This
-    # mirrors _tagger_ui._read_frame and respects the CURRENT cfg.crop.
+    # exposes no per-tick redraw hook, so playback needs its own capture). The
+    # tagger is full-frame in Plan 2a (cfg.crop is always None), so this mirrors
+    # _tagger_ui._read_frame's full-frame path.
     # ---------------------------------------------------------------------
     play_cap = cv2.VideoCapture(video_path)
 
     def _read_play_frame(fi: int) -> np.ndarray:
         play_cap.set(cv2.CAP_PROP_POS_FRAMES, int(fi))
         ok, frame = play_cap.read()
-        crop = cfg.crop
         if not ok or frame is None:
-            if crop is not None:
-                y0, y1, x0, x1 = crop
-                return np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
             return np.zeros((frame_h, frame_w), dtype=np.uint8)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        if crop is not None:
-            y0, y1, x0, x1 = crop
-            return gray[y0:y1, x0:x1]
-        return gray
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     def _draw_current(fi: int):
         fig = tag.fig
@@ -345,11 +305,7 @@ def main(argv=None) -> int:
             hud = fig.axes[1].texts[0]
         except (IndexError, AttributeError):
             return
-        frame = _read_play_frame(fi)
-        im.set_data(frame)
-        # Update extent too: the scrubber's own _refresh only set_data()s, so a
-        # crop change would otherwise keep the previous extent and mis-display.
-        im.set_extent((-0.5, frame.shape[1] - 0.5, frame.shape[0] - 0.5, -0.5))
+        im.set_data(_read_play_frame(fi))
         hud.set_text(_hud_fn(fi))
         fig.canvas.draw_idle()
 
@@ -397,25 +353,8 @@ def main(argv=None) -> int:
             tag.timer.start()
 
     # ---------------------------------------------------------------------
-    # View + target navigation
+    # Target navigation
     # ---------------------------------------------------------------------
-    def _toggle_view(state) -> bool:
-        tag.full_frame = not tag.full_frame
-        cfg.crop = None if tag.full_frame else _current_zoom_crop()
-        # Immediately fix the image extent for the new crop shape; subsequent
-        # same-crop redraws (arrow keys via the scrubber) keep it valid.
-        fig = tag.fig
-        if fig is not None and plt.fignum_exists(getattr(fig, "number", -1)):
-            try:
-                im = fig.axes[0].images[0]
-                frame = _read_play_frame(state["frame_idx"])
-                im.set_data(frame)
-                im.set_extent(
-                    (-0.5, frame.shape[1] - 0.5, frame.shape[0] - 0.5, -0.5))
-            except (IndexError, AttributeError):
-                pass
-        return True
-
     def _reseed_target(state):
         if tag.mode == "change":
             if tag.queue:
@@ -547,7 +486,7 @@ def main(argv=None) -> int:
         else:
             qc = "cv_rmse: need >=3 anchors"
 
-        legend = ("[space]play  '['/']'spd {:g}x  [f]full/zoom  [j/k]jump  "
+        legend = ("[space]play  '['/']'spd {:g}x  [j/k]jump  "
                   "[c]base<->chg  [enter]save  [d]del  [q]quit"
                   ).format(tag.speed)
         return "\n".join([
@@ -567,16 +506,17 @@ def main(argv=None) -> int:
         key = event.key
         if key == " ":
             return _toggle_play(event)
-        if key == "[":
+        # Accept BOTH the character and the Tk keysym spellings: matplotlib/Tk on
+        # some platforms delivers "bracketleft"/"bracketright" rather than "["/"]"
+        # (the A1-pilot dead-key report). Accepting both is harmless and robust.
+        if key in ("[", "bracketleft"):
             tag.speed = max(0.25, tag.speed / 2.0)
             _apply_speed()
             return True
-        if key == "]":
+        if key in ("]", "bracketright"):
             tag.speed = min(8.0, tag.speed * 2.0)
             _apply_speed()
             return True
-        if key == "f":
-            return _toggle_view(state)
         if key == "c":
             return _toggle_mode(state)
         if key == "j":
@@ -594,12 +534,17 @@ def main(argv=None) -> int:
             # scrubber now routes enter through this hook before its default
             # save-and-close); 's' is a documented alias (keymap.save is cleared).
             return _save_keepopen(state)
+        # Self-diagnosing: log (cheap, debug-level, not to the HUD) any key we do
+        # not handle so a future dead-key report (like the bracket keys above) is
+        # immediately diagnosable from the log instead of a silent no-op.
+        logger.debug("unhandled key: %r", key)
         return False
 
     # ---------------------------------------------------------------------
-    # Compose the scrubber. Default view = FULL FRAME (crop=None): the eye-zoom
-    # fallback is BG_046-specific and this pilot runs on BG_031/039/038, so
-    # full-frame is the cross-subject-safe startup view (f toggles the zoom).
+    # Compose the scrubber. Always FULL FRAME (crop=None): the eye-zoom fallback
+    # is BG_046-specific absolute pixels and lands on the snout on subjects whose
+    # camera sits closer to the face, so zoom/ROI is deferred to Plan 2b (see the
+    # module docstring + the UX design doc). Full frame worked well in the pilot.
     # ---------------------------------------------------------------------
     start_frame = compute_predicted_frame_idx(
         float(baseline_on[0]), -_baseline_implied_offset(), ts_ms)

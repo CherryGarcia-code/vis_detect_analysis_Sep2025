@@ -25,7 +25,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg", force=True)
 
-from visdetect.suite.loader import load_session
+from visdetect.suite.loader import load_session_for_subject
 from visdetect.core.video_sync import (
     find_camera_files,
     load_camera_metadata,
@@ -81,7 +81,13 @@ def main() -> int:
         logger.error("Anchor JSON has %d anchor(s); need >=2.", len(anchors))
         return 2
 
-    sess = load_session(session_name)
+    # Subject-aware load (NOT the frozen config.SUBJECT env): --subject BG_031
+    # must load BG_031's behaviour, not silently resolve against BG_046.
+    try:
+        sess = load_session_for_subject(session_name, args.subject)
+    except FileNotFoundError as exc:
+        logger.error("%s", exc)
+        return 2
     baseline_on = np.asarray(sess.ni_events.get("Baseline_ON", []), dtype=float)
     baseline_on = baseline_on[baseline_on > 0]
     n_task_trials = len(sess.trials)
