@@ -53,20 +53,11 @@ from typing import Optional
 import numpy as np
 import cv2
 
-# --- Matplotlib backend selection ------------------------------------------
-# The scrubber primitive (_tagger_ui) deliberately does NOT force a backend;
-# the calling tool picks it. We want TkAgg for the interactive window, but the
-# headless verifications (--help / spec-import) run under MPLBACKEND=Agg and
-# must not require a display. So: force TkAgg only when NOT explicitly headless.
-import matplotlib
-if os.environ.get("MPLBACKEND", "").lower() != "agg":
-    matplotlib.use("TkAgg", force=True)
-import matplotlib.pyplot as plt  # noqa: E402  (after backend selection)
-
-# The shared scrubber sits in this same directory; make it importable whether
-# run as a script or loaded via importlib.spec_from_file_location.
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _tagger_ui import ScrubberConfig, run_scrubber  # noqa: E402
+# NOTE: matplotlib backend selection happens AFTER the visdetect imports below,
+# not here. Several library modules (visdetect.core.qc, suite.plotting, ...) call
+# matplotlib.use("Agg") at import time, which silently clobbers an earlier TkAgg
+# and leaves the window unable to show. click_anchor has always ordered it that
+# way; tag_session must too. See the backend block after the imports.
 
 # NOTE: we intentionally do NOT `from click_anchor import ...`; click_anchor
 # forces TkAgg at import time, which would break the headless spec-import.
@@ -98,6 +89,24 @@ from visdetect.core.video_sync import (  # noqa: E402
     _build_v3_anchor_file,
     _merge_anchor_into_file,
 )
+
+# --- Matplotlib backend selection (MUST stay after the visdetect imports) ----
+# visdetect.core.qc / suite.plotting / tf_pulse call matplotlib.use("Agg") at
+# import time, so selecting TkAgg any earlier gets silently overwritten and
+# plt.show() then warns "FigureCanvasAgg is non-interactive". Selecting it here
+# — last — is what click_anchor does and is why its scrubber works.
+# The headless verifications (--help / spec-import) run under MPLBACKEND=Agg and
+# must not require a display, so honour an explicit Agg request.
+import matplotlib  # noqa: E402
+if os.environ.get("MPLBACKEND", "").lower() != "agg":
+    matplotlib.use("TkAgg", force=True)
+import matplotlib.pyplot as plt  # noqa: E402  (after backend selection)
+
+# The shared scrubber sits in this same directory; make it importable whether
+# run as a script or loaded via importlib.spec_from_file_location. Imported
+# after the backend is set (it does `import matplotlib.pyplot`).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _tagger_ui import ScrubberConfig, run_scrubber  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger("tag_session")
