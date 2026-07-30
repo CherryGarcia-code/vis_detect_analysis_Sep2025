@@ -117,6 +117,23 @@ the interaction and the code minimal.
   inference, not measured truth — but it is what the detector *should* report, so it is the right
   target. Corrected ellipses on frames also marked occluded should be read as estimates.
 
+**⚠️ The detector does not return an ellipse (verified in code, 2026-07-31).** This spec originally
+assumed `detect_pupil_in_frame` yields `{cx,cy,major,minor,angle}`. It actually returns
+`{center_y, center_x, radius, area, circularity, bbox}` — it runs `cv2.fitEllipse` internally but
+**discards the minor axis and the rotation angle**, keeping only `radius = max(axes)/2`.
+
+Decision (user, 2026-07-31): **leave the detector unchanged in 2b.** Proposals are stored as a circle
+of diameter `2*radius` with `angle = 0`; human corrections still carry two genuine axes. This
+preserves the major diameter — the quantity the eyelid-occlusion bias is measured against — and keeps
+2b from modifying shared Plan 1 library code.
+
+**Consequence for sub-project C:** a partially occluded pupil is exactly the case where major and
+minor diverge, and the detector reports one number where the shape has two. It therefore cannot flag
+its own occlusion failures, even though it computes the information and throws it away. If C wants an
+automatic occlusion heuristic (e.g. a major/minor ratio test), the first step is exposing those axes
+from `detect_pupil_in_frame` — a small change, but one that touches shared code and needs its own
+regression check. Until then, occlusion detection depends on the human corrections captured here.
+
 **Sampling caveat (must survive into any analysis that uses these labels):**
 - Labeled frames are the ones the user visited — **baseline and change onsets** — not a random sample
   of the session. Any error rate computed from them is *"error rate at task events"*, not across the
