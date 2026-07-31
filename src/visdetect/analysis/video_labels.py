@@ -29,7 +29,7 @@ import json
 import os
 import tempfile
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Tuple
 
 from visdetect.analysis.config import (
     subject_video_labels_dir,
@@ -194,3 +194,62 @@ def seed_rois_from_previous(session, subject, current_frame_size,
     applied = prior_fs == [int(v) for v in current_frame_size]
     return {"source_session": best[1], "rois": rois,
             "frame_size": prior_fs, "applied": applied}
+
+
+def clamp_crop(crop, H: int, W: int) -> Tuple[int, int, int, int]:
+    """Normalize and clamp a ``(y0,y1,x0,x1)`` crop into ``[0,H]×[0,W]``.
+
+    HARD REQUIREMENT (design §7): ``tagging.eye_zoom_crop`` returns UNCLAMPED
+    coords — padding an ROI near a frame edge can yield negative or out-of-frame
+    values, and numpy slicing with a negative index does NOT error: it silently
+    WRAPS from the far edge and returns the WRONG crop. Always clamp here before
+    indexing a frame. Inverted inputs (``y0>y1``) are order-normalized so the
+    slice is non-empty when the box is (partly) inside the frame.
+    """
+    y0, y1, x0, x1 = crop
+    y0, y1 = sorted((int(y0), int(y1)))
+    x0, x1 = sorted((int(x0), int(x1)))
+    y0 = max(0, min(y0, H))
+    y1 = max(0, min(y1, H))
+    x0 = max(0, min(x0, W))
+    x1 = max(0, min(x1, W))
+    return (y0, y1, x0, x1)
+
+
+def ellipse_from_box(box) -> dict:
+    """Inscribed axis-aligned ellipse ``{cx,cy,major,minor,angle}`` from a drag
+    box ``(y0,y1,x0,x1)``.
+
+    ``major`` = larger of (width, height), ``minor`` = smaller, ``angle`` = 0.0
+    when wider-than-tall else 90.0. Rotation beyond 0/90 is intentionally lost
+    (design §5): negligible for a near-circular rodent pupil, and the two-drag
+    major/minor variant can follow if it ever matters.
+    """
+    y0, y1, x0, x1 = box
+    w = float(x1 - x0)
+    h = float(y1 - y0)
+    cx = (float(x0) + float(x1)) / 2.0
+    cy = (float(y0) + float(y1)) / 2.0
+    if w >= h:
+        return {"cx": cx, "cy": cy, "major": w, "minor": h, "angle": 0.0}
+    return {"cx": cx, "cy": cy, "major": h, "minor": w, "angle": 90.0}
+
+
+def ellipse_from_detection(det: Optional[dict]) -> Optional[dict]:
+    """Map a :func:`video_sync.detect_pupil_in_frame` result to the sidecar
+    ellipse schema ``{cx,cy,major,minor,angle}``, or ``None`` if ``det`` is None.
+
+    The detector surfaces only ``center_x``, ``center_y`` and ``radius``
+    (``radius = max(axes)/2`` from the internal ``cv2.fitEllipse``); the minor
+    axis and rotation are not exposed. The proposed ellipse is therefore stored
+    as a CIRCLE of diameter ``2*radius`` (``angle=0``). This preserves the
+    scientifically-critical quantity — the pupil's major diameter, which the
+    too-small-diameter eyelid-occlusion bias is measured against — while
+    collapsing the (unavailable) minor axis. A human ``correct`` supplies a true
+    two-axis ellipse via :func:`ellipse_from_box` when the shape matters.
+    """
+    if det is None:
+        return None
+    diameter = 2.0 * float(det["radius"])
+    return {"cx": float(det["center_x"]), "cy": float(det["center_y"]),
+            "major": diameter, "minor": diameter, "angle": 0.0}

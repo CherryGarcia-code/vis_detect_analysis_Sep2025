@@ -134,3 +134,34 @@ def test_seed_frame_size_mismatch_offers_but_does_not_apply(tmp_path):
     assert res["source_session"] == "01072025"
     assert res["applied"] is False                 # different resolution -> not applied
     assert res["frame_size"] == [976, 1024]
+
+
+# ---------------------------------------------------------------------------
+# Task 3: crop clamp + ellipse geometry
+# ---------------------------------------------------------------------------
+
+
+def test_clamp_crop_negative_oversize_inverted():
+    # negatives -> 0, oversize -> H/W
+    assert vl.clamp_crop((-30, 500, -20, 700), 480, 640) == (0, 480, 0, 640)
+    # inverted (y0>y1 / x0>x1) -> normalized to a valid, ordered slice
+    assert vl.clamp_crop((300, 100, 400, 200), 480, 640) == (100, 300, 200, 400)
+    # already valid -> unchanged
+    assert vl.clamp_crop((100, 200, 150, 250), 480, 640) == (100, 200, 150, 250)
+
+
+def test_ellipse_from_box_axis_aligned():
+    # y:100-200 (h=100), x:300-500 (w=200) -> wider than tall -> major=w, angle 0
+    assert vl.ellipse_from_box((100, 200, 300, 500)) == {
+        "cx": 400.0, "cy": 150.0, "major": 200.0, "minor": 100.0, "angle": 0.0}
+    # y:100-400 (h=300), x:300-500 (w=200) -> taller than wide -> major=h, angle 90
+    assert vl.ellipse_from_box((100, 400, 300, 500)) == {
+        "cx": 400.0, "cy": 250.0, "major": 300.0, "minor": 200.0, "angle": 90.0}
+
+
+def test_ellipse_from_detection_maps_radius_to_circle():
+    det = {"center_x": 512.0, "center_y": 480.0, "radius": 20.0,
+           "area": 1200.0, "circularity": 0.9, "bbox": (460, 500, 492, 532)}
+    assert vl.ellipse_from_detection(det) == {
+        "cx": 512.0, "cy": 480.0, "major": 40.0, "minor": 40.0, "angle": 0.0}
+    assert vl.ellipse_from_detection(None) is None
