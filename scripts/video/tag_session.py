@@ -24,10 +24,15 @@ Composed primitives
   ``visdetect.core.session.load_session`` — subject-aware behavioural PKL load
   (by ``--subject``, not the frozen ``config.SUBJECT`` env).
 
-The tagger is always full-frame in Plan 2a. The eye-zoom / ROI view is deferred
-to Plan 2b: the only zoom crop available here is the BG_046-specific absolute-
-pixel fallback in ``eye_zoom_crop`` (``tag.eye_roi`` is always ``None`` in 2a),
-which lands on the snout on subjects whose camera sits closer to the face.
+Plan 2b adds per-session ROI capture on this same pass: ``e``/``m`` drag the
+eye/mouth ROI (stored full-frame in the ``video_labels`` sidecar), a live green
+pupil ellipse (``detect_pupil_in_frame`` restricted to the eye ROI) is overlaid
+via the ``on_refresh`` seam so it survives the scrubber's internal redraws, and
+``f`` toggles a CLAMPED eye-zoom derived from the eye ROI (``eye_zoom_crop`` ->
+``video_labels.clamp_crop``; a ``None`` clamp means the box misses the frame, so
+the view stays full-frame rather than indexing an empty array). ROIs seed from
+the subject's most recent prior session (honouring the ``applied`` frame-size
+guard) and carry provenance (``inherited:<sess>`` until re-drawn -> ``drawn``).
 
 Keybindings (see docs/superpowers/specs/2026-07-23-camera-tagger-ux-design.md)
 ------------------------------------------------------------------------------
@@ -36,6 +41,8 @@ Keybindings (see docs/superpowers/specs/2026-07-23-camera-tagger-ux-design.md)
   [ / ]                   slower / faster playback
   j / k                   next / prev target onset (baseline trial OR change queue)
   c                       toggle baseline <-> change target mode
+  e / m                   drag the eye / mouth ROI (full-frame view only)
+  f                       toggle full-frame <-> clamped eye-zoom
   home / end              first / last target
   d                       delete this target's anchor (current mode's type)
   enter                   save anchor and KEEP the window open (design-primary;
@@ -79,6 +86,7 @@ from visdetect.analysis.tagging import (  # noqa: E402
     seed_from_archive,
     nidaq_to_frame_oriented,
     provisional_change_clock,
+    eye_zoom_crop,
 )
 from visdetect.core.video_sync import (  # noqa: E402
     find_camera_files,
@@ -87,11 +95,13 @@ from visdetect.core.video_sync import (  # noqa: E402
     compute_predicted_frame_idx,
     fit_multianchor_clock,
     save_anchor,
+    detect_pupil_in_frame,
     _build_anchor_entry,
     _build_change_anchor_entry,
     _build_v3_anchor_file,
     _merge_anchor_into_file,
 )
+from visdetect.analysis import video_labels as vl  # noqa: E402
 
 # --- Matplotlib backend selection (MUST stay after the visdetect imports) ----
 # visdetect.core.qc / suite.plotting / tf_pulse call matplotlib.use("Agg") at
@@ -104,6 +114,7 @@ import matplotlib  # noqa: E402
 if os.environ.get("MPLBACKEND", "").lower() != "agg":
     matplotlib.use("TkAgg", force=True)
 import matplotlib.pyplot as plt  # noqa: E402  (after backend selection)
+from matplotlib.patches import Ellipse  # noqa: E402  (patch artist for the pupil overlay)
 
 # The shared scrubber sits in this same directory; make it importable whether
 # run as a script or loaded via importlib.spec_from_file_location. Imported
@@ -162,12 +173,18 @@ class TagSessionState:
     queue_pos: int = 0                     # current change-queue index
     queue: list = field(default_factory=list)  # List[ChangeTarget]
     anchors: Optional[dict] = None         # live v3 anchor file (seeded)
-    eye_roi: Optional[tuple] = None        # None in Plan 2a (ROI/zoom capture = 2b)
+    eye_roi: Optional[tuple] = None        # full-frame (y0,y1,x0,x1) eye box or None
     speed: float = 1.0                     # playback speed multiplier
     playing: bool = False
     timer: object = None                   # matplotlib canvas timer
     fig: object = None                     # the scrubber's Figure
     scrub_state: Optional[dict] = None     # the scrubber's own state dict
+    mouth_roi: Optional[tuple] = None      # full-frame (y0,y1,x0,x1) or None
+    sidecar: Optional[dict] = None         # video_labels sidecar (schema v1)
+    zoomed: bool = False                   # f-toggle: eye-zoom vs full frame
+    arming: Optional[str] = None           # active drag intent: "eye"|"mouth"|"correct"
+    last_proposed: Optional[dict] = None   # last detect_pupil ellipse on the shown frame
+    overlay: object = None                 # matplotlib Ellipse artist on ax_frame
 
 
 def main(argv=None) -> int:
@@ -255,7 +272,30 @@ def main(argv=None) -> int:
         logger.error("Could not determine frame dimensions for %s.", video_path)
         return 2
 
-    tag = TagSessionState(queue=queue, anchors=seed)
+    # --- Per-frame label + ROI sidecar (Plan 2b). Decoupled from the anchor JSON.
+    sidecar = vl.load_sidecar(session, subject)
+    if sidecar is None:
+        sidecar = vl.new_sidecar(subj_display, session, (frame_h, frame_w))
+        seeded = vl.seed_rois_from_previous(session, subject, (frame_h, frame_w))
+        if seeded is not None and seeded["applied"]:
+            for name, r in seeded["rois"].items():
+                sidecar["rois"][name] = r
+            logger.info("Seeded %d ROI(s) from prior session %s (inherited).",
+                        len(seeded["rois"]), seeded["source_session"])
+        elif seeded is not None:
+            logger.warning(
+                "Prior session %s frame_size %s != current %s; ROIs offered but "
+                "NOT applied (draw fresh with e/m).",
+                seeded["source_session"], seeded["frame_size"], [frame_h, frame_w])
+        vl.save_sidecar(sidecar, session, subject)
+
+    tag = TagSessionState(queue=queue, anchors=seed, sidecar=sidecar)
+
+    # Adopt any seeded/loaded ROIs into live state (full-frame pixel boxes).
+    _eye = sidecar["rois"].get("eye")
+    tag.eye_roi = tuple(_eye["box"]) if _eye else None
+    _mouth = sidecar["rois"].get("mouth")
+    tag.mouth_roi = tuple(_mouth["box"]) if _mouth else None
 
     # ---------------------------------------------------------------------
     # Provisional clock models
@@ -296,6 +336,48 @@ def main(argv=None) -> int:
             return np.zeros((frame_h, frame_w), dtype=np.uint8)
         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+    # ---------------------------------------------------------------------
+    # Pupil detection + proposed-ellipse overlay (Plan 2b). The detection
+    # runs on the full-frame grayscale reader restricted to the eye ROI; the
+    # overlay is drawn in full-frame pixel coords, so it is shown only in the
+    # full-frame view (hidden while zoomed or during playback streaming).
+    # ---------------------------------------------------------------------
+    def _run_detect(fi: int):
+        """Detect the pupil in the eye ROI on frame *fi*; cache the proposal."""
+        if tag.eye_roi is None:
+            tag.last_proposed = None
+            return
+        gray = _read_play_frame(fi)                       # full-frame grayscale
+        det = detect_pupil_in_frame(gray, search_roi=tag.eye_roi)
+        tag.last_proposed = vl.ellipse_from_detection(det)  # {cx,cy,major,minor,angle}|None
+
+    def _update_overlay():
+        """Draw/refresh the proposed-ellipse patch on the scrubber's frame axis.
+        Shown only in the FULL-FRAME view (ellipse coords are full-frame pixels)."""
+        fig = tag.fig
+        if fig is None or not fig.axes:
+            return
+        ax = fig.axes[0]
+        ell = tag.last_proposed
+        show = (ell is not None) and (not tag.zoomed)
+        if tag.overlay is None:
+            tag.overlay = Ellipse((0.0, 0.0), 1.0, 1.0, angle=0.0, fill=False,
+                                  edgecolor="#00ff00", linewidth=1.5)
+            ax.add_patch(tag.overlay)
+        if show:
+            tag.overlay.set_center((ell["cx"], ell["cy"]))
+            tag.overlay.width = ell["major"]
+            tag.overlay.height = ell["minor"]
+            tag.overlay.angle = ell["angle"]
+        tag.overlay.set_visible(show)
+
+    def _on_frame_shown(fi: int, fig) -> None:
+        """cfg.on_refresh hook: re-detect + redraw the overlay on every manual
+        frame change (arrow step / jump / mode toggle / ROI draw)."""
+        tag.fig = fig
+        _run_detect(fi)
+        _update_overlay()
+
     def _draw_current(fi: int):
         fig = tag.fig
         if fig is None or not plt.fignum_exists(getattr(fig, "number", -1)):
@@ -307,6 +389,10 @@ def main(argv=None) -> int:
             return
         im.set_data(_read_play_frame(fi))
         hud.set_text(_hud_fn(fi))
+        # Playback streams frames without per-frame detection; hide any stale
+        # overlay. It reappears on the next manual step via _on_frame_shown.
+        if tag.overlay is not None:
+            tag.overlay.set_visible(False)
         fig.canvas.draw_idle()
 
     # ---------------------------------------------------------------------
@@ -486,16 +572,59 @@ def main(argv=None) -> int:
         else:
             qc = "cv_rmse: need >=3 anchors"
 
-        legend = ("[space]play  [-/+]spd {:g}x  [j/k]jump  "
-                  "[c]base<->chg  [enter]save  [d]del  [q]quit"
+        eye_state = "set" if tag.eye_roi is not None else "none"
+        mouth_state = "set" if tag.mouth_roi is not None else "none"
+        view = "ZOOM" if tag.zoomed else "full"
+        roi_line = f"ROI: eye[{eye_state}] mouth[{mouth_state}]   view: {view}"
+
+        legend = ("[space]play  [-/+]spd {:g}x  [j/k]jump  [c]base<->chg  "
+                  "[e/m]roi  [f]zoom  [enter]save  [d]del  [q]quit"
                   ).format(tag.speed)
         return "\n".join([
             mode_line,
             (f"trial {pos}/{ntot} (idx {trial_no})   frame {fi} ({video_s:.2f}s)"
              f"   Delta {delta:+d} vs pred"),
             f"anchors: {len(entries)} ({n_base} base / {n_chg} chg)     {qc}",
+            roi_line,
             legend,
         ])
+
+    # ---------------------------------------------------------------------
+    # ROI capture + eye-zoom (Plan 2b)
+    # ---------------------------------------------------------------------
+    def _toggle_zoom() -> bool:
+        if tag.eye_roi is None:
+            logger.warning("No eye ROI yet; draw one with 'e' before zooming.")
+            return True
+        if not tag.zoomed:
+            raw = eye_zoom_crop(tag.eye_roi)              # UNCLAMPED (y0,y1,x0,x1)
+            crop = vl.clamp_crop(raw, frame_h, frame_w)  # None if it misses the frame
+            if crop is None:                             # no valid crop -> stay full-frame
+                logger.warning("Eye ROI does not intersect the frame; staying on "
+                               "the full view (no zoom).")
+                return True                              # do NOT toggle into a broken zoom
+            tag.zoomed = True
+            cfg.crop = crop                              # guaranteed non-empty crop
+        else:
+            tag.zoomed = False
+            cfg.crop = None                              # back to full frame
+        return True
+
+    def _on_roi_drawn(box, state) -> None:
+        """cfg.on_selector: a completed drag sets the armed ROI (eye/mouth) or,
+        in Task 6, a pupil correction. Boxes are full-frame (y0,y1,x0,x1)."""
+        if tag.arming == "eye":
+            tag.eye_roi = tuple(box)
+            vl.set_roi(tag.sidecar, "eye", box, source="drawn")
+            vl.save_sidecar(tag.sidecar, session, subject)
+            _run_detect(state["frame_idx"])              # immediate live feedback
+            _update_overlay()
+        elif tag.arming == "mouth":
+            tag.mouth_roi = tuple(box)
+            vl.set_roi(tag.sidecar, "mouth", box, source="drawn")
+            vl.save_sidecar(tag.sidecar, session, subject)
+        # (Task 6 adds the tag.arming == "correct" branch here.)
+        tag.arming = None
 
     # ---------------------------------------------------------------------
     # Key dispatch
@@ -536,6 +665,24 @@ def main(argv=None) -> int:
             # scrubber now routes enter through this hook before its default
             # save-and-close); 's' is a documented alias (keymap.save is cleared).
             return _save_keepopen(state)
+        # ROI capture (Plan 2b). ROIs are only drawable in the full-frame view,
+        # where imshow data coords equal full-frame pixels.
+        if key == "e":
+            if tag.zoomed:
+                logger.warning("Return to full frame (press f) before drawing an ROI.")
+                return True
+            tag.arming = "eye"
+            state["arm_selector"]()
+            return True
+        if key == "m":
+            if tag.zoomed:
+                logger.warning("Return to full frame (press f) before drawing an ROI.")
+                return True
+            tag.arming = "mouth"
+            state["arm_selector"]()
+            return True
+        if key == "f":
+            return _toggle_zoom()
         # Self-diagnosing: log (cheap, debug-level, not to the HUD) any key we do
         # not handle so a future dead-key report (like the bracket keys above) is
         # immediately diagnosable from the log instead of a silent no-op.
@@ -543,10 +690,11 @@ def main(argv=None) -> int:
         return False
 
     # ---------------------------------------------------------------------
-    # Compose the scrubber. Always FULL FRAME (crop=None): the eye-zoom fallback
-    # is BG_046-specific absolute pixels and lands on the snout on subjects whose
-    # camera sits closer to the face, so zoom/ROI is deferred to Plan 2b (see the
-    # module docstring + the UX design doc). Full frame worked well in the pilot.
+    # Compose the scrubber. Starts FULL FRAME (crop=None); Plan 2b's `f` toggle
+    # mutates cfg.crop live to a CLAMPED eye-zoom derived from the user's eye ROI
+    # (never the BG_046-specific absolute-pixel fallback, which lands on the snout
+    # on closer-camera subjects). ROI drag + pupil overlay ride the on_selector /
+    # on_refresh seams (see the module docstring + the UX design doc).
     # ---------------------------------------------------------------------
     start_frame = compute_predicted_frame_idx(
         float(baseline_on[0]), -_baseline_implied_offset(), ts_ms)
@@ -560,6 +708,8 @@ def main(argv=None) -> int:
         hud_fn=_hud_fn,
         on_key_extra=_on_key_extra,
         on_save=_do_save,        # enter falls back here only if the hook declines
+        on_selector=_on_roi_drawn,   # Task 5: eye/mouth ROI drag
+        on_refresh=_on_frame_shown,  # Task 5: re-detect + redraw pupil overlay
     )
 
     logger.info("Tagging %s / %s: %d baseline trials, %d change targets, %d frames.",
