@@ -53,6 +53,17 @@ class ScrubberConfig:
             Return ``True`` if the key was consumed (triggers a redraw).
         on_save: ``frame_idx -> Optional[dict]``; runs on Space/Enter. Its
             return value is stored as ``state["result"]`` and returned.
+        on_selector: Optional ``(box, state) -> None`` drag seam. When set, the
+            scrubber wires a ``RectangleSelector`` on the frame axes that a tool
+            arms on demand via ``state["arm_selector"]()``; on drag completion
+            the callback receives a FULL-FRAME ``(y0, y1, x0, x1)`` pixel box.
+            The selector auto-disarms after each drag (or cancel). ``None``
+            (default) leaves the seam completely inert.
+        on_refresh: Optional ``(frame_idx, fig) -> None`` post-frame redraw hook,
+            invoked at the end of every ``_refresh`` (after the frame image and
+            HUD update, before the canvas redraw) so a tool can draw overlays
+            that survive the scrubber's internal arrow-step/jump redraws.
+            ``None`` (default) is inert.
     """
 
     video_path: str
@@ -64,6 +75,8 @@ class ScrubberConfig:
     hud_fn: Callable[[int], str]
     on_key_extra: Callable[[Any, dict], bool]
     on_save: Callable[[int], Optional[dict]]
+    on_selector: Optional[Callable[[Tuple[int, int, int, int], dict], None]] = None
+    on_refresh: Optional[Callable[[int, Any], None]] = None
 
 
 def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
@@ -126,12 +139,66 @@ def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
         fi = state["frame_idx"]
         im.set_data(_read_frame(fi))
         hud_text.set_text(cfg.hud_fn(fi))
+        if cfg.on_refresh is not None:
+            cfg.on_refresh(fi, fig)
         fig.canvas.draw_idle()
+
+    # Optional ROI/correction drag seam. Inert (and click_anchor-safe) unless the
+    # tool supplies cfg.on_selector. The selector is armed only on demand (the tool
+    # calls state["arm_selector"] from its on_key_extra) and auto-disarms as soon
+    # as a drag completes or is cancelled, so arrow-stepping/playback/save/quit
+    # keep working while no drag is in progress. Boxes are reported in FULL-FRAME
+    # pixel coords: the tool only arms the selector in the full-frame view
+    # (cfg.crop is None), where the imshow data coords equal frame pixels.
+    selector = {"obj": None}
+
+    def _disarm_selector():
+        if selector["obj"] is not None:
+            selector["obj"].set_active(False)
+        state["selector_armed"] = False
+
+    if cfg.on_selector is not None:
+        from matplotlib.widgets import RectangleSelector
+
+        def _on_select(eclick, erelease):
+            if eclick.xdata is None or erelease.xdata is None:
+                _disarm_selector()
+                return
+            x0, x1 = sorted((eclick.xdata, erelease.xdata))
+            y0, y1 = sorted((eclick.ydata, erelease.ydata))
+            box = (int(round(y0)), int(round(y1)), int(round(x0)), int(round(x1)))
+            _disarm_selector()
+            cfg.on_selector(box, state)
+            _refresh()
+
+        selector["obj"] = RectangleSelector(
+            ax_frame, _on_select, useblit=False, button=[1],
+            minspanx=3, minspany=3, spancoords="pixels", interactive=False)
+        selector["obj"].set_active(False)
+        state["selector_armed"] = False
+
+        def _arm_selector():
+            if selector["obj"] is not None:
+                selector["obj"].set_active(True)
+                state["selector_armed"] = True
+
+        state["arm_selector"] = _arm_selector
 
     def on_key(event):
         key = event.key
         if key in ("q", "escape"):
+            if state.get("selector_armed"):
+                _disarm_selector()
+                _refresh()
+                return
             plt.close(fig); return
+
+        if state.get("selector_armed"):
+            # A drag is being set up: do NOT navigate/advance the frame. Route the
+            # key to the tool (e.g. to re-arm a different ROI) then redraw.
+            if cfg.on_key_extra(event, state):
+                _refresh()
+            return
 
         step = 0
         if key == "left":
