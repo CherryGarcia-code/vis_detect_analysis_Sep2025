@@ -196,23 +196,42 @@ def seed_rois_from_previous(session, subject, current_frame_size,
             "frame_size": prior_fs, "applied": applied}
 
 
-def clamp_crop(crop, H: int, W: int) -> Tuple[int, int, int, int]:
-    """Normalize and clamp a ``(y0,y1,x0,x1)`` crop into ``[0,H]×[0,W]``.
+def clamp_crop(crop, H: int, W: int) -> Optional[Tuple[int, int, int, int]]:
+    """Clamp a ``(y0,y1,x0,x1)`` crop into the frame, or ``None`` if it misses it.
 
     HARD REQUIREMENT (design §7): ``tagging.eye_zoom_crop`` returns UNCLAMPED
     coords — padding an ROI near a frame edge can yield negative or out-of-frame
     values, and numpy slicing with a negative index does NOT error: it silently
     WRAPS from the far edge and returns the WRONG crop. Always clamp here before
-    indexing a frame. Inverted inputs (``y0>y1``) are order-normalized so the
-    slice is non-empty when the box is (partly) inside the frame.
+    indexing a frame.
+
+    Contract:
+      * When the box intersects the frame, return the clamped
+        ``(y0,y1,x0,x1)`` with ``0 <= y0 < y1 <= H`` and ``0 <= x0 < x1 <= W``
+        (guaranteed non-empty — slicing a frame with it yields a real sub-image).
+      * Return ``None`` when there is NO intersection: the clamped width or
+        height would be zero (box entirely off-frame), OR the box is malformed.
+        ``None`` means "no valid crop — the caller MUST fall back". For the GUI
+        that means staying on / reverting to the full frame, never a zoom onto an
+        empty array.
+
+    Inverted (malformed) inputs — ``y1 < y0`` or ``x1 < x0`` — are NOT
+    order-normalized: silently swapping the coordinates would invent an ROI the
+    user never drew, so a malformed box is treated as non-intersecting → ``None``.
     """
-    y0, y1, x0, x1 = crop
-    y0, y1 = sorted((int(y0), int(y1)))
-    x0, x1 = sorted((int(x0), int(x1)))
+    y0, y1, x0, x1 = (int(v) for v in crop)
+    # Malformed / degenerate box (inverted or zero-area before clamping): reject
+    # outright rather than swapping — a swap would fabricate an unintended ROI.
+    if y1 <= y0 or x1 <= x0:
+        return None
     y0 = max(0, min(y0, H))
     y1 = max(0, min(y1, H))
     x0 = max(0, min(x0, W))
     x1 = max(0, min(x1, W))
+    # After clamping the box may collapse (it lay wholly outside the frame): a
+    # zero-width/height slice is empty, so there is no valid crop.
+    if y1 <= y0 or x1 <= x0:
+        return None
     return (y0, y1, x0, x1)
 
 

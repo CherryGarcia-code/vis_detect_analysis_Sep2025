@@ -141,13 +141,31 @@ def test_seed_frame_size_mismatch_offers_but_does_not_apply(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_clamp_crop_negative_oversize_inverted():
-    # negatives -> 0, oversize -> H/W
+def test_clamp_crop_negative_oversize():
+    # partially outside but still intersecting: negatives -> 0, oversize -> H/W
     assert vl.clamp_crop((-30, 500, -20, 700), 480, 640) == (0, 480, 0, 640)
-    # inverted (y0>y1 / x0>x1) -> normalized to a valid, ordered slice
-    assert vl.clamp_crop((300, 100, 400, 200), 480, 640) == (100, 300, 200, 400)
     # already valid -> unchanged
     assert vl.clamp_crop((100, 200, 150, 250), 480, 640) == (100, 200, 150, 250)
+
+
+def test_clamp_crop_non_intersecting_returns_none():
+    # box entirely below/right of the frame -> no intersection -> None
+    assert vl.clamp_crop((500, 600, 700, 800), 480, 640) is None
+    # box entirely in negative space (above/left of the frame) -> None
+    assert vl.clamp_crop((-50, -10, -30, -5), 480, 640) is None
+    # inverted (y1<y0 / x1<x0) is malformed -> None (NOT silently swapped: a swap
+    # would invent an ROI the user never drew)
+    assert vl.clamp_crop((300, 100, 400, 200), 480, 640) is None
+
+
+def test_clamp_crop_partial_still_clamps_to_valid_nonempty():
+    # partially past the bottom-right edge -> clamps to a valid, NON-EMPTY crop
+    # (regression guard that the None path did not break the normal clamp path).
+    out = vl.clamp_crop((400, 999, 500, 999), 480, 640)
+    assert out == (400, 480, 500, 640)
+    y0, y1, x0, x1 = out
+    assert 0 <= y0 < y1 <= 480
+    assert 0 <= x0 < x1 <= 640
 
 
 def test_ellipse_from_box_axis_aligned():

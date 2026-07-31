@@ -456,7 +456,7 @@ git commit -m "feat(tagger): seed ROIs from most-recent prior session (date-chro
 **Interfaces:**
 - Consumes: the raw dict returned by `video_sync.detect_pupil_in_frame`, whose FULL-FRAME keys are `center_y`, `center_x`, `radius`, `area`, `circularity`, `bbox` — it does NOT expose the minor axis or rotation (only `radius = max(axes)/2`). See the report note in the plan's tail.
 - Produces:
-  - `clamp_crop(crop, H, W) -> Tuple[int,int,int,int]` — normalize order + clamp `(y0,y1,x0,x1)` into `[0,H]×[0,W]`.
+  - `clamp_crop(crop, H, W) -> Optional[Tuple[int,int,int,int]]` — clamp `(y0,y1,x0,x1)` into the frame, returning a guaranteed-NON-EMPTY `(y0,y1,x0,x1)` (`0<=y0<y1<=H`, `0<=x0<x1<=W`) when the box intersects, or `None` when it does not — the clamped width/height would be zero (box entirely off-frame) OR the box is inverted/malformed (inverted boxes are NOT coordinate-swapped, which would invent an ROI the user never drew). `None` means "no valid crop — the caller MUST fall back" (for the GUI: stay on / revert to the full frame).
   - `ellipse_from_box(box) -> dict` — inscribed axis-aligned ellipse `{cx,cy,major,minor,angle}` from a drag box `(y0,y1,x0,x1)`; `major=max(width,height)`, `minor=min(width,height)`, `angle=0.0` when wider-than-tall else `90.0`.
   - `ellipse_from_detection(det) -> Optional[dict]` — map the detector dict to `{cx,cy,major,minor,angle}` (a circle of diameter `2*radius`, `angle=0.0`, preserving the true major diameter); `None` when `det` is `None`.
 
@@ -468,13 +468,31 @@ git commit -m "feat(tagger): seed ROIs from most-recent prior session (date-chro
 # ---------------------------------------------------------------------------
 
 
-def test_clamp_crop_negative_oversize_inverted():
-    # negatives -> 0, oversize -> H/W
+def test_clamp_crop_negative_oversize():
+    # partially outside but still intersecting: negatives -> 0, oversize -> H/W
     assert vl.clamp_crop((-30, 500, -20, 700), 480, 640) == (0, 480, 0, 640)
-    # inverted (y0>y1 / x0>x1) -> normalized to a valid, ordered slice
-    assert vl.clamp_crop((300, 100, 400, 200), 480, 640) == (100, 300, 200, 400)
     # already valid -> unchanged
     assert vl.clamp_crop((100, 200, 150, 250), 480, 640) == (100, 200, 150, 250)
+
+
+def test_clamp_crop_non_intersecting_returns_none():
+    # box entirely below/right of the frame -> no intersection -> None
+    assert vl.clamp_crop((500, 600, 700, 800), 480, 640) is None
+    # box entirely in negative space (above/left of the frame) -> None
+    assert vl.clamp_crop((-50, -10, -30, -5), 480, 640) is None
+    # inverted (y1<y0 / x1<x0) is malformed -> None (NOT silently swapped: a swap
+    # would invent an ROI the user never drew)
+    assert vl.clamp_crop((300, 100, 400, 200), 480, 640) is None
+
+
+def test_clamp_crop_partial_still_clamps_to_valid_nonempty():
+    # partially past the bottom-right edge -> clamps to a valid, NON-EMPTY crop
+    # (regression guard that the None path did not break the normal clamp path).
+    out = vl.clamp_crop((400, 999, 500, 999), 480, 640)
+    assert out == (400, 480, 500, 640)
+    y0, y1, x0, x1 = out
+    assert 0 <= y0 < y1 <= 480
+    assert 0 <= x0 < x1 <= 640
 
 
 def test_ellipse_from_box_axis_aligned():
@@ -502,23 +520,42 @@ Expected: FAIL — `AttributeError: ... has no attribute 'clamp_crop'`.
 - [ ] **Step 3: Implement** — append to `src/visdetect/analysis/video_labels.py` (add `from typing import Tuple` to the existing typing import at the top: change `from typing import Optional` to `from typing import Optional, Tuple`):
 
 ```python
-def clamp_crop(crop, H: int, W: int) -> Tuple[int, int, int, int]:
-    """Normalize and clamp a ``(y0,y1,x0,x1)`` crop into ``[0,H]×[0,W]``.
+def clamp_crop(crop, H: int, W: int) -> Optional[Tuple[int, int, int, int]]:
+    """Clamp a ``(y0,y1,x0,x1)`` crop into the frame, or ``None`` if it misses it.
 
     HARD REQUIREMENT (design §7): ``tagging.eye_zoom_crop`` returns UNCLAMPED
     coords — padding an ROI near a frame edge can yield negative or out-of-frame
     values, and numpy slicing with a negative index does NOT error: it silently
     WRAPS from the far edge and returns the WRONG crop. Always clamp here before
-    indexing a frame. Inverted inputs (``y0>y1``) are order-normalized so the
-    slice is non-empty when the box is (partly) inside the frame.
+    indexing a frame.
+
+    Contract:
+      * When the box intersects the frame, return the clamped
+        ``(y0,y1,x0,x1)`` with ``0 <= y0 < y1 <= H`` and ``0 <= x0 < x1 <= W``
+        (guaranteed non-empty — slicing a frame with it yields a real sub-image).
+      * Return ``None`` when there is NO intersection: the clamped width or
+        height would be zero (box entirely off-frame), OR the box is malformed.
+        ``None`` means "no valid crop — the caller MUST fall back". For the GUI
+        that means staying on / reverting to the full frame, never a zoom onto an
+        empty array.
+
+    Inverted (malformed) inputs — ``y1 < y0`` or ``x1 < x0`` — are NOT
+    order-normalized: silently swapping the coordinates would invent an ROI the
+    user never drew, so a malformed box is treated as non-intersecting → ``None``.
     """
-    y0, y1, x0, x1 = crop
-    y0, y1 = sorted((int(y0), int(y1)))
-    x0, x1 = sorted((int(x0), int(x1)))
+    y0, y1, x0, x1 = (int(v) for v in crop)
+    # Malformed / degenerate box (inverted or zero-area before clamping): reject
+    # outright rather than swapping — a swap would fabricate an unintended ROI.
+    if y1 <= y0 or x1 <= x0:
+        return None
     y0 = max(0, min(y0, H))
     y1 = max(0, min(y1, H))
     x0 = max(0, min(x0, W))
     x1 = max(0, min(x1, W))
+    # After clamping the box may collapse (it lay wholly outside the frame): a
+    # zero-width/height slice is empty, so there is no valid crop.
+    if y1 <= y0 or x1 <= x0:
+        return None
     return (y0, y1, x0, x1)
 
 
@@ -797,14 +834,24 @@ Update the existing playback `_draw_current(fi)` so the overlay is hidden during
         if tag.eye_roi is None:
             logger.warning("No eye ROI yet; draw one with 'e' before zooming.")
             return True
-        tag.zoomed = not tag.zoomed
-        if tag.zoomed:
+        if not tag.zoomed:
             raw = eye_zoom_crop(tag.eye_roi)              # UNCLAMPED (y0,y1,x0,x1)
-            cfg.crop = vl.clamp_crop(raw, frame_h, frame_w)   # clamp before indexing
+            crop = vl.clamp_crop(raw, frame_h, frame_w)  # None if it misses the frame
+            if crop is None:                             # no valid crop -> stay full-frame
+                logger.warning("Eye ROI does not intersect the frame; staying on "
+                               "the full view (no zoom).")
+                return True                              # do NOT toggle into a broken zoom
+            tag.zoomed = True
+            cfg.crop = crop                              # guaranteed non-empty crop
         else:
+            tag.zoomed = False
             cfg.crop = None                              # back to full frame
         return True
 ```
+
+`clamp_crop` returns `None` (not a degenerate crop) when the padded eye box does
+not intersect the frame; treat that as "stay on the full frame" so `f` never
+zooms onto an empty array.
 
 (`cfg` is assigned later in `main()` but only referenced when `_toggle_zoom` runs during `run_scrubber`, so the closure resolves it at call time — the same late-binding pattern the file already uses for `_hud_fn`/`cfg`.)
 
@@ -995,7 +1042,7 @@ Headless checks cannot validate interactive backend selection or real GUI behavi
 - **§4.1 seeding + provenance + `frame_size` guard + canonical chronology:** Task 2 `seed_rois_from_previous` (date-based, `inherited:<session>`, `applied` flag on frame-size match) + Task 5 setup-spine wiring. ✓
 - **§5 labels confirm/correct/blink; correction stores BOTH ellipses; `p` reuses the ROI drag; axis-aligned inscribed ellipse:** Task 6 `u`/`p`/`x` + Task 3 `ellipse_from_box` + `upsert_frame_label`. ✓
 - **§6 sidecar schema (v1, keys, frames keyed on frame_idx, atomic write, decoupled path):** Task 1 `new_sidecar`/`save_sidecar`/`upsert_frame_label` + `data/cache/video_labels/<subject>/<session>.json`. ✓
-- **§7 zoom restored, derived from eye ROI, CLAMPED before indexing:** Task 3 `clamp_crop` + Task 5 `_toggle_zoom` (`clamp_crop(eye_zoom_crop(...))`). ✓
+- **§7 zoom restored, derived from eye ROI, CLAMPED before indexing:** Task 3 `clamp_crop` + Task 5 `_toggle_zoom` (`clamp_crop(eye_zoom_crop(...))`); `clamp_crop` returns `None` when the padded box misses the frame, and `_toggle_zoom` treats `None` as "stay on the full frame" so it never zooms onto an empty array. ✓
 - **§7.1 risks — matplotlib keymap collisions (`p`/`f` already cleared, load-bearing); selector must not fight the scrubber; scrubber gains an OPTIONAL mouse hook that leaves `click_anchor` unaffected:** Global Constraints note + Task 4 selector-armed guard + defaulted `on_selector`/`on_refresh`. ✓
 - **§8 testing — pure logic unit-tested; GUI = import/parse + `--help` + human pilot:** Tasks 1–3 TDD; Tasks 4–6 headless checks + A2 pilot. ✓
 - **§9 acceptance — suite green + interactive pass + cross-session seeding:** Final A2 pilot section. ✓
