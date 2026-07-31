@@ -78,3 +78,59 @@ def test_upsert_frame_label_correction_stores_both_ellipses():
     assert e["verdict"] == "corrected"
     assert e["proposed_ellipse"] == proposed
     assert e["corrected_ellipse"] == corrected
+
+
+# ---------------------------------------------------------------------------
+# Task 2: cross-session ROI seeding (most-recent PRIOR by DATE)
+# ---------------------------------------------------------------------------
+
+
+def _write_prior(labels_dir, session, frame_size, eye_box):
+    sc = vl.new_sidecar("BG_TEST", session, frame_size)
+    vl.set_roi(sc, "eye", eye_box, source="drawn")
+    vl.save_sidecar(sc, session, "BG_TEST", labels_dir=str(labels_dir))
+
+
+def test_seed_picks_most_recent_prior_by_date_not_lexical(tmp_path):
+    # Lexical max of the 8-digit strings would be '28062025' (28 Jun); the correct
+    # most-recent PRIOR to 05072025 (5 Jul) is '01072025' (1 Jul, leading-zero day).
+    _write_prior(tmp_path, "28062025", [976, 1024], [1, 1, 1, 1])
+    _write_prior(tmp_path, "01072025", [976, 1024], [7, 7, 7, 7])
+    res = vl.seed_rois_from_previous("05072025", "BG_TEST", (976, 1024),
+                                     labels_dir=str(tmp_path))
+    assert res is not None
+    assert res["source_session"] == "01072025"     # date-based, not lexical
+    assert res["applied"] is True
+    assert res["rois"]["eye"] == {"box": [7, 7, 7, 7], "source": "inherited:01072025"}
+
+
+def test_seed_never_picks_a_later_session(tmp_path):
+    _write_prior(tmp_path, "09072025", [976, 1024], [1, 1, 1, 1])  # 9 Jul (later)
+    assert vl.seed_rois_from_previous("05072025", "BG_TEST", (976, 1024),
+                                      labels_dir=str(tmp_path)) is None
+
+
+def test_seed_none_when_no_prior(tmp_path):
+    assert vl.seed_rois_from_previous("05072025", "BG_TEST", (976, 1024),
+                                      labels_dir=str(tmp_path)) is None
+
+
+def test_seed_ddmmyy_six_digit_ids(tmp_path):
+    # 6-digit DDMMYY (BG_031/039 form). canonical_camera_session maps both the
+    # prior filename and the query to 8-digit; seeding compares by DATE.
+    _write_prior(tmp_path, "080425", [976, 1024], [5, 5, 5, 5])   # 8 Apr 2025
+    res = vl.seed_rois_from_previous("090425", "BG_TEST", (976, 1024),
+                                     labels_dir=str(tmp_path))     # 9 Apr 2025
+    assert res is not None
+    assert res["source_session"] == "08042025"
+    assert res["rois"]["eye"]["source"] == "inherited:08042025"
+
+
+def test_seed_frame_size_mismatch_offers_but_does_not_apply(tmp_path):
+    _write_prior(tmp_path, "01072025", [976, 1024], [7, 7, 7, 7])
+    res = vl.seed_rois_from_previous("05072025", "BG_TEST", (500, 500),
+                                     labels_dir=str(tmp_path))
+    assert res is not None
+    assert res["source_session"] == "01072025"
+    assert res["applied"] is False                 # different resolution -> not applied
+    assert res["frame_size"] == [976, 1024]

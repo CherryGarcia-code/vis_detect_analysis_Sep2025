@@ -136,3 +136,61 @@ def upsert_frame_label(sidecar: dict, frame_idx: int, verdict: str,
             return sidecar
     frames.append(entry)
     return sidecar
+
+
+def seed_rois_from_previous(session, subject, current_frame_size,
+                            labels_dir: Optional[str] = None) -> Optional[dict]:
+    """Return the most-recent PRIOR session's ROIs, or ``None``.
+
+    Camera geometry is usually fixed within a subject, so a new session inherits
+    the last session's ROIs as editable seeds instead of drawing from scratch.
+
+    "Most recent prior" is a **date** comparison via
+    :func:`config.session_date_key`, never a lexical/int sort — ``'1072025'``
+    sorts before ``'23062025'`` lexically though 1 Jul is after 23 Jun, and
+    6-digit ``DDMMYY`` ids exist. Only sidecars strictly EARLIER than *session*
+    are eligible; a later session is never chosen.
+
+    Provenance: every returned ROI is marked ``source='inherited:<prior>'`` so a
+    silently-copied-forward ROI is distinguishable from one a human drew. The
+    caller flips it to ``'drawn'`` (via :func:`set_roi`) the moment it is re-dragged.
+
+    Frame-size guard: an absolute-pixel box is meaningless at a different
+    resolution, so ``applied`` is ``True`` only when the prior sidecar's
+    ``frame_size`` equals ``current_frame_size`` (as ``(H, W)``). On a mismatch the
+    ROIs are still returned (``applied=False``) so the caller can warn/offer them.
+
+    Returns ``{"source_session", "rois", "frame_size", "applied"}`` or ``None``.
+    """
+    d = labels_dir or subject_video_labels_dir(subject)
+    if not os.path.isdir(d):
+        return None
+    cur = canonical_camera_session(session)
+    cur_key = session_date_key(cur)
+    best = None  # (date_key, stem)
+    for fn in os.listdir(d):
+        if not fn.endswith(".json"):
+            continue
+        stem = fn[:-len(".json")]
+        if stem == cur:
+            continue
+        try:
+            k = session_date_key(stem)
+        except ValueError:
+            continue
+        if k >= cur_key:            # not strictly earlier -> ineligible
+            continue
+        if best is None or k > best[0]:
+            best = (k, stem)
+    if best is None:
+        return None
+    with open(os.path.join(d, best[1] + ".json"), "r") as f:
+        prior = json.load(f)
+    prior_fs = list(prior.get("frame_size") or [])
+    rois = {}
+    for name, r in (prior.get("rois") or {}).items():
+        rois[name] = {"box": [int(v) for v in r["box"]],
+                      "source": f"inherited:{best[1]}"}
+    applied = prior_fs == [int(v) for v in current_frame_size]
+    return {"source_session": best[1], "rois": rois,
+            "frame_size": prior_fs, "applied": applied}
