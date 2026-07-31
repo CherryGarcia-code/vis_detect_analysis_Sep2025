@@ -57,6 +57,9 @@ class ScrubberConfig:
             scrubber wires a ``RectangleSelector`` on the frame axes that a tool
             arms on demand via ``state["arm_selector"]()``; on drag completion
             the callback receives a FULL-FRAME ``(y0, y1, x0, x1)`` pixel box.
+            This holds in EITHER view: when ``cfg.crop`` is active the crop
+            origin is added back, so a tool may arm the selector while zoomed
+            without silently recording crop-local (offset) coordinates.
             The selector auto-disarms after each drag (or cancel). ``None``
             (default) leaves the seam completely inert.
         on_refresh: Optional ``(frame_idx, fig) -> None`` post-frame redraw hook,
@@ -166,6 +169,18 @@ def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
                 return
             x0, x1 = sorted((eclick.xdata, erelease.xdata))
             y0, y1 = sorted((eclick.ydata, erelease.ydata))
+            # imshow data coords are CROP-LOCAL whenever a crop is active, but the
+            # seam's contract is full-frame pixels. Add the crop origin so the box is
+            # correct in EITHER view. Without this, arming the selector while zoomed
+            # yields an ROI silently offset by the crop origin -- wrong data, no error.
+            # cfg.crop is read here (not at wiring time) because tools toggle it live.
+            crop = cfg.crop
+            if crop is not None:
+                y_off, x_off = int(crop[0]), int(crop[2])
+                y0 += y_off
+                y1 += y_off
+                x0 += x_off
+                x1 += x_off
             box = (int(round(y0)), int(round(y1)), int(round(x0)), int(round(x1)))
             _disarm_selector()
             cfg.on_selector(box, state)
