@@ -745,9 +745,14 @@ def main(argv=None) -> int:
         if key == "p":  # proposal is WRONG -> drag the true pupil
             # Reuse the SAME correction-drag path Task 5 wired: arm the shared
             # selector and let _on_roi_drawn's "correct" branch record it. The
-            # seam returns FULL-FRAME coords in EITHER view (it adds the crop
-            # origin back), so correcting while zoomed is fully supported and is
-            # the expected workflow (judge the pupil close-up) -- do NOT block it.
+            # seam returns FULL-FRAME coords in EITHER view because the frame
+            # axes THEMSELVES live in full-frame data coords (run_scrubber
+            # re-derives the imshow extent from image_extent_for_crop on every
+            # redraw) -- NO crop-origin add-back is applied anywhere. Do not
+            # "restore" one: an origin offset cannot undo the coordinate stretch
+            # a frozen extent imposes, which is what corrupted zoomed
+            # corrections before 1d8866b. So correcting while zoomed is fully
+            # supported and is the expected workflow (judge the pupil close-up).
             tag.arming = "correct"
             state["arm_selector"]()
             return True
