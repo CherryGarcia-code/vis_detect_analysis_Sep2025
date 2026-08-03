@@ -337,10 +337,11 @@ def main(argv=None) -> int:
         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     # ---------------------------------------------------------------------
-    # Pupil detection + proposed-ellipse overlay (Plan 2b). The detection
-    # runs on the full-frame grayscale reader restricted to the eye ROI; the
-    # overlay is drawn in full-frame pixel coords, so it is shown only in the
-    # full-frame view (hidden while zoomed or during playback streaming).
+    # Pupil detection + proposed-ellipse overlay (Plan 2b). Detection runs on
+    # the full-frame grayscale reader restricted to the eye ROI, so the cached
+    # ellipse is in full-frame pixel coords; _update_overlay subtracts the crop
+    # origin when zoomed so it stays visible (and correct) in BOTH views.
+    # Detection is skipped during playback streaming for responsiveness.
     # ---------------------------------------------------------------------
     def _run_detect(fi: int):
         """Detect the pupil in the eye ROI on frame *fi*; cache the proposal."""
@@ -353,19 +354,30 @@ def main(argv=None) -> int:
 
     def _update_overlay():
         """Draw/refresh the proposed-ellipse patch on the scrubber's frame axis.
-        Shown only in the FULL-FRAME view (ellipse coords are full-frame pixels)."""
+
+        The cached ellipse is in FULL-FRAME pixel coords, but whenever a crop is
+        active the axes show CROP-LOCAL coords. Subtract the crop origin rather
+        than hiding the overlay: the zoom exists precisely so the user can judge
+        this ellipse closely, and Task 6 confirms/corrects it from the same view,
+        so hiding it while zoomed would defeat the feature.
+        """
         fig = tag.fig
         if fig is None or not fig.axes:
             return
         ax = fig.axes[0]
         ell = tag.last_proposed
-        show = (ell is not None) and (not tag.zoomed)
+        show = ell is not None
         if tag.overlay is None:
             tag.overlay = Ellipse((0.0, 0.0), 1.0, 1.0, angle=0.0, fill=False,
                                   edgecolor="#00ff00", linewidth=1.5)
             ax.add_patch(tag.overlay)
         if show:
-            tag.overlay.set_center((ell["cx"], ell["cy"]))
+            cx, cy = float(ell["cx"]), float(ell["cy"])
+            crop = cfg.crop          # read live; `f` mutates it
+            if crop is not None:
+                cy -= int(crop[0])
+                cx -= int(crop[2])
+            tag.overlay.set_center((cx, cy))
             tag.overlay.width = ell["major"]
             tag.overlay.height = ell["minor"]
             tag.overlay.angle = ell["angle"]
