@@ -521,10 +521,13 @@ def _get_behavioral_event_times(
     Hit events are returned in **both** change-aligned and lick-aligned
     forms so both columns can be plotted side-by-side.
 
-    **Baseline lick filter:** Baseline_ON events are excluded when any
-    raw lick (NI ``Lick_L`` / ``lick_L``) occurs within
-    ``BASELINE_LICK_EXCLUSION_WINDOW`` seconds (default 1.0 s) of
-    baseline onset, to avoid contamination from preparatory motor activity.
+    **Baseline lick filter:** Baseline_ON events are excluded when any raw lick
+    occurs within ``BASELINE_LICK_EXCLUSION_WINDOW`` seconds (default 1.0 s) of
+    baseline onset, to avoid contamination from preparatory motor activity. The
+    NI lick channel is resolved per session via
+    :mod:`visdetect.analysis.lick_channels` (its name differs by MATLAB
+    extraction convention); this raises rather than silently disabling the
+    filter when no usable channel exists.
     """
     trials = getattr(session, "trials", []) or []
     ni = getattr(session, "ni_events", {}) or {}

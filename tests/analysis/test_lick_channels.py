@@ -140,3 +140,76 @@ def test_debounce_is_not_applied_by_default():
     times = np.array([0.0, 0.010, 0.020])
     res = lc.resolve_lick_channel(_session({"Lick_L": times}))
     assert len(res.times) == 3
+
+
+def test_debounce_boundary_is_not_decided_by_float_noise():
+    """Events exactly one refractory apart must all survive."""
+    times = np.arange(0.0, 0.25, 0.05)          # 0.00 .05 .10 .15 .20
+    out = lc.debounce(times, refractory_s=0.05)
+    np.testing.assert_allclose(out, times)
+
+
+# ── the rate-gate threshold must be pinned by tests ──────────────────
+def test_densest_real_channel_is_accepted():
+    """BG_031_130325 Lick_R: 63610 events / 11650 s = 5.46 Hz -- the real max."""
+    times = np.sort(np.random.default_rng(0).uniform(0, 11650.0, 63610))
+    res = lc.resolve_lick_channel(_session({"Lick_R": times}))
+    assert res.channel == "Lick_R"
+
+
+def test_sparsest_contaminated_channel_is_rejected():
+    """The lowest observed contaminated rate is 22.7 Hz -- must not pass."""
+    times = _poisson_times(22.7, 1000.0, seed=20)
+    with pytest.raises(lc.NoLickChannelError):
+        lc.resolve_lick_channel(_session({"Lick_L": times}))
+
+
+def test_threshold_sits_below_the_physiological_ceiling():
+    """Pins the gate near 10 Hz, not 20.
+
+    A mouse cannot sustain a >10 Hz SESSION-MEAN lick rate (densest real channel
+    observed: 5.46 Hz), so a 15 Hz line is noise and must be rejected. Without
+    this, the constant could drift back to 20 Hz with every other test green.
+    """
+    times = _poisson_times(15.0, 1000.0, seed=29)
+    with pytest.raises(lc.NoLickChannelError):
+        lc.resolve_lick_channel(_session({"Lick_L": times}))
+
+
+# ── convention / under-detection must be machine-readable ────────────
+def test_result_exposes_convention_and_under_detection():
+    lick = lc.resolve_lick_channel(_session({"Lick_L": _poisson_times(1.0, 1000.0, 21)}))
+    piezo = lc.resolve_lick_channel(_session({"Piezo_1": _poisson_times(0.2, 1000.0, 22)}))
+    assert lick.convention == "lick_2025" and not lick.under_detects
+    assert piezo.convention == "piezo_2026" and piezo.under_detects
+
+
+def test_assert_single_convention_rejects_mixed_sets():
+    lick = lc.resolve_lick_channel(_session({"Lick_L": _poisson_times(1.0, 1000.0, 23)}))
+    piezo = lc.resolve_lick_channel(_session({"Piezo_1": _poisson_times(0.2, 1000.0, 24)}))
+    assert lc.assert_single_convention([lick, lick]) == "lick_2025"
+    with pytest.raises(ValueError, match="multiple extraction conventions"):
+        lc.assert_single_convention([lick, piezo], context="FA PETH")
+
+
+def test_prefers_high_fidelity_lick_over_under_detecting_piezo():
+    """If a session ever carried BOTH, we must not hand back the worse channel."""
+    ll = _poisson_times(1.0, 1000.0, seed=25)
+    p1 = _poisson_times(0.2, 1000.0, seed=26)
+    res = lc.resolve_lick_channel(_session({"Piezo_1": p1, "Lick_L": ll}))
+    assert res.channel == "Lick_L"
+    assert not res.under_detects
+
+
+# ── malformed channels degrade to "absent", never an opaque crash ────
+def test_ragged_object_channel_does_not_raise_valueerror():
+    ni = {"Lick_L": np.array([np.array([1.0, 2.0]), np.array([3.0])], dtype=object),
+          "Lick_R": _poisson_times(1.0, 1000.0, seed=27)}
+    res = lc.resolve_lick_channel(_session(ni))          # must not ValueError
+    assert res.channel in ("Lick_L", "Lick_R")
+
+
+def test_unparseable_channel_is_treated_as_absent():
+    ni = {"Lick_L": [{"not": "numeric"}], "Lick_R": _poisson_times(1.0, 1000.0, seed=28)}
+    res = lc.resolve_lick_channel(_session(ni))
+    assert res.channel == "Lick_R"

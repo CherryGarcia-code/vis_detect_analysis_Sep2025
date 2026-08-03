@@ -152,9 +152,17 @@ def main(argv=None):
     print(f"=== {a.label}: {len(pkls)} session(s) from {pkl_dir} "
           f"(criterion={cfg.responsive_criterion}) ===", flush=True)
 
+    from visdetect.analysis.lick_channels import NoLickChannelError
+
     all_rows = []
     for pkl in pkls:
-        rows = run_session(pkl, cfg, a.max_units, a.max_trials)
+        try:
+            rows = run_session(pkl, cfg, a.max_units, a.max_trials)
+        except NoLickChannelError as exc:
+            # Skip, don't abort: this driver globs a whole directory, so one
+            # unresolvable session must not discard every session after it.
+            print(f"  SKIP {pkl}: no usable NI lick channel ({exc})", flush=True)
+            continue
         all_rows.extend(rows)
         if rows:
             df_s = pd.DataFrame(rows)

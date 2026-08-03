@@ -110,13 +110,14 @@ def process_session(pkl_path):
     # on every session written by the 2026 re-extraction, which names the same
     # physical lines Piezo_1/Piezo_2 -- 33 of BG_046's 46 sessions.
     from visdetect.analysis.lick_channels import (
-        NoLickChannelError, get_lick_times,
+        NoLickChannelError, resolve_lick_channel,
     )
     try:
-        lick_times = np.unique(get_lick_times(session))
+        lick = resolve_lick_channel(session)
     except NoLickChannelError as exc:
         print(f"  SKIP {pkl_path.name}: {exc}")
         return None
+    lick_times = np.unique(lick.times)
         
     # Get Trial Start Times (Baseline_ON is the reference for RT)
     start_keys = ['Baseline_ON', 'trial_start_times', 'trial_start']
@@ -158,7 +159,12 @@ def process_session(pkl_path):
         'session_name': session.session_name if session.session_name else pkl_path.stem,
         'alignment_times': np.array(alignment_times),
         'lick_times': lick_times,
-        'n_fa': len(alignment_times)
+        'n_fa': len(alignment_times),
+        # Provenance: which MATLAB extraction wrote this session's lick train.
+        # The two conventions differ ~6-16x in detection density, so a figure
+        # spanning both would confound extraction with learning stage.
+        'lick_channel': lick.channel,
+        'lick_convention': lick.convention,
     }
 
 def plot_rasters(example_data, out_dir):
@@ -215,6 +221,11 @@ def main():
     parser.add_argument('--out', required=True)
     parser.add_argument('--pkl-dir', help='Optional override for pkl directory')
     parser.add_argument('--no-filter', action='store_true', help='Bypass SESSION_FILTER')
+    parser.add_argument('--allow-mixed-conventions', action='store_true',
+                        help='Plot sessions from BOTH NI lick extraction conventions '
+                             'in one figure. NOT comparable: detection density differs '
+                             '~6-16x and aliases with session date. Warns instead of '
+                             'refusing.')
     args = parser.parse_args()
     
     out_dir = Path(args.out)
@@ -238,7 +249,8 @@ def main():
     
     peth_matrix = []
     session_labels = []
-    
+    session_conventions = []
+
     # Collect all valid sessions for potential raster plotting
     valid_sessions_data = []
     
@@ -274,12 +286,29 @@ def main():
                 
             peth_matrix.append(rate)
             session_labels.append(session_name)
-            
+            session_conventions.append(data['lick_convention'])
+
             # Check if this qualifies as a valid example (>= 5 FAs)
             if data['n_fa'] >= 5:
                 # Store full data - it's lightweight enough (just arrays of times)
                 valid_sessions_data.append(data)
             
+    # --- Extraction-convention gate -------------------------------------
+    # This figure is a lick-rate heatmap ordered by session DATE, and the two
+    # MATLAB extraction conventions differ ~6-16x in lick-detection density
+    # while aliasing with the learning timeline. Pooling them would render an
+    # extraction artifact as a behavioural change, so refuse rather than
+    # silently mislead. Pass --allow-mixed-conventions to override knowingly.
+    from visdetect.analysis.lick_channels import assert_single_convention
+    if not getattr(args, "allow_mixed_conventions", False):
+        assert_single_convention(session_conventions,
+                                 context=f"{subject} FA-lick PETH across "
+                                         f"{len(session_labels)} sessions")
+    elif len(set(session_conventions)) > 1:
+        counts = {c: session_conventions.count(c) for c in set(session_conventions)}
+        print(f"  WARNING: mixing lick extraction conventions {counts} -- "
+              f"cross-session lick rates are NOT comparable.")
+
     # --- Select Examples from actually loaded data ---
     examples = [None, None, None]
     n_valid = len(valid_sessions_data)

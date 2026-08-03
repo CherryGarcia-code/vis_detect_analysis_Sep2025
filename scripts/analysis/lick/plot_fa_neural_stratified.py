@@ -135,13 +135,20 @@ def process_session(pkl_path, stats_root, session_name):
     # 'Lick_L' (which silently dropped the 33 BG_046 sessions written by the
     # 2026 re-extraction, where the same lines are named Piezo_1/Piezo_2).
     from visdetect.analysis.lick_channels import (
-        NoLickChannelError, get_lick_times,
+        NoLickChannelError, resolve_lick_channel,
     )
     try:
-        all_licks = np.unique(get_lick_times(session))
+        _lick = resolve_lick_channel(session)
     except NoLickChannelError as exc:
         print(f"  SKIP {pkl_path.name}: {exc}")
         return None
+    all_licks = np.unique(_lick.times)
+    if _lick.under_detects:
+        # 2026 re-extraction: ~20-45% detection, 300-640 ms lag. Fine for
+        # "did a lick occur", NOT for lick rates compared across sessions.
+        print(f"  NOTE {pkl_path.name}: lick channel {_lick.channel} "
+              f"({_lick.convention}) under-detects licks; rates not comparable "
+              f"with {'lick_2025'} sessions.")
         
     start_keys = ['Baseline_ON', 'trial_start_times']
     trial_starts = get_event_times(session.ni_events, start_keys)
