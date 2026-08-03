@@ -54,6 +54,41 @@ Not spurious events. The `Baseline_ON` train contains a **316.3 s gap at index 2
 filed JSON holds exactly **486** trials. Run 1's JSON was never filed. The trials align to
 `BON[228:714]` — an **offset**, not a truncation.
 
+### Prior art — the defect originates in the MATLAB pipeline
+
+The legacy pipeline (`scripts/conversion/matlab_scripts/NPX-analysis-master/`) did **not** solve this
+problem; it is where the problem comes from.
+
+- `load/loadSessionBehav.m:6-46` performs the **identical** blind concatenation of every
+  `*trials.json` in the `Session/` dir. The Python `load_behavioral_trials` is a faithful port.
+  **This is not a Python regression** — MATLAB-derived pkls carry the same defect, so no era of the
+  pipeline is clean.
+- `load/loadSessionNPX_main.m:99-101` attaches `behav_data` and `NI_events` side by side with no
+  alignment check of any kind.
+- Downstream code assumes strict index correspondence: `analysis/showPSTHforAllUnits.m:45` sets
+  `trials_numb = length(Baseline_ON_times)` and then indexes `TrialsData(tr)`, and
+  `AbortTimes = Baseline_ON_times + ReactionTimesAbort` adds an **event** vector to a **trial**
+  vector element-wise. On the affected sessions this silently pairs the wrong trials.
+  **MATLAB-era neural results on these sessions are invalid for the same reason.**
+
+**Ordering divergence to check.** MATLAB sorts runs by file **mtime** (`[fname.datenum]`); Python
+sorts by **filename**. Filenames embed the run timestamp, so the two normally agree — but these
+`Session/` directories were touched by later reorganisation passes (observed mtimes of Oct 2025 and
+Mar 2026), so mtime order can diverge from true run order. Where both a MATLAB-derived and a
+Python-derived pkl exist for one session, they may concatenate runs in **different orders**. The
+repair must not assume the two agree.
+
+**Precedent worth keeping.** `analysis/showPSTHforAllUnits.m:29-43` cross-checks NI `Change_ON`
+against the per-trial frame times at a **0.05 s tolerance**, and on failure *refuses to substitute*,
+printing the discrepancy rather than quietly correcting. That is independent corroboration of the
+50 ms threshold chosen in §3, and the same refuse-don't-silently-fix stance this design takes.
+
+*Caveat, tested:* that check compares two **NI-side** quantities, so it validates NI extraction, not
+trial↔event pairing. `frame_times_tr` was evaluated as a possible second independent discriminator
+and **rejected**: per-trial frame counts vary widely (6–1122) but correlate only r ≈ 0.105 with
+`change_time` even on a known-good session, because trials end at lick/abort rather than at change.
+The `change_time` residual of §2 remains the single strong discriminator.
+
 ### Correction to the handoff document
 
 - "Mode B — cause unknown, possibly spurious NI events" is **wrong**. The events are genuine; the
@@ -139,7 +174,7 @@ trial_event_index: np.ndarray   # int, length n_trials
 |---|---|
 | `src/visdetect/core/run_alignment.py` | Pure, unit-testable. `per_trial_event_keys(ni_events)`, `alignment_residual(trials, ni_events, trial_slice, event_offset)`, `solve_alignment(trials, ni_events) -> Alignment \| None`. Returns best **and** runner-up score. |
 | `scripts/QC_technical/repair_trial_event_alignment.py` | Per pkl: solve → verify → back up → write `trial_event_index`. Emits `data/cache/qc_alignment/alignment_repair_report.csv`. Backup goes to `data/pkls/<SUBJ>/qc1_backup/<file>.bak_<UTC-stamp>` — written **before** any mutation, and the repair aborts if the backup cannot be created. Re-running is idempotent: an already-repaired pkl re-solves to the same map and is not re-backed-up. |
-| `src/visdetect/core/ingest.py` (patch) | Select the run JSON(s) matching the recording instead of blind-concatenating; run the residual check before emitting a pkl and refuse/flag on failure. |
+| `src/visdetect/core/ingest.py` (patch) | Select the run JSON(s) matching the recording instead of blind-concatenating; run the residual check before emitting a pkl and refuse/flag on failure. Order runs by the **timestamp embedded in the filename**, never by mtime — the MATLAB port used mtime and the directories have since been touched by reorganisation passes (§1). |
 | `scripts/QC_technical/audit_trial_baselineon_alignment.py` (extend) | Add `median_resid_s`, `runner_up_resid_s`, `aligned`. `neural_safe` becomes residual-based, with the count check retained as a secondary signal. |
 | `src/visdetect/analysis/align.py` + tensor builders | Honour `trial_event_index`; drop `-1` trials from event-aligned analyses. |
 
