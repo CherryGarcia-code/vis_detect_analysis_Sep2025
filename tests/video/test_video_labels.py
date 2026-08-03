@@ -183,3 +183,73 @@ def test_ellipse_from_detection_maps_radius_to_circle():
     assert vl.ellipse_from_detection(det) == {
         "cx": 512.0, "cy": 480.0, "major": 40.0, "minor": 40.0, "angle": 0.0}
     assert vl.ellipse_from_detection(None) is None
+
+
+# ---------------------------------------------------------------------------
+# Task (coordinate fix): image_extent_for_crop keeps the displayed image in
+# FULL-FRAME data coords in BOTH views.
+#
+# This is the transform that produced THREE coordinate defects (drag rebasing,
+# ellipse rebasing, and the underlying frozen-extent stretch) with zero test
+# coverage. The scrubber shows a cropped array in the SAME imshow artist as the
+# full frame; if the extent stays frozen at full-frame size, matplotlib
+# STRETCHES the (crop_h, crop_w) array across the whole frame, so every ROI /
+# pupil coordinate read off the axes is silently rescaled. These tests would
+# FAIL if the extent were left full-frame (or otherwise stretched) for a crop.
+# ---------------------------------------------------------------------------
+
+
+def test_image_extent_full_frame_when_crop_none():
+    # crop=None -> the default imshow extent for an H x W image.
+    assert vl.image_extent_for_crop(None, 480, 640) == (-0.5, 639.5, 479.5, -0.5)
+
+
+def test_image_extent_for_crop_is_full_frame_box_with_inverted_y():
+    # crop (y0,y1,x0,x1) -> (left, right, bottom, top) = (x0-.5, x1-.5, y1-.5, y0-.5).
+    # A crop OFFSET from the origin (the reviewer's eye_roi): the box, not (0,0).
+    assert vl.image_extent_for_crop((200, 420, 320, 540), 480, 640) == (
+        319.5, 539.5, 419.5, 199.5)
+    # A genuinely NON-SQUARE crop, also offset (the two conditions that made the
+    # old frozen-extent stretch measurable — a square crop at the origin hides it).
+    assert vl.image_extent_for_crop((100, 300, 50, 500), 480, 640) == (
+        49.5, 499.5, 299.5, 99.5)
+
+
+def test_image_extent_round_trip_spans_exactly_crop_no_scale_or_offset():
+    # Round-trip invariant: the extent must span EXACTLY x0..x1 / y0..y1 (in
+    # full-frame pixel edges), so it introduces NO scale and NO offset. Under the
+    # OLD frozen full-frame extent the span would be (640, 480) != crop dims.
+    frame_h, frame_w = 480, 640
+    for crop in [(200, 420, 320, 540),      # square, offset
+                 (100, 300, 50, 500)]:       # non-square, offset
+        y0, y1, x0, x1 = crop
+        left, right, bottom, top = vl.image_extent_for_crop(crop, frame_h, frame_w)
+        # Edges land on the crop's full-frame pixel borders.
+        assert (left, right) == (x0 - 0.5, x1 - 0.5)
+        assert (top, bottom) == (y0 - 0.5, y1 - 0.5)   # inverted-y (origin top)
+        # Span equals the crop's full-frame width/height -> no stretch.
+        assert (right - left) == pytest.approx(x1 - x0)
+        assert (bottom - top) == pytest.approx(y1 - y0)
+
+
+def test_image_extent_maps_cropped_pixel_to_true_fullframe_coord():
+    # The crux regression, expressed as the imshow pixel->data map: the array
+    # pixel that SHOWS a given full-frame point must read back that point's TRUE
+    # full-frame data coord. The old frozen full-frame extent stretched the
+    # (crop_h, crop_w) array across the whole frame, so the same pixel read back
+    # a scaled+offset (wrong) coord -- e.g. the reviewer's true pupil (430, 310)
+    # came out ~(607, 407).
+    frame_h, frame_w = 480, 640
+    crop = (200, 420, 320, 540)
+    y0, y1, x0, x1 = crop
+    crop_h, crop_w = y1 - y0, x1 - x0                    # 220 x 220
+    left, right, bottom, top = vl.image_extent_for_crop(crop, frame_h, frame_w)
+
+    px, py = 430.0, 310.0                                # true pupil, inside crop
+    col = px - x0                                        # crop-local column (110)
+    row = py - y0                                        # crop-local row (110)
+    # imshow maps array pixel-centre col -> data x = left + (col+0.5)/ncols*(right-left)
+    data_x = left + (col + 0.5) / crop_w * (right - left)
+    data_y = top + (row + 0.5) / crop_h * (bottom - top)
+    assert data_x == pytest.approx(px)                  # not ~607 (the old stretch)
+    assert data_y == pytest.approx(py)                  # not ~407

@@ -339,8 +339,10 @@ def main(argv=None) -> int:
     # ---------------------------------------------------------------------
     # Pupil detection + proposed-ellipse overlay (Plan 2b). Detection runs on
     # the full-frame grayscale reader restricted to the eye ROI, so the cached
-    # ellipse is in full-frame pixel coords; _update_overlay subtracts the crop
-    # origin when zoomed so it stays visible (and correct) in BOTH views.
+    # ellipse is in full-frame pixel coords; the frame axes live in full-frame
+    # coords in BOTH views (the scrubber re-derives the imshow extent from
+    # cfg.crop on every refresh), so _update_overlay places the ellipse at its
+    # true cx/cy with no crop-origin fudge and keeps it visible while zoomed.
     # Detection is skipped during playback streaming for responsiveness.
     # ---------------------------------------------------------------------
     def _run_detect(fi: int):
@@ -355,11 +357,12 @@ def main(argv=None) -> int:
     def _update_overlay():
         """Draw/refresh the proposed-ellipse patch on the scrubber's frame axis.
 
-        The cached ellipse is in FULL-FRAME pixel coords, but whenever a crop is
-        active the axes show CROP-LOCAL coords. Subtract the crop origin rather
-        than hiding the overlay: the zoom exists precisely so the user can judge
-        this ellipse closely, and Task 6 confirms/corrects it from the same view,
-        so hiding it while zoomed would defeat the feature.
+        The cached ellipse is in FULL-FRAME pixel coords, and the frame axes now
+        ALWAYS live in full-frame data coords (the scrubber re-derives the imshow
+        extent + limits from cfg.crop on every refresh), so the ellipse is placed
+        at its true full-frame cx/cy in BOTH views — no crop-origin fudge. It
+        stays VISIBLE while zoomed, which is the whole point of the zoom: the user
+        judges (and, via `p`, corrects) the pupil close-up from this same overlay.
         """
         fig = tag.fig
         if fig is None or not fig.axes:
@@ -372,12 +375,7 @@ def main(argv=None) -> int:
                                   edgecolor="#00ff00", linewidth=1.5)
             ax.add_patch(tag.overlay)
         if show:
-            cx, cy = float(ell["cx"]), float(ell["cy"])
-            crop = cfg.crop          # read live; `f` mutates it
-            if crop is not None:
-                cy -= int(crop[0])
-                cx -= int(crop[2])
-            tag.overlay.set_center((cx, cy))
+            tag.overlay.set_center((float(ell["cx"]), float(ell["cy"])))
             tag.overlay.width = ell["major"]
             tag.overlay.height = ell["minor"]
             tag.overlay.angle = ell["angle"]
@@ -661,6 +659,13 @@ def main(argv=None) -> int:
             logger.info("corrected frame %d", state["frame_idx"])
         tag.arming = None
 
+    def _on_selector_cancel(state) -> None:
+        """cfg.on_selector_cancel: a drag was armed (e/m/p) then CANCELLED (empty
+        drag, or q/esc while armed) instead of completed. Drop the arming intent
+        so a stale 'eye'/'mouth'/'correct' cannot mis-route the next completed
+        drag. (A completed drag clears tag.arming itself in _on_roi_drawn.)"""
+        tag.arming = None
+
     # ---------------------------------------------------------------------
     # Key dispatch
     # ---------------------------------------------------------------------
@@ -782,6 +787,7 @@ def main(argv=None) -> int:
         on_save=_do_save,        # enter falls back here only if the hook declines
         on_selector=_on_roi_drawn,   # Task 5: eye/mouth ROI drag
         on_refresh=_on_frame_shown,  # Task 5: re-detect + redraw pupil overlay
+        on_selector_cancel=_on_selector_cancel,  # drop arming intent on cancel
     )
 
     logger.info("Tagging %s / %s: %d baseline trials, %d change targets, %d frames.",

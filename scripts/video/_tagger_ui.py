@@ -35,6 +35,11 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 
+# Pure geometry helper (no cv2 / matplotlib): the imshow extent that keeps the
+# displayed image in FULL-FRAME data coords in both the full and cropped views.
+# Imported here (not reimplemented) so the unit test covers the real code path.
+from visdetect.analysis.video_labels import image_extent_for_crop
+
 
 @dataclass
 class ScrubberConfig:
@@ -57,16 +62,26 @@ class ScrubberConfig:
             scrubber wires a ``RectangleSelector`` on the frame axes that a tool
             arms on demand via ``state["arm_selector"]()``; on drag completion
             the callback receives a FULL-FRAME ``(y0, y1, x0, x1)`` pixel box.
-            This holds in EITHER view: when ``cfg.crop`` is active the crop
-            origin is added back, so a tool may arm the selector while zoomed
-            without silently recording crop-local (offset) coordinates.
-            The selector auto-disarms after each drag (or cancel). ``None``
-            (default) leaves the seam completely inert.
+            This holds in EITHER view because the frame axes ALWAYS live in
+            full-frame data coords: ``_refresh`` re-derives the image extent +
+            axis limits from ``image_extent_for_crop(cfg.crop, ...)`` on every
+            redraw, so ``eclick.xdata/ydata`` are already full-frame pixels
+            whether or not a crop is active — no crop-origin rebasing is applied.
+            (An earlier version added the crop origin back, which corrects only
+            an ORIGIN offset and cannot undo the coordinate STRETCH that a frozen
+            full-frame extent imposes on a cropped array; fixing the extent
+            removes the need for any offset math.) The selector auto-disarms
+            after each drag (or cancel). ``None`` (default) leaves the seam inert.
         on_refresh: Optional ``(frame_idx, fig) -> None`` post-frame redraw hook,
             invoked at the end of every ``_refresh`` (after the frame image and
             HUD update, before the canvas redraw) so a tool can draw overlays
             that survive the scrubber's internal arrow-step/jump redraws.
             ``None`` (default) is inert.
+        on_selector_cancel: Optional ``(state) -> None`` hook fired when an armed
+            drag is CANCELLED (empty drag, or q/esc while armed) rather than
+            completed, so a tool can drop its own arming intent. A completed drag
+            resets its intent inside ``on_selector``; this covers the cancel
+            paths, where ``on_selector`` never runs. ``None`` (default) is inert.
     """
 
     video_path: str
@@ -80,6 +95,7 @@ class ScrubberConfig:
     on_save: Callable[[int], Optional[dict]]
     on_selector: Optional[Callable[[Tuple[int, int, int, int], dict], None]] = None
     on_refresh: Optional[Callable[[int, Any], None]] = None
+    on_selector_cancel: Optional[Callable[[dict], None]] = None
 
 
 def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
@@ -103,14 +119,26 @@ def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
     if not cap.isOpened():
         raise IOError(f"Could not open video: {cfg.video_path}")
 
+    # Full-frame dimensions, needed for the imshow extent so the displayed image
+    # lives in FULL-FRAME data coords in BOTH the full and cropped views (see
+    # _refresh). Prefer the container props; fall back to a decoded frame's shape
+    # if they report 0. This is the same source _read_frame decodes from, so the
+    # dims are never hardcoded. (_read_frame re-seeks before every read, so the
+    # probe read below does not disturb navigation.)
+    frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    if frame_h <= 0 or frame_w <= 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        ok0, f0 = cap.read()
+        if ok0 and f0 is not None:
+            frame_h, frame_w = int(f0.shape[0]), int(f0.shape[1])
+
     # Placeholder shape for unreadable frames (keeps the layout stable).
     if cfg.crop is not None:
         y0, y1, x0, x1 = cfg.crop
         placeholder_shape = (y1 - y0, x1 - x0)
     else:
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        placeholder_shape = (h, w)
+        placeholder_shape = (frame_h, frame_w)
 
     def _read_frame(fi: int) -> np.ndarray:
         cap.set(cv2.CAP_PROP_POS_FRAMES, int(fi))
@@ -141,6 +169,20 @@ def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
     def _refresh():
         fi = state["frame_idx"]
         im.set_data(_read_frame(fi))
+        # WHY update the extent + limits on EVERY refresh: the image artist is
+        # created once by imshow() above (while cfg.crop may be None), which
+        # FREEZES its extent to the full-frame size. A tool can toggle cfg.crop
+        # live (eye-zoom), and set_data() alone would then STRETCH the smaller
+        # cropped array across that frozen full-frame extent — silently
+        # rescaling every coordinate read off the axes (ROI drags, pupil
+        # ellipses). Re-deriving the extent + matching limits from the live crop
+        # keeps the displayed image in FULL-FRAME data coords in both views, so
+        # coordinates need no crop-origin fudge (an origin offset cannot undo a
+        # stretch anyway).
+        left, right, bottom, top = image_extent_for_crop(cfg.crop, frame_h, frame_w)
+        im.set_extent((left, right, bottom, top))
+        ax_frame.set_xlim(left, right)
+        ax_frame.set_ylim(bottom, top)
         hud_text.set_text(cfg.hud_fn(fi))
         if cfg.on_refresh is not None:
             cfg.on_refresh(fi, fig)
@@ -151,8 +193,8 @@ def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
     # calls state["arm_selector"] from its on_key_extra) and auto-disarms as soon
     # as a drag completes or is cancelled, so arrow-stepping/playback/save/quit
     # keep working while no drag is in progress. Boxes are reported in FULL-FRAME
-    # pixel coords: the tool only arms the selector in the full-frame view
-    # (cfg.crop is None), where the imshow data coords equal frame pixels.
+    # pixel coords: the frame axes always live in full-frame data coords (see
+    # _refresh's extent update), so a drag reads true frame pixels in EITHER view.
     selector = {"obj": None}
 
     def _disarm_selector():
@@ -160,27 +202,34 @@ def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
             selector["obj"].set_active(False)
         state["selector_armed"] = False
 
+    def _cancel_selector():
+        # Cancel an armed-but-uncompleted drag (empty drag, or q/esc while armed):
+        # disarm the widget AND notify the tool so it can drop its own arming
+        # INTENT. A completed drag resets its intent inside cfg.on_selector; a
+        # cancel otherwise leaves a stale tool-side intent that would mis-route the
+        # NEXT completed drag. Deliberately NOT called on the success path, which
+        # must keep the intent until cfg.on_selector has consumed it.
+        _disarm_selector()
+        if cfg.on_selector_cancel is not None:
+            cfg.on_selector_cancel(state)
+
     if cfg.on_selector is not None:
         from matplotlib.widgets import RectangleSelector
 
         def _on_select(eclick, erelease):
             if eclick.xdata is None or erelease.xdata is None:
-                _disarm_selector()
+                _cancel_selector()
                 return
             x0, x1 = sorted((eclick.xdata, erelease.xdata))
             y0, y1 = sorted((eclick.ydata, erelease.ydata))
-            # imshow data coords are CROP-LOCAL whenever a crop is active, but the
-            # seam's contract is full-frame pixels. Add the crop origin so the box is
-            # correct in EITHER view. Without this, arming the selector while zoomed
-            # yields an ROI silently offset by the crop origin -- wrong data, no error.
-            # cfg.crop is read here (not at wiring time) because tools toggle it live.
-            crop = cfg.crop
-            if crop is not None:
-                y_off, x_off = int(crop[0]), int(crop[2])
-                y0 += y_off
-                y1 += y_off
-                x0 += x_off
-                x1 += x_off
+            # The frame axes ALWAYS live in FULL-FRAME data coords (the _refresh
+            # extent update places both the full and cropped views there), so
+            # eclick.xdata/ydata are already full-frame pixels in EITHER view.
+            # NO crop-origin rebasing: an earlier version added crop[0]/crop[2]
+            # back, but that corrects only an ORIGIN offset — it could not undo the
+            # coordinate STRETCH a frozen full-frame extent imposed on a cropped
+            # array, so a zoomed drag still recorded garbage. Fixing the extent
+            # removes the need for (and the error in) any offset math.
             box = (int(round(y0)), int(round(y1)), int(round(x0)), int(round(x1)))
             _disarm_selector()
             cfg.on_selector(box, state)
@@ -203,7 +252,7 @@ def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
         key = event.key
         if key in ("q", "escape"):
             if state.get("selector_armed"):
-                _disarm_selector()
+                _cancel_selector()
                 _refresh()
                 return
             plt.close(fig); return

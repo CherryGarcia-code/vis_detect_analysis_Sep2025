@@ -235,6 +235,31 @@ def clamp_crop(crop, H: int, W: int) -> Optional[Tuple[int, int, int, int]]:
     return (y0, y1, x0, x1)
 
 
+def image_extent_for_crop(crop, frame_h: int, frame_w: int) -> Tuple[float, float, float, float]:
+    """``(left, right, bottom, top)`` imshow extent placing the displayed image in
+    FULL-FRAME data coords, for a crop ``(y0,y1,x0,x1)`` or ``None`` (whole frame).
+
+    The tagger shows either the whole frame or a cropped eye-zoom in the SAME
+    ``imshow`` artist (``cfg.crop`` toggles live). The image is created once, so
+    its extent is frozen unless updated on every redraw. If a cropped (smaller)
+    array is drawn under a frozen full-frame extent, matplotlib STRETCHES it
+    across the whole frame — every ROI / pupil coordinate then read off the axes
+    is silently rescaled (neither full-frame nor crop-local). Re-deriving the
+    extent from the live crop keeps the displayed image in full-frame data
+    coords in BOTH views, so a drag reads true full-frame pixels with no scale
+    and no offset — which is why the crop-origin rebasing hacks are unnecessary.
+
+    Matplotlib image extent is ``(left, right, bottom, top)`` and this axis is
+    inverted (image origin at the top-left), so ``top`` uses the SMALLER y
+    (``y0``) and ``bottom`` the larger (``y1``). The extent spans exactly
+    ``x0..x1`` / ``y0..y1`` in full-frame pixel edges, introducing no scaling.
+    """
+    if crop is None:
+        return (-0.5, float(frame_w) - 0.5, float(frame_h) - 0.5, -0.5)
+    y0, y1, x0, x1 = (int(v) for v in crop)
+    return (float(x0) - 0.5, float(x1) - 0.5, float(y1) - 0.5, float(y0) - 0.5)
+
+
 def ellipse_from_box(box) -> dict:
     """Inscribed axis-aligned ellipse ``{cx,cy,major,minor,angle}`` from a drag
     box ``(y0,y1,x0,x1)``.
