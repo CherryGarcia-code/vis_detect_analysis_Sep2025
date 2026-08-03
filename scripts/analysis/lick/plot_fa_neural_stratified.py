@@ -131,11 +131,16 @@ def process_session(pkl_path, stats_root, session_name):
         
     # 3. Get Behavior & Lick Times
     df = get_trial_dataframe(session)
-    lick_keys = ['Lick_L', 'lick_L']
-    all_licks = get_event_times(session.ni_events, lick_keys)
-    if len(all_licks) > 0:
-        all_licks = np.sort(np.unique(all_licks))
-    else:
+    # Resolve the session's ONE true lick channel rather than hard-coding
+    # 'Lick_L' (which silently dropped the 33 BG_046 sessions written by the
+    # 2026 re-extraction, where the same lines are named Piezo_1/Piezo_2).
+    from visdetect.analysis.lick_channels import (
+        NoLickChannelError, get_lick_times,
+    )
+    try:
+        all_licks = np.unique(get_lick_times(session))
+    except NoLickChannelError as exc:
+        print(f"  SKIP {pkl_path.name}: {exc}")
         return None
         
     start_keys = ['Baseline_ON', 'trial_start_times']

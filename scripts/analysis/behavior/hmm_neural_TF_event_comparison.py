@@ -164,7 +164,9 @@ EVENT_ALIGN_LABELS = {
 # Baseline lick-contamination filter: exclude Baseline_ON events where any
 # lick occurs within this many seconds after baseline onset.
 BASELINE_LICK_EXCLUSION_WINDOW = 1.0
-LICK_NI_KEYS = ["Lick_L", "lick_L"]  # NI event keys for raw lick times
+# Raw lick times are resolved per session via visdetect.analysis.lick_channels
+# (the NI channel name differs by MATLAB extraction convention), not read from a
+# hard-coded key list.
 
 
 # =====================================================================
@@ -531,14 +533,22 @@ def _get_behavioral_event_times(
     baseline_arr = _to_float_array(ni.get("Baseline_ON", []))
     change_arr = np.array(get_event_times_by_trial(session, "Change_ON"), dtype=float)
 
-    # Raw lick event times (for baseline contamination filter)
-    _lick_parts: List[np.ndarray] = []
-    for _lk in LICK_NI_KEYS:
-        if _lk in ni:
-            _lick_parts.append(_to_float_array(ni[_lk]))
-    all_lick_times = (
-        np.sort(np.concatenate(_lick_parts)) if _lick_parts else np.array([])
+    # Raw lick event times (for the baseline contamination filter).
+    # This previously read only 'Lick_L', so on the 33 BG_046 sessions written
+    # by the 2026 re-extraction (which names the same lines Piezo_1/Piezo_2) it
+    # found NO licks and the filter silently did nothing -- it FAILED OPEN,
+    # leaving contaminated baselines in with no visible error. Resolve the
+    # session's true lick channel instead, and fail LOUD if none is usable.
+    from visdetect.analysis.lick_channels import (
+        NoLickChannelError, get_lick_times,
     )
+    try:
+        all_lick_times = get_lick_times(session)
+    except NoLickChannelError as exc:
+        raise RuntimeError(
+            "Baseline lick-contamination filter cannot run without a lick "
+            f"channel; refusing to silently disable it. {exc}"
+        ) from exc
 
     n = len(trials)
     result: Dict[str, List[float]] = {

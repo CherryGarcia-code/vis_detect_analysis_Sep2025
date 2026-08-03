@@ -132,8 +132,11 @@ def build_cell_payload(source, region, session_label, unit_id, glm_cfg):
         from visdetect.core.session import load_session
         sess = load_session(str(pkl))
         trials, units = session_trial_regressors(sess, glm_cfg)
-        ni = sess.ni_events or {}
-        lick_times = np.asarray(ni.get("Piezo_1", np.zeros(0)), float).ravel()
+        # Resolve the session's ONE true lick channel. Reading a hard-coded
+        # "Piezo_1" returned an EMPTY array on every session written by the 2025
+        # extraction convention (which names the same lines Lick_L/Lick_R).
+        from visdetect.analysis.lick_channels import get_lick_times
+        lick_times = get_lick_times(sess)
         spike_times = units.get(int(unit_id))
         if spike_times is None:
             by_id = {int(c.cluster_id): np.asarray(c.spike_times, float).ravel()

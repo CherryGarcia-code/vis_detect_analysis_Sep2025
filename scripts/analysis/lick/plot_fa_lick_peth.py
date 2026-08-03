@@ -104,16 +104,18 @@ def process_session(pkl_path):
     if df.empty:
         return None
         
-    # Get Global Lick Times
-    # Case sensitive keys from inspection: 'Lick_L' only as requested
-    lick_keys = ['Lick_L', 'lick_L'] 
-    lick_times = get_event_times(session.ni_events, lick_keys)
-    # Sort in case we combined multiple channels
-    if len(lick_times) > 0:
-        lick_times = np.sort(np.unique(lick_times))
-    
-    if len(lick_times) == 0:
-        # print(f"No lick times found in {pkl_path.name}") # verbose
+    # Get Global Lick Times.
+    # Resolve the session's ONE true lick channel rather than hard-coding
+    # 'Lick_L': that returned an EMPTY array (and silently dropped the session)
+    # on every session written by the 2026 re-extraction, which names the same
+    # physical lines Piezo_1/Piezo_2 -- 33 of BG_046's 46 sessions.
+    from visdetect.analysis.lick_channels import (
+        NoLickChannelError, get_lick_times,
+    )
+    try:
+        lick_times = np.unique(get_lick_times(session))
+    except NoLickChannelError as exc:
+        print(f"  SKIP {pkl_path.name}: {exc}")
         return None
         
     # Get Trial Start Times (Baseline_ON is the reference for RT)
