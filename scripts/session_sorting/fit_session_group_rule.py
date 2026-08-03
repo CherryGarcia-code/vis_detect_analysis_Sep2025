@@ -54,6 +54,61 @@ STATES = ["StimSens", "Impulsive", "Disengaged", "Abort"]
 ROLL_W = 31
 
 
+EPISODE_COLS = ["n_bouts_ge20", "has_bout", "longest_bout_frac", "bout_position",
+                "post_stimsens", "post_impulsive", "post_diseng", "reengaged",
+                "bout_assessable"]
+MIN_BOUT = 20     # trials: a "substantial" disengaged bout
+MIN_WIN = 20      # trials required either side of the bout to assess pre/post
+
+
+def _runs(mask):
+    """[(start, end_exclusive)] for contiguous True runs."""
+    out, s = [], None
+    for i, v in enumerate(mask):
+        if v and s is None:
+            s = i
+        elif not v and s is not None:
+            out.append((s, i)); s = None
+    if s is not None:
+        out.append((s, len(mask)))
+    return out
+
+
+def episode_features(lab):
+    """Within-session EPISODE STRUCTURE around the longest disengaged bout.
+
+    Motivated by the observation (2026-08-03) that sessions sharing one tag can have very
+    different internal dynamics — e.g. a long run of misses (Disengaged) followed by a
+    return to the task. Two SEPARATE axes, which must not be collapsed:
+      * re-engagement — did the mouse come back on task AT ALL (StimSens OR Impulsive)?
+      * destination   — did it come back WELL (StimSens) or impulsively (Impulsive)?
+    An earlier StimSens-only definition wrongly scored "recovered into Impulsive" as
+    not-recovered; 6/13 Balanced sessions recover that way. Using re-engagement instead
+    separates Balanced (13/13) from Disengaged-dominated (0/5) perfectly.
+    """
+    n = len(lab)
+    R = [r for r in _runs(lab == "Disengaged") if (r[1] - r[0]) >= MIN_BOUT]
+    f = {"n_bouts_ge20": len(R), "has_bout": int(bool(R)),
+         "longest_bout_frac": 0.0, "bout_position": 0.5,
+         "post_stimsens": 0.0, "post_impulsive": 0.0, "post_diseng": 0.0,
+         "reengaged": 0, "bout_assessable": 0}
+    if not R:
+        return f
+    a, b = max(R, key=lambda r: r[1] - r[0])
+    f["longest_bout_frac"] = (b - a) / max(n, 1)      # normalised: raw length scales with n
+    f["bout_position"] = (a + b) / 2 / max(n, 1)      # 0 = session start, 1 = end
+    pre, post = lab[:a], lab[b:]
+    if len(post) < MIN_WIN or len(pre) < MIN_WIN:
+        return f                                       # geometry only; pre/post not assessable
+    f["bout_assessable"] = 1
+    ps = float((post == "StimSens").mean()); pi = float((post == "Impulsive").mean())
+    f["post_stimsens"], f["post_impulsive"] = ps, pi
+    f["post_diseng"] = float((post == "Disengaged").mean())
+    on_pre = float(((pre == "StimSens") | (pre == "Impulsive")).mean())
+    f["reengaged"] = int((ps + pi) >= 0.5 * on_pre and (ps + pi) > 0.15)
+    return f
+
+
 # ── Session-level features (all from the tag CSVs; no pkl needed) ─────
 def session_features(tags):
     n = len(tags)
@@ -76,6 +131,7 @@ def session_features(tags):
             best = max(best, run)
         f[f"maxrun_{s}_frac"] = best / max(n, 1)       # normalised: max-run scales with n
     f["switch_rate"] = float(np.mean(lab[1:] != lab[:-1])) if n > 1 else np.nan
+    f.update(episode_features(lab))                    # within-session episode structure
     # first- vs second-half contrasts — these are what can express "Deteriorating"
     h = n // 2
     if h >= 10:
@@ -122,6 +178,16 @@ def main():
     ap.add_argument("--subject", default="BG_046")
     ap.add_argument("--min-per-class", type=int, default=3,
                     help="drop groups with fewer labelled sessions than this")
+    ap.add_argument("--exclude-features", default="",
+                    help="comma-separated feature columns to WITHHOLD from the tree. Use to test "
+                         "whether a class survives without a suspected shortcut feature "
+                         "(e.g. --exclude-features hit_rate_go).")
+    ap.add_argument("--only-features", default="",
+                    help="comma-separated prefix filter: keep only features starting with any of "
+                         "these (e.g. --only-features d_ to test dynamics features alone).")
+    ap.add_argument("--with-episode-features", action="store_true",
+                    help="include the episode/recovery features in the classifier. OFF by default: tested 2026-08-03, they do not improve LOSO kappa (BG_046 0.824->0.783) and are never selected. They are still computed and cached for downstream CHUNKING.")
+    ap.add_argument("--tag", default="", help="suffix for output filenames, to avoid clobbering")
     args = ap.parse_args()
 
     if not os.path.exists(LABELS_PATH):
@@ -158,6 +224,24 @@ def main():
     dropped = sorted(set(df["group"]) - set(keep))
     d = df[df["group"].isin(keep)].copy()
     fcols = [c for c in d.columns if c not in ("subject", "session_name", "group")]
+    # Episode/recovery features are computed and CACHED (they are the chunking primitive for
+    # downstream analysis) but EXCLUDED from the classifier by default: tested 2026-08-03 and
+    # they do not help — BG_046 kappa 0.824 -> 0.783, BG_039 and BG_031 unchanged, and
+    # reengaged/post_* were never selected by any mouse's tree (only 27/67 bout-sessions are
+    # assessable, and where informative they are redundant with occ_Disengaged).
+    if not args.with_episode_features:
+        fcols = [c for c in fcols if c not in EPISODE_COLS]
+    if args.only_features:
+        pref = tuple(s.strip() for s in args.only_features.split(",") if s.strip())
+        fcols = [c for c in fcols if c.startswith(pref)]
+    drop = {s.strip() for s in args.exclude_features.split(",") if s.strip()}
+    if drop:
+        missing = drop - set(fcols)
+        if missing:
+            print(f"  WARNING: --exclude-features not present: {sorted(missing)}")
+        fcols = [c for c in fcols if c not in drop]
+    if not fcols:
+        raise SystemExit("No feature columns left after filtering.")
     X = d[fcols].fillna(0.0).values
     y = d["group"].astype(str).values
 
@@ -182,6 +266,9 @@ def main():
         acc = float(np.mean(np.array(preds) == y))
         lines.append(f"leave-one-session-out: kappa = {loso:.3f}, accuracy = {acc:.2f}")
         lines.append("  (project precedent for the trial-level labeler was LOSO kappa 0.731)")
+        pa = np.array(preds)
+        lines.append("  per-class recall (LOSO): " + ", ".join(
+            f"{g} {int((pa[y == g] == g).sum())}/{int((y == g).sum())}" for g in sorted(set(y))))
     else:
         preds = list(y)
         lines.append("too few labelled sessions for LOSO — label more, then re-run.")
@@ -196,7 +283,8 @@ def main():
               "SCOPE: groups are behaviour-derived -> clean for NEURAL DVs, CIRCULAR for",
               "behavioural ones. Do not test behavioural DVs that defined the groups."]
     os.makedirs(OUT_DIR, exist_ok=True)
-    with open(RULES_PATH, "w", encoding="utf-8") as fh:
+    rules_path = RULES_PATH.replace(".txt", f"{args.tag}.txt") if args.tag else RULES_PATH
+    with open(rules_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
 
     # ── Figure ───────────────────────────────────────────────────────
@@ -229,7 +317,7 @@ def main():
     ax3.set_title("C. Rules", fontweight="bold", loc="left", fontsize=11)
     fig.suptitle(f"{args.subject} — learned session-group rule vs manual labels",
                  fontsize=13, fontweight="bold")
-    save_figure(fig, "session_group_rule", f"session_sorting/{args.subject}")
+    save_figure(fig, f"session_group_rule{args.tag}", f"session_sorting/{args.subject}")
 
     print("\n".join(lines))
     print(f"\nSaved: {RULES_PATH}\n       {FEATURES_PATH}")

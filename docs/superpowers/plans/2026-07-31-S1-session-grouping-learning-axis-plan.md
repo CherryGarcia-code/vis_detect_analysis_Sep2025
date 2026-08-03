@@ -54,18 +54,45 @@ Phases are independently valuable and gated — each ends in a decision that can
 
 ---
 
-## Phase 4 — Rebuild the learning axis ⬜
+## Phase 4 — Rebuild the learning axis ⬜ (SCALED BACK 2026-08-03)
 
-1. ⬜ **Drop the `d′ ≥ 0.8` gate** for learning-axis work; recover the ~12 `Excluded` early
-   sessions per mouse. Keep only DV-independent gates (`n_trials`, data integrity).
+> **The Phase-4 gate has fired.** Manual labelling (Phase 1–2) resolved what the `Excluded`
+> sessions actually are, and it **partly refutes the original motivation**. Of BG_046's 12
+> `Excluded` sessions: **6 Disengaged-dominated, 2 Low-yield, 2 Deteriorating, 1
+> Impulsive-dominated, 0 Balanced.** The d′ gate is mostly removing **bad-state** sessions, not
+> naive-but-engaged ones. The only genuinely earliest sessions (chronological positions 0–1) are
+> the 2 Low-yield ones — too sparse to judge.
+>
+> **Revised reading:** "Naive isn't naive" is more a **data limitation** than a gating artifact.
+> Ungating will not manufacture a rich naive sample for BG_046. Do not expect Phase 4 to fix the
+> 3-Naive-session problem.
+
+1. ⬜ **Still drop the `d′ ≥ 0.8` gate** for learning-axis work — not to recover naive data (it
+   isn't there), but because gating on the outcome is wrong in principle and the 2 Low-yield +
+   1 Impulsive `Excluded` sessions do sit at the early edge. Report the recovered n honestly.
 2. ⬜ Axis = exogenous training time (session index / cumulative trials / days since start).
-3. ⬜ Optional latent **monotone competence** curve (state-space binomial or isotonic envelope);
-   per-session deviation below the envelope = the state-quality residual.
+3. ⬜ **Downgraded to optional/deferred:** the latent monotone competence curve. With only ~3
+   usable Naive sessions the early end of the curve is unconstrained, so a state-space fit would
+   be extrapolating. Revisit only if other subjects supply a denser early sample.
 4. ⬜ Eligibility filter = the Phase-2 rule, applied uniformly at every stage.
+5. ⬜ **NEW (user proposal, 2026-08-03) — epoch-level salvage.** Rather than discarding
+   `Deteriorating` sessions whole, use their **engaged leading epoch**. Justified: labelling
+   confirmed these sessions genuinely decline within-session (Δ hit-rate 2nd−1st = −0.095, 5/5
+   negative, MWU p=0.0018 vs Balanced; Δ StimSens occupancy −0.208, p=0.0099), so an early epoch
+   is qualitatively different from the late one. This moves eligibility from **session-level** to
+   **epoch-level**, which matches the original diagnosis that contamination is within-session.
+   Mandatory controls:
+   - **Trial-count matching** — a salvaged 150-trial epoch vs a full 550-trial Balanced session
+     will bias any encoding-strength / fit-quality metric downward (the B9 attenuation lesson).
+     Subsample to matched N and pair within session; report matched and unmatched.
+   - **Non-circular epoch selection** — pick the epoch by a criterion independent of the DV
+     (e.g. state occupancy or a change-point on participation), never by the DV itself.
+   - **Report the salvaged n** per session; if a salvaged epoch is under the power floor, drop it
+     rather than reporting a point estimate.
 
-**Gate:** if the recovered `Excluded` sessions do **not** extend the early end of the axis
-(i.e. they are excluded for data-integrity reasons rather than poor performance), say so and drop
-the "Naive isn't naive" motivation.
+**Gate (revised):** if trial-count matching cannot be achieved between salvaged epochs and full
+sessions, the comparison is **under-powered and not reportable** — say so, do not report the point
+estimate as a trend.
 
 ---
 
