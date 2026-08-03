@@ -52,6 +52,19 @@ def test_save_sidecar_atomic_leaves_no_partial_on_failure(tmp_path, monkeypatch)
     assert not any(p.suffix == ".tmp" for p in tmp_path.iterdir())
 
 
+def test_save_sidecar_overwrites_stale_temp_and_leaves_none(tmp_path):
+    # Fix 2: a pre-existing stale '<session>.json.tmp' (left by a hard kill) must
+    # NOT prevent a successful save, and after a good save no temp remains.
+    stale = tmp_path / "01072025.json.tmp"
+    stale.write_text("leftover partial from a crashed save")
+    sc = vl.new_sidecar("BG_TEST", "01072025", [10, 10])
+    vl.set_roi(sc, "eye", [1, 2, 3, 4], source="drawn")
+    vl.save_sidecar(sc, "01072025", "BG_TEST", labels_dir=str(tmp_path))
+    loaded = vl.load_sidecar("01072025", "BG_TEST", labels_dir=str(tmp_path))
+    assert loaded["rois"]["eye"] == {"box": [1, 2, 3, 4], "source": "drawn"}
+    assert not any(p.suffix == ".tmp" for p in tmp_path.iterdir())
+
+
 def test_upsert_frame_label_replaces_not_duplicates():
     sc = vl.new_sidecar("BG_TEST", "01072025", [10, 10])
     vl.upsert_frame_label(sc, 42, vl.VERDICT_CONFIRMED,
@@ -137,6 +150,46 @@ def test_seed_frame_size_mismatch_offers_but_does_not_apply(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Fix 1 (MEDIUM): a corrupt/unreadable prior sidecar must NOT abort tagger
+# startup. The most-recent prior is chosen by DATE, then loaded; a malformed
+# winner must be SKIPPED and the next-most-recent VALID prior tried, never a
+# raw JSONDecodeError propagating up through the (unguarded) GUI call.
+# ---------------------------------------------------------------------------
+
+
+def test_seed_skips_malformed_most_recent_and_falls_back_to_next(tmp_path):
+    # 01 Jul is the most-recent prior but is CORRUPT; 28 Jun is the next-most-
+    # recent VALID prior -> its ROIs are returned (no crash), tagged to 28 Jun.
+    _write_prior(tmp_path, "28062025", [976, 1024], [3, 3, 3, 3])   # valid, older
+    (tmp_path / "01072025.json").write_text("{ this is not valid json ]")
+    res = vl.seed_rois_from_previous("05072025", "BG_TEST", (976, 1024),
+                                     labels_dir=str(tmp_path))
+    assert res is not None
+    assert res["source_session"] == "28062025"      # fell back past the corrupt one
+    assert res["applied"] is True
+    assert res["rois"]["eye"] == {"box": [3, 3, 3, 3], "source": "inherited:28062025"}
+
+
+def test_seed_malformed_only_prior_returns_none_no_crash(tmp_path):
+    # The ONLY eligible prior is corrupt -> None, not a JSONDecodeError.
+    (tmp_path / "01072025.json").write_text("{ nope")
+    assert vl.seed_rois_from_previous("05072025", "BG_TEST", (976, 1024),
+                                      labels_dir=str(tmp_path)) is None
+
+
+def test_seed_garbage_prior_ignored_when_valid_more_recent_exists(tmp_path):
+    # A garbage file that is OLDER than a valid winner must not perturb selection:
+    # the valid more-recent prior is still chosen normally.
+    (tmp_path / "20062025.json").write_text("\x00\x01 not json at all")  # older garbage
+    _write_prior(tmp_path, "01072025", [976, 1024], [9, 9, 9, 9])        # valid winner
+    res = vl.seed_rois_from_previous("05072025", "BG_TEST", (976, 1024),
+                                     labels_dir=str(tmp_path))
+    assert res is not None
+    assert res["source_session"] == "01072025"
+    assert res["rois"]["eye"] == {"box": [9, 9, 9, 9], "source": "inherited:01072025"}
+
+
+# ---------------------------------------------------------------------------
 # Task 3: crop clamp + ellipse geometry
 # ---------------------------------------------------------------------------
 
@@ -175,6 +228,25 @@ def test_ellipse_from_box_axis_aligned():
     # y:100-400 (h=300), x:300-500 (w=200) -> taller than wide -> major=h, angle 90
     assert vl.ellipse_from_box((100, 400, 300, 500)) == {
         "cx": 400.0, "cy": 250.0, "major": 300.0, "minor": 200.0, "angle": 90.0}
+
+
+def test_ellipse_from_box_inverted_normalizes_to_same_ellipse():
+    # Fix 3: an inverted drag box yields the SAME ellipse as its normalized form
+    # (an ellipse box is symmetric in intent -> safe to order-normalize).
+    normalized = vl.ellipse_from_box((100, 200, 300, 500))
+    assert vl.ellipse_from_box((200, 100, 500, 300)) == normalized
+    assert normalized == {"cx": 400.0, "cy": 150.0, "major": 200.0,
+                          "minor": 100.0, "angle": 0.0}
+
+
+def test_ellipse_from_box_degenerate_raises():
+    # Fix 3: zero-area (zero width or zero height) box is meaningless -> ValueError.
+    with pytest.raises(ValueError):
+        vl.ellipse_from_box((100, 100, 300, 500))   # zero height
+    with pytest.raises(ValueError):
+        vl.ellipse_from_box((100, 200, 300, 300))   # zero width
+    with pytest.raises(ValueError):
+        vl.ellipse_from_box((100, 100, 300, 300))   # zero area (point)
 
 
 def test_ellipse_from_detection_maps_radius_to_circle():

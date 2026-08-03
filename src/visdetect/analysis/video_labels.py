@@ -26,8 +26,8 @@ Schema (v1)::
 from __future__ import annotations
 
 import json
+import logging
 import os
-import tempfile
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 
@@ -36,6 +36,8 @@ from visdetect.analysis.config import (
     canonical_camera_session,
     session_date_key,
 )
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
@@ -84,12 +86,21 @@ def save_sidecar(sidecar: dict, session, subject: Optional[str] = None,
                  labels_dir: Optional[str] = None) -> None:
     """Atomically write *sidecar* (temp file + ``os.replace``), mirroring
     ``tag_trials._persist_overrides`` — a crash mid-write never corrupts the
-    prior file and never leaves a partial one in place."""
+    prior file and never leaves a partial one in place.
+
+    The temp file has a DETERMINISTIC name (``<target>.json.tmp``) rather than a
+    unique ``mkstemp`` one: a hard process kill (Windows ``TerminateProcess``)
+    skips the ``except`` cleanup, so a unique name would leak one stray ``.tmp``
+    per crash. Reusing a single per-session path bounds the leak to at most one
+    stale temp, which the next successful save overwrites (``open(..., "w")``
+    truncates it) before ``os.replace``. Readers only ever open ``<session>.json``
+    so a lingering ``.tmp`` is never mistaken for data.
+    """
     path = label_sidecar_path(session, subject, labels_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+    tmp_path = path + ".tmp"
     try:
-        with os.fdopen(tmp_fd, "w") as f:
+        with open(tmp_path, "w") as f:
             json.dump(sidecar, f, indent=2)
         os.replace(tmp_path, path)
     except Exception:
@@ -160,6 +171,13 @@ def seed_rois_from_previous(session, subject, current_frame_size,
     ``frame_size`` equals ``current_frame_size`` (as ``(H, W)``). On a mismatch the
     ROIs are still returned (``applied=False``) so the caller can warn/offer them.
 
+    Corruption resilience: a prior sidecar whose CONTENT will not read/parse
+    (malformed JSON, unreadable file) is SKIPPED and the next-most-recent eligible
+    prior is tried, so a single bad file can never abort tagger startup for a new
+    session. This mirrors the existing skip of files whose FILENAME will not parse
+    as a date. Each skip is ``logger.warning``-ed so the corrupt sidecar is
+    discoverable rather than silently swallowed.
+
     Returns ``{"source_session", "rois", "frame_size", "applied"}`` or ``None``.
     """
     d = labels_dir or subject_video_labels_dir(subject)
@@ -167,7 +185,10 @@ def seed_rois_from_previous(session, subject, current_frame_size,
         return None
     cur = canonical_camera_session(session)
     cur_key = session_date_key(cur)
-    best = None  # (date_key, stem)
+    # Collect every strictly-earlier eligible prior, then walk them most-recent
+    # first so a corrupt winner can fall through to the next-best by DATE (never
+    # iteration order).
+    eligible = []  # (date_key, stem)
     for fn in os.listdir(d):
         if not fn.endswith(".json"):
             continue
@@ -180,20 +201,27 @@ def seed_rois_from_previous(session, subject, current_frame_size,
             continue
         if k >= cur_key:            # not strictly earlier -> ineligible
             continue
-        if best is None or k > best[0]:
-            best = (k, stem)
-    if best is None:
-        return None
-    with open(os.path.join(d, best[1] + ".json"), "r") as f:
-        prior = json.load(f)
-    prior_fs = list(prior.get("frame_size") or [])
-    rois = {}
-    for name, r in (prior.get("rois") or {}).items():
-        rois[name] = {"box": [int(v) for v in r["box"]],
-                      "source": f"inherited:{best[1]}"}
-    applied = prior_fs == [int(v) for v in current_frame_size]
-    return {"source_session": best[1], "rois": rois,
-            "frame_size": prior_fs, "applied": applied}
+        eligible.append((k, stem))
+    eligible.sort(key=lambda t: t[0], reverse=True)  # most-recent prior first
+    for _, stem in eligible:
+        fp = os.path.join(d, stem + ".json")
+        try:
+            with open(fp, "r") as f:
+                prior = json.load(f)
+        except (ValueError, OSError) as exc:
+            # json.JSONDecodeError subclasses ValueError; OSError covers
+            # unreadable files. Skip this prior and try the next-most-recent.
+            logger.warning("Skipping unreadable prior sidecar %s: %s", fp, exc)
+            continue
+        prior_fs = list(prior.get("frame_size") or [])
+        rois = {}
+        for name, r in (prior.get("rois") or {}).items():
+            rois[name] = {"box": [int(v) for v in r["box"]],
+                          "source": f"inherited:{stem}"}
+        applied = prior_fs == [int(v) for v in current_frame_size]
+        return {"source_session": stem, "rois": rois,
+                "frame_size": prior_fs, "applied": applied}
+    return None
 
 
 def clamp_crop(crop, H: int, W: int) -> Optional[Tuple[int, int, int, int]]:
@@ -268,12 +296,27 @@ def ellipse_from_box(box) -> dict:
     when wider-than-tall else 90.0. Rotation beyond 0/90 is intentionally lost
     (design §5): negligible for a near-circular rodent pupil, and the two-drag
     major/minor variant can follow if it ever matters.
+
+    Contract (differs from :func:`clamp_crop` deliberately):
+      * Inverted coords are order-NORMALIZED — ``(y1,y0,x1,x0)`` yields the SAME
+        ellipse as ``(y0,y1,x0,x1)``. An ellipse box is symmetric in intent (its
+        centre and axes do not depend on drag direction), so normalizing cannot
+        invent an ROI the user never drew. This is why swapping is safe here but
+        NOT in ``clamp_crop`` (where a swap would fabricate an unintended crop).
+      * A degenerate box — zero width OR zero height (zero area) after
+        normalization — raises ``ValueError``. A zero/negative-diameter
+        "ground-truth" ellipse is scientifically meaningless, so it is rejected
+        loudly rather than returned silently.
     """
     y0, y1, x0, x1 = box
-    w = float(x1 - x0)
-    h = float(y1 - y0)
-    cx = (float(x0) + float(x1)) / 2.0
-    cy = (float(y0) + float(y1)) / 2.0
+    y0, y1 = sorted((float(y0), float(y1)))   # normalize inverted drag
+    x0, x1 = sorted((float(x0), float(x1)))
+    w = x1 - x0
+    h = y1 - y0
+    if w <= 0.0 or h <= 0.0:
+        raise ValueError(f"degenerate ellipse box (zero area): {tuple(box)!r}")
+    cx = (x0 + x1) / 2.0
+    cy = (y0 + y1) / 2.0
     if w >= h:
         return {"cx": cx, "cy": cy, "major": w, "minor": h, "angle": 0.0}
     return {"cx": cx, "cy": cy, "major": h, "minor": w, "angle": 90.0}
