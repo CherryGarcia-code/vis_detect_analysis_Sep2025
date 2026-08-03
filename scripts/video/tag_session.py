@@ -589,8 +589,18 @@ def main(argv=None) -> int:
         view = "ZOOM" if tag.zoomed else "full"
         roi_line = f"ROI: eye[{eye_state}] mouth[{mouth_state}]   view: {view}"
 
+        # Per-frame label tally for the session (Plan 2b, Task 6). Counts come
+        # straight from the sidecar's frame-keyed upserts, so re-labelled frames
+        # are counted once (never double-counted).
+        _frames = tag.sidecar["frames"] if tag.sidecar else []
+        n_conf = sum(1 for f in _frames if f["verdict"] == vl.VERDICT_CONFIRMED)
+        n_corr = sum(1 for f in _frames if f["verdict"] == vl.VERDICT_CORRECTED)
+        n_blink = sum(1 for f in _frames if f["verdict"] == vl.VERDICT_BLINK)
+        label_line = f"labels: {n_conf} ok / {n_corr} fix / {n_blink} blink"
+
         legend = ("[space]play  [-/+]spd {:g}x  [j/k]jump  [c]base<->chg  "
-                  "[e/m]roi  [f]zoom  [enter]save  [d]del  [q]quit"
+                  "[e/m]roi  [f]zoom  [u]ok  [p]fix  [x]blink  "
+                  "[enter]save  [d]del  [q]quit"
                   ).format(tag.speed)
         return "\n".join([
             mode_line,
@@ -598,6 +608,7 @@ def main(argv=None) -> int:
              f"   Delta {delta:+d} vs pred"),
             f"anchors: {len(entries)} ({n_base} base / {n_chg} chg)     {qc}",
             roi_line,
+            label_line,
             legend,
         ])
 
@@ -635,7 +646,19 @@ def main(argv=None) -> int:
             tag.mouth_roi = tuple(box)
             vl.set_roi(tag.sidecar, "mouth", box, source="drawn")
             vl.save_sidecar(tag.sidecar, session, subject)
-        # (Task 6 adds the tag.arming == "correct" branch here.)
+        elif tag.arming == "correct":
+            # The proposal was wrong: store BOTH the detector's proposal (may be
+            # None -- the "miss" failure mode) AND the human's inscribed ellipse,
+            # so proposed-vs-corrected is directly comparable (that is how the
+            # eyelid-occlusion diameter bias is quantified downstream). Upsert on
+            # frame_idx; persist atomically.
+            corrected = vl.ellipse_from_box(box)
+            vl.upsert_frame_label(tag.sidecar, state["frame_idx"],
+                                  vl.VERDICT_CORRECTED,
+                                  proposed_ellipse=tag.last_proposed,   # may be None
+                                  corrected_ellipse=corrected)
+            vl.save_sidecar(tag.sidecar, session, subject)
+            logger.info("corrected frame %d", state["frame_idx"])
         tag.arming = None
 
     # ---------------------------------------------------------------------
@@ -695,6 +718,43 @@ def main(argv=None) -> int:
             return True
         if key == "f":
             return _toggle_zoom()
+        # Per-frame pupil labels (Plan 2b, Task 6). All three upsert on frame_idx
+        # (re-labelling a frame REPLACES its entry) and persist atomically after
+        # every label via save_sidecar (temp + os.replace), so a crash never
+        # costs more than the un-saved current keystroke.
+        if key == "u":  # proposed ellipse is CORRECT
+            # A confirmation must reference a real proposal: if the detector
+            # returned nothing (no eye ROI, or no pupil found), do NOT invent a
+            # null-proposal "confirmation" -- say so and no-op instead.
+            if tag.last_proposed is None:
+                logger.warning("No proposed ellipse to confirm "
+                               "(set the eye ROI with 'e' and land on a frame "
+                               "with a detected pupil).")
+                return True
+            vl.upsert_frame_label(tag.sidecar, state["frame_idx"],
+                                  vl.VERDICT_CONFIRMED,
+                                  proposed_ellipse=tag.last_proposed)
+            vl.save_sidecar(tag.sidecar, session, subject)
+            logger.info("confirmed frame %d", state["frame_idx"])
+            return True
+        if key == "p":  # proposal is WRONG -> drag the true pupil
+            # Reuse the SAME correction-drag path Task 5 wired: arm the shared
+            # selector and let _on_roi_drawn's "correct" branch record it. The
+            # seam returns FULL-FRAME coords in EITHER view (it adds the crop
+            # origin back), so correcting while zoomed is fully supported and is
+            # the expected workflow (judge the pupil close-up) -- do NOT block it.
+            tag.arming = "correct"
+            state["arm_selector"]()
+            return True
+        if key == "x":  # blink / occluded -> no valid pupil this frame
+            # Store the proposal if one exists (it is then a detector false
+            # positive); a blink never carries a corrected ellipse.
+            vl.upsert_frame_label(tag.sidecar, state["frame_idx"],
+                                  vl.VERDICT_BLINK,
+                                  proposed_ellipse=tag.last_proposed)
+            vl.save_sidecar(tag.sidecar, session, subject)
+            logger.info("blink frame %d", state["frame_idx"])
+            return True
         # Self-diagnosing: log (cheap, debug-level, not to the HUD) any key we do
         # not handle so a future dead-key report (like the bracket keys above) is
         # immediately diagnosable from the log instead of a silent no-op.
@@ -730,6 +790,11 @@ def main(argv=None) -> int:
         run_scrubber(cfg)
     finally:
         play_cap.release()
+        # Belt-and-suspenders flush: every label already saved atomically on
+        # keystroke, but re-persist the final sidecar state on quit so a session's
+        # labels are durable even if some future path mutates without saving.
+        if tag.sidecar is not None:
+            vl.save_sidecar(tag.sidecar, session, subject)
 
     anchor_path = os.path.join(sync_dir, f"{session}_anchor.json")
     if os.path.exists(anchor_path):
