@@ -7,14 +7,23 @@ Grounded in the 2026-07-30/31 audit of BG_046 (46 pkls) + BG_031/BG_012:
   added the opto ``Laser`` channel) names the SAME physical lines ``Piezo_1``/
   ``Piezo_2``. Never both in one session.
 * ``Piezo_2`` is NOT lick-locked (circular-shift null z=0.9, p=0.25) and must be
-  excluded. ``Lick_R`` is a lower-fidelity second detector on the same single
-  spout (Valve_R is always 0) whose events sit 2-3 ms from Lick_L events, so
-  pooling it double-counts.
-* Channel NAME alone is not trustworthy across subjects: BG_031's ``Lick_L`` is a
-  contaminated ~63 Hz line (751793 events) while ``Lick_R`` is the real one;
-  BG_012 is the mirror image (``Lick_R`` ~83 Hz). A resolver must therefore
-  reject channels by implausible sustained rate, not by name.
+  excluded. ``Lick_R`` is a DENSER, largely distinct train on the same single
+  spout (Valve_R is always 0): ~2-4x more events than ``Lick_L``, median
+  nearest-neighbour ~8 ms, only ~22% within 3 ms -- a noisier/multi-bounce
+  detector, not a near-duplicate. ``Lick_L`` is the line the behavioural
+  software derives RT from. Pooling any of these inflates the train
+  (measured 1.12x-4.99x on BG_046).
+* Channel NAME alone is not trustworthy, in two independent ways:
+  - CONTAMINATION -- BG_031_170325's ``Lick_L`` is a ~63 Hz line (751793 events)
+    while ``Lick_R`` is real; BG_012 is the mirror image. Caught by a
+    sustained-rate gate.
+  - TRUNCATION -- BG_046_30062025's ``Lick_L`` stops at 1943 s, missing 61% of
+    trials, while ``Lick_R`` covers the session. The rate gate CANNOT catch this
+    (truncated reads a plausible 0.91 Hz); caught by a trial-coverage check.
 """
+import gc
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -201,6 +210,41 @@ def test_prefers_high_fidelity_lick_over_under_detecting_piezo():
     assert not res.under_detects
 
 
+# ── temporal coverage: a truncated channel is worse than a lower-preference one ──
+def test_rejects_truncated_channel_in_favour_of_one_covering_the_session():
+    """Real regression: BG_046_30062025's Lick_L stops recording at 1943 s while
+    239/390 trials (61%) occur after that; Lick_R covers the whole session.
+
+    Preferring Lick_L by name returned a lick train that was EMPTY for most of
+    the session -- reintroducing the silent-zeros failure this module exists to
+    prevent, and worse than the old pooling (which covered it via Lick_R).
+    """
+    trials = np.linspace(50.0, 5600.0, 390)          # Baseline_ON per trial
+    truncated = _poisson_times(1.0, 1900.0, seed=30)  # stops at ~1900 s
+    full = np.sort(np.concatenate([truncated, _poisson_times(1.0, 7100.0, seed=31)]))
+    res = lc.resolve_lick_channel(_session(
+        {"Baseline_ON": trials, "Lick_L": truncated, "Lick_R": full}))
+    assert res.channel == "Lick_R"
+    assert res.trial_coverage > 0.9
+
+
+def test_keeps_preferred_channel_when_both_cover_the_session():
+    """Coverage must only override preference when it is materially worse."""
+    trials = np.linspace(50.0, 3000.0, 180)
+    ll = _poisson_times(1.5, 3100.0, seed=32)
+    lr = _poisson_times(4.0, 3100.0, seed=33)
+    res = lc.resolve_lick_channel(_session(
+        {"Baseline_ON": trials, "Lick_L": ll, "Lick_R": lr}))
+    assert res.channel == "Lick_L"
+
+
+def test_coverage_check_is_skipped_without_trial_times():
+    """No Baseline_ON (e.g. a synthetic session) -> fall back to preference."""
+    res = lc.resolve_lick_channel(_session({"Lick_L": _poisson_times(1.0, 1000.0, 34)}))
+    assert res.channel == "Lick_L"
+    assert res.trial_coverage == 1.0
+
+
 # ── malformed channels degrade to "absent", never an opaque crash ────
 def test_ragged_object_channel_does_not_raise_valueerror():
     ni = {"Lick_L": np.array([np.array([1.0, 2.0]), np.array([3.0])], dtype=object),
@@ -213,3 +257,53 @@ def test_unparseable_channel_is_treated_as_absent():
     ni = {"Lick_L": [{"not": "numeric"}], "Lick_R": _poisson_times(1.0, 1000.0, seed=28)}
     res = lc.resolve_lick_channel(_session(ni))
     assert res.channel == "Lick_R"
+
+
+# ── degenerate / contract branches (found unguarded by mutation testing) ──
+def test_all_events_at_one_timestamp_is_rejected():
+    """Zero span must read as infinite rate, not zero rate.
+
+    A stuck line emitting thousands of identical timestamps is contamination;
+    treating span<=0 as 0 Hz would silently ACCEPT it.
+    """
+    stuck = np.full(500, 12.34)
+    with pytest.raises(lc.NoLickChannelError):
+        lc.resolve_lick_channel(_session({"Lick_L": stuck}))
+
+
+def test_assert_single_convention_tolerates_unknown_entries():
+    """'unknown' is not a real convention and must not trigger a false alarm."""
+    assert lc.assert_single_convention(["lick_2025", "unknown"]) == "lick_2025"
+    with pytest.raises(ValueError):
+        lc.assert_single_convention(["lick_2025", "piezo_2026", "unknown"])
+
+
+# ── real-data regression pins (skipped when pkls are unavailable) ─────
+_DATA = Path("E:/python_analysis/git_repos/vis_detect_analysis_Sep2025/data/pkls")
+
+
+@pytest.mark.parametrize("subject,session,expect_channel,note", [
+    ("BG_046", "01072025", "Piezo_1", "2026 re-extraction convention"),
+    ("BG_046", "27082025", "Lick_L",  "2025 extraction convention"),
+    ("BG_046", "30062025", "Lick_R",  "Lick_L truncated at 1943 s (39% coverage)"),
+    ("BG_031", "170325",   "Lick_R",  "Lick_L contaminated ~63 Hz"),
+    ("BG_012", "01112023_prot4_lickEndsTrial", "Lick_L", "Lick_R contaminated"),
+])
+def test_real_sessions_resolve_to_the_verified_channel(subject, session,
+                                                       expect_channel, note):
+    """Pins the resolver against genuine pkls.
+
+    The synthetic tests cannot catch a wrong-channel regression on real data --
+    e.g. the truncation case was invisible to them.
+    """
+    pkl = _DATA / subject / f"{subject}_{session}.pkl"
+    if not pkl.exists():
+        pytest.skip(f"real pkl unavailable: {pkl}")
+    from visdetect.core.session import load_session
+    sess = load_session(str(pkl))
+    try:
+        res = lc.resolve_lick_channel(sess)
+        assert res.channel == expect_channel, f"{subject}_{session}: {note}"
+    finally:
+        del sess
+        gc.collect()

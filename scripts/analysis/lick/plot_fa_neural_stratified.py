@@ -207,7 +207,10 @@ def process_session(pkl_path, stats_root, session_name):
     session_results = {
         'session_name': session_name,
         'n_single': len(single_lick_aligns),
-        'n_multi': len(multi_lick_aligns)
+        'n_multi': len(multi_lick_aligns),
+        # Provenance for the cross-session convention gate in main().
+        'lick_channel': _lick.channel,
+        'lick_convention': _lick.convention,
     }
 
     # Inner function to compute pop trace
@@ -298,6 +301,10 @@ def main():
     parser.add_argument('--stats-root', required=True, help="Root folder where lick_responsiveness.csv are stored (e.g., FIGURES/lick/BG_046)")
     parser.add_argument('--pkl-dir', required=False)
     parser.add_argument('--no-filter', action='store_true', help='Bypass SESSION_FILTER')
+    parser.add_argument('--allow-mixed-conventions', action='store_true',
+                        help='Pool sessions from BOTH NI lick extraction conventions. '
+                             'FA alignment quality differs systematically between '
+                             'them (~6-16x detection density); warns instead of refusing.')
     args = parser.parse_args()
     
     out_dir = Path(args.out)
@@ -339,6 +346,24 @@ def main():
     if not results:
         print("No valid results found.")
         return
+
+    # --- Extraction-convention gate -------------------------------------
+    # This script POOLS FA-aligned neural traces across sessions. The FA
+    # alignment times come from the NI lick channel, and the two extraction
+    # conventions differ ~6-16x in detection density while aliasing with the
+    # learning timeline -- so pooling them mixes genuinely different alignment
+    # quality. Refuse by default (same escape hatch as plot_fa_lick_peth.py).
+    from visdetect.analysis.lick_channels import assert_single_convention
+    if not getattr(args, "allow_mixed_conventions", False):
+        assert_single_convention([r['lick_convention'] for r in results],
+                                 context=f"{subject} FA-aligned neural pooling "
+                                         f"across {len(results)} sessions")
+    else:
+        convs = {r['lick_convention'] for r in results}
+        if len(convs) > 1:
+            print(f"  WARNING: pooling FA-aligned neural traces across lick "
+                  f"extraction conventions {sorted(convs)} -- alignment quality "
+                  f"differs systematically between them.")
         
     # --- Visualization ---
     

@@ -10,18 +10,31 @@
 > lick channel. It now resolves exactly ONE. This alters the lick regressor on
 > essentially every session:
 > * **BG_046** — was `Piezo_1 ∪ Piezo_2` (33 sessions) or `Lick_L ∪ Lick_R` (13);
->   measured lick-count inflation **1.12×–4.30×**.
-> * **BG_031** — ⚠️ **worst affected.** On 35/43 sessions the old regressor was
->   dominated by a **contaminated ~63 Hz `Lick_L` line** (up to 751 793 events)
->   that is now rejected outright in favour of `Lick_R`. Its fit rested on
->   corrupted input and should move the most.
-> * **BG_039** — was `Lick_L ∪ Lick_R`, now `Lick_L` only.
+>   measured lick-count inflation **1.12×–4.99×** (median 1.40×). The 4.99×
+>   outlier is `30062025`, where the old pool masked a **truncated `Lick_L`**
+>   (see below).
+> * **BG_031** — **7/43** sessions had a **contaminated `Lick_L`** (>10 Hz; worst
+>   is `170325` at 751 793 events ≈ 63 Hz) that is now rejected in favour of
+>   `Lick_R`. On the other 28 lick-convention sessions `Lick_L` was already clean
+>   and is merely de-pooled from `Lick_R`; 8 are `Piezo_1`. So **all 43 sessions
+>   change**, but only 7 were driven by corrupted input. *(An earlier draft of
+>   this banner said "35/43 contaminated" — that was wrong: 35 is the number of
+>   sessions in the `Lick_*` convention, not the number contaminated.)*
+> * **BG_039** — was `Lick_L ∪ Lick_R`, now `Lick_L` only (32/32).
+> * **Truncated recordings** — on `BG_046_30062025` and `BG_041_30062025` the
+>   `Lick_L` line stops early (39% / 88% trial coverage) and the resolver now
+>   falls back to `Lick_R`. Two sessions remain below 90% coverage with **no
+>   alternative channel** (`BG_046_15072025` 66%, `BG_031_050325` 82%, both
+>   `Piezo_1`-only) — check `LickChannelResult.trial_coverage` before trusting
+>   lick-derived quantities there.
 >
 > **Why it matters.** The lick regressor is the point of the "lick-controlled
 > GLM": changing it changes fitted coefficients, the TF-ablated residual (C2) and
 > C1, so borderline `resp_log2` calls will flip. The headline comparison
-> **VMS (BG_031) 5.3 % > DMS (BG_046 2.8 % / BG_039 3.1 %)** rests on the mouse
-> whose input was most corrupted, and must be re-derived before being repeated.
+> **VMS (BG_031) 5.3 % > DMS (BG_046 2.8 % / BG_039 3.1 %)** must be re-derived
+> before being repeated — every session of all three subjects had its lick
+> regressor changed, and BG_031 additionally had 7 sessions fit on a corrupted
+> (~63 Hz) lick line.
 >
 > **Cheapest way to size the impact** (do this before a full rebuild): a PAIRED
 > within-unit re-fit on a stratified subsample. `trial_index` is unchanged and
