@@ -85,17 +85,53 @@ def _session_pkl_candidates(session_name) -> List[str]:
     return ordered
 
 
+def list_session_recordings(session_name, subject: Optional[str] = None) -> List[str]:
+    """EVERY pkl on disk for ``session_name``'s date — plain AND suffixed.
+
+    Some recording days were RESTARTED after a problem, producing a second (third…)
+    file distinguished by a suffix: ``BG_031_19052025.pkl`` + ``BG_031_19052025_b.pkl``.
+    On other days the restart is the ONLY surviving file (``BG_046_05092025_b.pkl``,
+    ``BG_038_17062025_c.pkl``, ``BG_039_{01,25}042025_v2.pkl``).
+
+    Use this whenever a date could legitimately have more than one recording; it is the
+    only way to see the twin that :func:`resolve_session_pkl` hides. Sorted, plain first.
+    """
+    import glob
+    subj = subject or SUBJECT
+    pkl_dir = os.path.join(ROOT, "data", "pkls", subj)
+    out = []
+    for candidate in _session_pkl_candidates(session_name):
+        out.append(os.path.join(pkl_dir, f"{subj}_{candidate}.pkl"))
+        out.extend(sorted(glob.glob(os.path.join(pkl_dir, f"{subj}_{candidate}_*.pkl"))))
+    seen, ordered = set(), []
+    for p in out:
+        if p not in seen and os.path.exists(p):
+            seen.add(p); ordered.append(p)
+    return ordered
+
+
 def resolve_session_pkl(session_name) -> Optional[str]:
     """Return the on-disk pkl path for ``session_name``, or None if none exists.
 
     Cheap (only ``os.path.exists`` checks, no unpickling), so it is safe to call
     to pre-filter a queue of sessions before loading any of them.
+
+    Resolution order (2026-08-03): the PLAIN numeric filename always wins, exactly as
+    before — this function's answer for any session that already resolved is unchanged.
+    Only when NO plain file exists does it fall back to a uniquely-suffixed restart
+    (e.g. ``BG_046_05092025_b.pkl``), which previously returned None despite the data
+    being on disk. If several suffixed files exist and none is plain, it returns None
+    ON PURPOSE — that date is genuinely ambiguous (BG_012 stores different task
+    protocols this way: ``_prot4_lickEndsTrial``, ``_airpuff``, …), so the caller must
+    disambiguate via :func:`list_session_recordings` rather than get a silent guess.
     """
     for candidate in _session_pkl_candidates(session_name):
         pkl_path = os.path.join(PKL_DIR, f"{SUBJECT}_{candidate}.pkl")
         if os.path.exists(pkl_path):
             return pkl_path
-    return None
+    suffixed = [p for p in list_session_recordings(session_name)
+                if not os.path.basename(p)[:-4].split("_")[-1].isdigit()]
+    return suffixed[0] if len(suffixed) == 1 else None
 
 
 def session_exists(session_name) -> bool:
@@ -119,11 +155,18 @@ def list_pkl_sessions(subject: Optional[str] = None) -> List[str]:
     for path in glob.glob(os.path.join(pkl_dir, f"{prefix}*.pkl")):
         base = os.path.basename(path)[:-4]      # strip ".pkl"
         token = base[len(prefix):] if base.startswith(prefix) else ""
-        # keep clean numeric date tokens only; skip variants/backups like
-        # "05092025_b" or "..._preconsolidate" that aren't real session dates.
         if token.isdigit():
             names.append(token)
-    return chronological_sort(names)
+        else:
+            # Suffixed RESTART (e.g. "05092025_b", "17062025_c", "01042025_v2") — the
+            # old `isdigit()` gate dropped these silently, hiding 4 dates whose ONLY
+            # recording is a restart, and all 40 dates of BG_012 (whose files carry
+            # protocol descriptors). Keep the DATE once; callers wanting every physical
+            # recording for a date use list_session_recordings().
+            head = token.split("_")[0]
+            if head.isdigit():
+                names.append(head)
+    return chronological_sort(sorted(set(names)))
 
 
 def load_session(session_name) -> "Session":
