@@ -87,7 +87,8 @@ printing the discrepancy rather than quietly correcting. That is independent cor
 trial↔event pairing. `frame_times_tr` was evaluated as a possible second independent discriminator
 and **rejected**: per-trial frame counts vary widely (6–1122) but correlate only r ≈ 0.105 with
 `change_time` even on a known-good session, because trials end at lick/abort rather than at change.
-The `change_time` residual of §2 remains the single strong discriminator.
+The independent second check the design needed came instead from the **NaN pattern** of `Change_ON`
+— see §2, Check 1.
 
 ### Correction to the handoff document
 
@@ -107,34 +108,77 @@ The `change_time` residual of §2 remains the single strong discriminator.
 recorded trial. Verified on **all 17** affected non-BG_012 sessions across BG_031/038/039/041/046:
 `len(Change_ON) == len(Baseline_ON) == len(Valve_L)` without exception.
 
-Therefore alignment is directly testable per trial, against the trial table's own `change_time`:
+Alignment is tested by **two complementary checks, both required**.
+
+### Check 1 (primary — full trial coverage): outcome ↔ change-presence
+
+`change_time` is the **scheduled** change time, drawn at trial start. On `fa` and `abort` trials the
+mouse licks, or the trial dies, before it arrives — the change is **never presented**. (This is
+precisely why `EVENT_VALID_OUTCOMES` restricts `Change_ON` to hit/miss.) `Change_ON` is `NaN` on
+exactly those trials, and finite exactly when the outcome is `Hit`, `Miss` or `Ref` — verified on
+`19082025`: 255 finite = 186 Hit + 65 Miss + 4 Ref, with **zero** non-NaN placeholders (the `<= 0`
+count is 0 on every session checked, so `isfinite` is a safe test).
+
+```
+agreement = mean( isfinite(Change_ON[j]) == (outcome_i in {Hit, Miss, Ref}) )
+```
+
+A categorical fingerprint over **100 % of trials**, immune to the scheduled-vs-realised problem by
+construction: it asks whether the change *occurred*, which is exactly what the outcome label encodes.
+
+| session | candidate | agreement |
+|---|---|---|
+| `19082025` (known good) | identity | **100.00 %** (n=587) |
+| `20082025` | offset 228 | **100.00 %** (n=486) |
+| `20082025` | offset 0 (current, null) | 51.44 % |
+| `05092025_b` | `trials[281:529]` | **100.00 %** (n=248) |
+| `05092025_b` | `trials[0:248]` (null) | 50.40 % |
+
+**Acceptance: 100 %, no tolerance** — see the sensitivity scan below.
+
+### Check 2 (secondary — timing precision): scheduled-change residual
 
 ```
 residual_i = (Change_ON[j] − Baseline_ON[j]) − trials[i].change_time
-score      = median |residual|      over trials with finite change_time
+score      = median |residual|   over trials whose change was ACTUALLY presented
+                                 (Change_ON finite — only ~45 % of trials)
 ```
 
-Measured separation:
+| session | candidate | median abs residual | within 50 ms | n |
+|---|---|---|---|---|
+| `19082025` (known good) | identity | **0.0051 s** | 100.0 % | 255/587 |
+| `20082025` | `BON[228:]` | **0.0051 s** | 100.0 % | 215/486 |
+| `20082025` | `BON[0:]` (null) | 1.4052 s | 0.4 % | 263 |
+| `05092025_b` | `trials[281:529]` | **0.0051 s** | 100.0 % | 126/248 |
+| `05092025_b` | `trials[0:248]` (null) | 1.5302 s | 1.6 % | 126 |
 
-| session | candidate | median abs residual | within 50 ms |
-|---|---|---|---|
-| `19082025` (known good) | offset 0 | **0.0051 s** | 100.0 % |
-| `20082025` | `BON[228:]` (hypothesis) | **0.0051 s** | 100.0 % |
-| `20082025` | `BON[0:]` (current, null) | 1.4052 s | 0.4 % |
-| `05092025_b` | `trials[281:529]` (hypothesis) | **0.0051 s** | 100.0 % |
-| `05092025_b` | `trials[0:248]` (null) | 1.5302 s | 1.6 % |
+This check can **only** use trials whose scheduled change was realised; the rest are `NaN` and drop
+out. That is why its `n` is roughly half the trial count — and why Check 1 is the primary: Check 1
+covers the trials Check 2 cannot see.
 
-Correct alignments reproduce the known-good value exactly; wrong ones sit ~300× away. This single
-quantity is both the **solver objective** and the **acceptance test**.
+### Sensitivity — both checks are knife-edge
 
-It supersedes count-matching, which is only a proxy: counts cannot distinguish a benign `+3`
-end-of-session artifact from a genuine 3-event offset. After this work, `neural_safe` becomes a
+Offsets scanned around the correct one for `20082025`:
+
+| shift | categorical | median abs residual |
+|---|---|---|
+| −3 | 53.09 % | 1.3052 s |
+| −2 | 58.64 % | 1.3301 s |
+| −1 | 52.06 % | 1.1948 s |
+| **0** | **100.00 %** | **0.0051 s** |
+
+A **single-trial** offset is caught by both, with no gradual degradation to misjudge. Anything below
+100 % on Check 1 is a misalignment, not noise.
+
+Together these supersede count-matching, which is only a proxy: counts cannot distinguish a benign
+`+3` end-of-session artifact from a genuine 3-event offset. After this work, `neural_safe` becomes a
 *measured* property rather than an inferred one — including for the 48 benign sessions, which are
 currently assumed fine rather than shown to be.
 
-**Rejected alternative.** Reconstructing inter-trial intervals from `change_time + ITI` was tested
-first and is underpowered: the known-good control scores only Spearman r = +0.097, so it cannot
-discriminate. `stim_vbl` (per-frame stimulus timestamps) would be ideal but is `None` in these pkls.
+**Rejected alternatives.** (i) Reconstructing inter-trial intervals from `change_time + ITI` is
+underpowered: the known-good control scores only Spearman r = +0.097. (ii) `stim_vbl` (per-frame
+stimulus timestamps) would be ideal but is `None` in these pkls. (iii) `frame_times_tr` frame counts
+— see §1.
 
 ---
 
@@ -164,7 +208,7 @@ trial_event_index: np.ndarray   # int, length n_trials
 |---|---|
 | Where the repair lands | **Repair the pkls** (backup first) **and patch the converter**, so future conversions cannot reintroduce it |
 | Unsolvable sessions | **`trial_event_index = -1` throughout**: neural code hard-skips, behaviour keeps the trial table. Explicit and auditable; nothing deleted |
-| Acceptance threshold | **median \|residual\| < 0.05 s** — 10× above the observed aligned value, 28× below the misaligned one, sitting in a wide empty gap. Log the actual residual **and the runner-up candidate** for every session so the margin is visible, never assumed |
+| Acceptance threshold | **Both** checks must pass: Check 1 categorical agreement **= 100 %** (no tolerance), **and** Check 2 median \|residual\| **< 0.05 s** — 10× above the observed aligned value, 28× below the misaligned one, sitting in a wide empty gap. Log both scores **and the runner-up candidate** for every session so the margin is visible, never assumed |
 
 ---
 
@@ -172,10 +216,10 @@ trial_event_index: np.ndarray   # int, length n_trials
 
 | Component | Responsibility |
 |---|---|
-| `src/visdetect/core/run_alignment.py` | Pure, unit-testable. `per_trial_event_keys(ni_events)`, `alignment_residual(trials, ni_events, trial_slice, event_offset)`, `solve_alignment(trials, ni_events) -> Alignment \| None`. Returns best **and** runner-up score. |
+| `src/visdetect/core/run_alignment.py` | Pure, unit-testable. `per_trial_event_keys(ni_events)`, `outcome_change_agreement(...)` (Check 1), `alignment_residual(...)` (Check 2), `solve_alignment(trials, ni_events) -> Alignment \| None`. Solver ranks candidates on Check 1 first (full coverage), breaking ties on Check 2; returns best **and** runner-up scores for both. |
 | `scripts/QC_technical/repair_trial_event_alignment.py` | Per pkl: solve → verify → back up → write `trial_event_index`. Emits `data/cache/qc_alignment/alignment_repair_report.csv`. Backup goes to `data/pkls/<SUBJ>/qc1_backup/<file>.bak_<UTC-stamp>` — written **before** any mutation, and the repair aborts if the backup cannot be created. Re-running is idempotent: an already-repaired pkl re-solves to the same map and is not re-backed-up. |
 | `src/visdetect/core/ingest.py` (patch) | Select the run JSON(s) matching the recording instead of blind-concatenating; run the residual check before emitting a pkl and refuse/flag on failure. Order runs by the **timestamp embedded in the filename**, never by mtime — the MATLAB port used mtime and the directories have since been touched by reorganisation passes (§1). |
-| `scripts/QC_technical/audit_trial_baselineon_alignment.py` (extend) | Add `median_resid_s`, `runner_up_resid_s`, `aligned`. `neural_safe` becomes residual-based, with the count check retained as a secondary signal. |
+| `scripts/QC_technical/audit_trial_baselineon_alignment.py` (extend) | Add `outcome_agreement`, `median_resid_s`, `runner_up_*`, `aligned`. `neural_safe` becomes evidence-based (both checks), with the count check retained only as a secondary signal. |
 | `src/visdetect/analysis/align.py` + tensor builders | Honour `trial_event_index`; drop `-1` trials from event-aligned analyses. |
 
 The solver searches candidate `(trial_slice, event_offset)` pairs. Behavioural run boundaries read
@@ -187,9 +231,11 @@ score is reported so uniqueness is demonstrated rather than trusted.
 
 ## 5. Verification
 
-1. **Regression:** every currently-aligned session must solve to the identity map at ≤ 0.01 s.
-2. **Null control:** deliberately wrong offsets must fail the threshold (as demonstrated in §2). A
-   solver that accepts a shuffled offset is a bug, not a finding.
+1. **Regression:** every currently-aligned session must solve to the identity map — Check 1 at
+   100 %, Check 2 at ≤ 0.01 s.
+2. **Null control:** deliberately wrong offsets must fail **both** checks (as demonstrated in §2),
+   including ±1-trial shifts, which the sensitivity scan shows are caught. A solver that accepts a
+   shuffled or off-by-one offset is a bug, not a finding.
 3. **Behaviour unchanged:** trial outcomes, `change_size`, `change_time` diffed before/after repair
    on every touched pkl — must be identical.
 4. **Uniqueness:** runner-up residual reported per session.
