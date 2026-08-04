@@ -37,11 +37,13 @@ guard) and carry provenance (``inherited:<sess>`` until re-drawn -> ``drawn``).
 Keybindings (see docs/superpowers/specs/2026-07-23-camera-tagger-ux-design.md)
 ------------------------------------------------------------------------------
   arrows / shift / ctrl   step +/-1 / +/-10 / +/-100 frames (built into scrubber)
-  space                   play/pause forward
-  [ / ]                   slower / faster playback
+  space                   play/pause forward (SEQUENTIAL decode; speed skips frames)
+  [ / ]   (or -/+)        slower / faster playback (speed>1 advances >1 frame/tick)
+  , / .                   lower / raise the pupil dark-pixel percentile (bigger blob)
   j / k                   next / prev target onset (baseline trial OR change queue)
   c                       toggle baseline <-> change target mode
-  e / m                   drag the eye / mouth ROI (full-frame view only)
+  e / m                   drag the eye / mouth ROI (full-frame view only); each is
+                          drawn as a persistent rectangle (eye=cyan, mouth=orange)
   f                       toggle full-frame <-> clamped eye-zoom
   home / end              first / last target
   d                       delete this target's anchor (current mode's type)
@@ -114,7 +116,7 @@ import matplotlib  # noqa: E402
 if os.environ.get("MPLBACKEND", "").lower() != "agg":
     matplotlib.use("TkAgg", force=True)
 import matplotlib.pyplot as plt  # noqa: E402  (after backend selection)
-from matplotlib.patches import Ellipse  # noqa: E402  (patch artist for the pupil overlay)
+from matplotlib.patches import Ellipse, Rectangle  # noqa: E402  (pupil + ROI overlays)
 
 # The shared scrubber sits in this same directory; make it importable whether
 # run as a script or loaded via importlib.spec_from_file_location. Imported
@@ -185,6 +187,11 @@ class TagSessionState:
     arming: Optional[str] = None           # active drag intent: "eye"|"mouth"|"correct"
     last_proposed: Optional[dict] = None   # last detect_pupil ellipse on the shown frame
     overlay: object = None                 # matplotlib Ellipse artist on ax_frame
+    eye_rect: object = None                # matplotlib Rectangle artist: eye ROI
+    mouth_rect: object = None              # matplotlib Rectangle artist: mouth ROI
+    dark_percentile: float = 8.0           # live detect_pupil dark-pixel percentile
+    play_next_fi: Optional[int] = None     # frame index play_cap will read NEXT
+                                           # (None = position unknown -> force seek)
 
 
 def main(argv=None) -> int:
@@ -297,6 +304,12 @@ def main(argv=None) -> int:
     _mouth = sidecar["rois"].get("mouth")
     tag.mouth_roi = tuple(_mouth["box"]) if _mouth else None
 
+    # Seed the live pupil dark-pixel percentile from the sidecar (a threshold the
+    # human tuned on a prior pass) if present, else the detector default. Pilot
+    # FIX 2: an under-inclusive threshold shrinks the proposed ellipse and biases
+    # pupil diameter DOWNWARD, so this value is recorded per session.
+    tag.dark_percentile = vl.get_pupil_dark_percentile(sidecar)
+
     # ---------------------------------------------------------------------
     # Provisional clock models
     # ---------------------------------------------------------------------
@@ -323,18 +336,63 @@ def main(argv=None) -> int:
 
     # ---------------------------------------------------------------------
     # Frame reader for the playback timer (the scrubber owns its own cap and
-    # exposes no per-tick redraw hook, so playback needs its own capture). The
-    # tagger is full-frame in Plan 2a (cfg.crop is always None), so this mirrors
-    # _tagger_ui._read_frame's full-frame path.
+    # exposes no per-tick redraw hook, so playback needs its own capture).
+    #
+    # Pilot FIX 1: playback used to random-SEEK every frame
+    # (set(CAP_PROP_POS_FRAMES, fi); read()). On this 22 GB H.264 file each seek
+    # re-decodes from the nearest keyframe, so a tick cost FAR more than the timer
+    # interval — playback crawled and the speed keys had no visible effect (the
+    # interval never dominated). We now read SEQUENTIALLY: cv2 keeps decoder state
+    # between successive read()s, so the common "advance by 1" case reuses it and
+    # is many times cheaper. We re-seek ONLY on a discontinuity, tracked via
+    # tag.play_next_fi (the index play_cap will return NEXT). For speed>1 we skip
+    # the intermediate frames with the decode-light grab() (no BGR convert / copy)
+    # and only decode the one we display. play_cap is the SOLE writer of
+    # play_next_fi, so the tracked position never drifts from reality.
     # ---------------------------------------------------------------------
     play_cap = cv2.VideoCapture(video_path)
+    _MAX_GRAB_SKIP = 30  # forward gaps up to this advance via grab(); larger -> seek
 
-    def _read_play_frame(fi: int) -> np.ndarray:
-        play_cap.set(cv2.CAP_PROP_POS_FRAMES, int(fi))
+    def _read_seq_full(fi: int) -> Optional[np.ndarray]:
+        """Full-frame grayscale for frame *fi*, read SEQUENTIALLY where possible.
+
+        Re-seeks only when play_cap is not already positioned to return *fi*; a
+        small forward gap is closed with cheap grab()s (frame-skip for speed>1).
+        Updates tag.play_next_fi to the frame play_cap will read next. Returns
+        ``None`` on a failed/absent read (callers substitute a placeholder).
+        """
+        fi = int(fi)
+        if tag.play_next_fi != fi:
+            gap = (fi - tag.play_next_fi) if tag.play_next_fi is not None else None
+            if gap is not None and 0 < gap <= _MAX_GRAB_SKIP:
+                for _ in range(gap):          # skip intermediate frames cheaply
+                    play_cap.grab()
+            else:                             # backward / large / unknown -> seek
+                play_cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
         ok, frame = play_cap.read()
+        tag.play_next_fi = fi + 1
         if not ok or frame is None:
-            return np.zeros((frame_h, frame_w), dtype=np.uint8)
+            return None
         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    def _apply_crop(gray: Optional[np.ndarray]) -> np.ndarray:
+        """Apply the LIVE cfg.crop to a full-frame array so the displayed image and
+        the axes extent (also derived from cfg.crop) always agree.
+
+        Pilot FIX 4: the playback path used to blit a FULL-frame array into a
+        crop-sized extent when zoomed, stretching/misaligning it. Cropping here —
+        exactly as _tagger_ui._read_frame does — keeps the two in lockstep in both
+        views. None -> a correctly-shaped black placeholder for the current view.
+        """
+        if gray is None:
+            if cfg.crop is not None:
+                y0, y1, x0, x1 = cfg.crop
+                return np.zeros((max(1, y1 - y0), max(1, x1 - x0)), dtype=np.uint8)
+            return np.zeros((frame_h, frame_w), dtype=np.uint8)
+        if cfg.crop is not None:
+            y0, y1, x0, x1 = cfg.crop
+            return gray[y0:y1, x0:x1]
+        return gray
 
     # ---------------------------------------------------------------------
     # Pupil detection + proposed-ellipse overlay (Plan 2b). Detection runs on
@@ -346,12 +404,22 @@ def main(argv=None) -> int:
     # Detection is skipped during playback streaming for responsiveness.
     # ---------------------------------------------------------------------
     def _run_detect(fi: int):
-        """Detect the pupil in the eye ROI on frame *fi*; cache the proposal."""
+        """Detect the pupil in the eye ROI on frame *fi*; cache the proposal.
+
+        Uses the LIVE tag.dark_percentile (pilot FIX 2): a higher percentile
+        admits more dark pixels -> a larger blob, so the human can widen an
+        under-inclusive proposal with `,`/`.` and the label records the exact
+        threshold it was judged against.
+        """
         if tag.eye_roi is None:
             tag.last_proposed = None
             return
-        gray = _read_play_frame(fi)                       # full-frame grayscale
-        det = detect_pupil_in_frame(gray, search_roi=tag.eye_roi)
+        gray = _read_seq_full(fi)                         # full-frame grayscale
+        if gray is None:
+            tag.last_proposed = None
+            return
+        det = detect_pupil_in_frame(gray, search_roi=tag.eye_roi,
+                                    dark_percentile=tag.dark_percentile)
         tag.last_proposed = vl.ellipse_from_detection(det)  # {cx,cy,major,minor,angle}|None
 
     def _update_overlay():
@@ -381,12 +449,49 @@ def main(argv=None) -> int:
             tag.overlay.angle = ell["angle"]
         tag.overlay.set_visible(show)
 
+    def _update_rois():
+        """Draw/refresh a persistent rectangle for each ROI on the frame axis.
+
+        Pilot FIX 3: the ROI drags WORK (the sidecar stores the boxes) but nothing
+        was ever drawn, so the mouth ROI looked like a no-op and the eye ROI only
+        *seemed* to register because the pupil ellipse appears inside it. The frame
+        axes live in FULL-FRAME data coords in BOTH views (the scrubber re-derives
+        the extent from cfg.crop every redraw), so each box draws at its stored
+        coords directly — NO crop-origin math. Colours are distinct from the green
+        pupil ellipse: eye=cyan, mouth=orange. An unset ROI is hidden; in the
+        eye-zoom the mouth rectangle simply falls outside the axis limits.
+        """
+        fig = tag.fig
+        if fig is None or not fig.axes:
+            return
+        ax = fig.axes[0]
+        if tag.eye_rect is None:
+            tag.eye_rect = Rectangle((0.0, 0.0), 0.0, 0.0, fill=False,
+                                     edgecolor="#00bfff", linewidth=1.5)
+            ax.add_patch(tag.eye_rect)
+        if tag.mouth_rect is None:
+            tag.mouth_rect = Rectangle((0.0, 0.0), 0.0, 0.0, fill=False,
+                                       edgecolor="#ff8c00", linewidth=1.5)
+            ax.add_patch(tag.mouth_rect)
+        for box, rect in ((tag.eye_roi, tag.eye_rect),
+                          (tag.mouth_roi, tag.mouth_rect)):
+            if box is None:
+                rect.set_visible(False)
+                continue
+            y0, y1, x0, x1 = box
+            rect.set_xy((float(x0), float(y0)))         # full-frame data coords
+            rect.set_width(float(x1 - x0))
+            rect.set_height(float(y1 - y0))
+            rect.set_visible(True)
+
     def _on_frame_shown(fi: int, fig) -> None:
-        """cfg.on_refresh hook: re-detect + redraw the overlay on every manual
-        frame change (arrow step / jump / mode toggle / ROI draw)."""
+        """cfg.on_refresh hook: re-detect + redraw the overlay AND ROI rectangles
+        on every manual frame change (arrow step / jump / mode toggle / ROI draw /
+        zoom toggle)."""
         tag.fig = fig
         _run_detect(fi)
         _update_overlay()
+        _update_rois()
 
     def _draw_current(fi: int):
         fig = tag.fig
@@ -397,19 +502,38 @@ def main(argv=None) -> int:
             hud = fig.axes[1].texts[0]
         except (IndexError, AttributeError):
             return
-        im.set_data(_read_play_frame(fi))
+        # Pilot FIX 4: crop the played frame to match the LIVE cfg.crop (and thus
+        # the axes extent set by the scrubber's _refresh), so a zoomed playback is
+        # never stretched/misaligned. _apply_crop mirrors _tagger_ui._read_frame.
+        im.set_data(_apply_crop(_read_seq_full(fi)))
         hud.set_text(_hud_fn(fi))
         # Playback streams frames without per-frame detection; hide any stale
-        # overlay. It reappears on the next manual step via _on_frame_shown.
+        # pupil ellipse. It reappears on the next manual step via _on_frame_shown.
+        # The ROI rectangles are static overlays and stay visible while playing.
         if tag.overlay is not None:
             tag.overlay.set_visible(False)
         fig.canvas.draw_idle()
 
     # ---------------------------------------------------------------------
     # Playback timer
+    #
+    # Pilot FIX 1: speed is now REAL. For speed>=1 we advance ``_play_step()``
+    # frames per tick (skipping the intermediate ones via grab() in _read_seq_full)
+    # and keep the tick interval near real-time, so 2x/4x advance 2/4 as many
+    # frames per second — a clearly different rate. For speed<1 we keep 1
+    # frame/tick and LENGTHEN the interval (the original behaviour). Because
+    # decode can still dominate on this file, the interval is derived so that
+    # frames-advanced-per-second targets fps*speed as closely as the decoder
+    # allows; if decode is the bottleneck the rate is capped there, but the
+    # frame-skip guarantees higher speeds visibly move faster.
     # ---------------------------------------------------------------------
+    def _play_step() -> int:
+        return max(1, int(round(tag.speed))) if tag.speed >= 1.0 else 1
+
     def _play_interval_ms() -> int:
-        return max(10, int(round(1000.0 / (fps * tag.speed))))
+        # Interval so that step frames / interval ~= fps*speed frames per second.
+        step = _play_step()
+        return max(10, int(round(1000.0 * step / (fps * tag.speed))))
 
     def _stop_play():
         tag.playing = False
@@ -423,9 +547,13 @@ def main(argv=None) -> int:
         if fig is None or not plt.fignum_exists(getattr(fig, "number", -1)):
             _stop_play()
             return
-        fi = min(n_frames - 1, tag.scrub_state["frame_idx"] + 1)
+        cur = tag.scrub_state["frame_idx"]
+        if cur >= n_frames - 1:                       # already at the last frame
+            _stop_play()
+            return
+        fi = min(n_frames - 1, cur + _play_step())    # advance by the speed step
         tag.scrub_state["frame_idx"] = fi
-        _draw_current(fi)
+        _draw_current(fi)                             # skips fi-1 intermediates
         if fi >= n_frames - 1:
             _stop_play()
 
@@ -447,6 +575,17 @@ def main(argv=None) -> int:
             tag.timer.stop()
             tag.timer.interval = _play_interval_ms()
             tag.timer.start()
+
+    def _persist_dark_percentile():
+        """Record the live pupil dark-pixel percentile in the sidecar (atomic).
+
+        Pilot FIX 2: the threshold the human tuned the proposal against must be
+        reproducible for sub-project C, so it is written on every nudge. The
+        subsequent scrubber _refresh re-runs detection at the NEW value (via
+        _on_frame_shown -> _run_detect), so the ellipse updates immediately.
+        """
+        vl.set_pupil_dark_percentile(tag.sidecar, tag.dark_percentile)
+        vl.save_sidecar(tag.sidecar, session, subject)
 
     # ---------------------------------------------------------------------
     # Target navigation
@@ -585,7 +724,8 @@ def main(argv=None) -> int:
         eye_state = "set" if tag.eye_roi is not None else "none"
         mouth_state = "set" if tag.mouth_roi is not None else "none"
         view = "ZOOM" if tag.zoomed else "full"
-        roi_line = f"ROI: eye[{eye_state}] mouth[{mouth_state}]   view: {view}"
+        roi_line = (f"ROI: eye[{eye_state}] mouth[{mouth_state}]   view: {view}"
+                    f"   pupil%: {tag.dark_percentile:g}")
 
         # Per-frame label tally for the session (Plan 2b, Task 6). Counts come
         # straight from the sidecar's frame-keyed upserts, so re-labelled frames
@@ -596,8 +736,8 @@ def main(argv=None) -> int:
         n_blink = sum(1 for f in _frames if f["verdict"] == vl.VERDICT_BLINK)
         label_line = f"labels: {n_conf} ok / {n_corr} fix / {n_blink} blink"
 
-        legend = ("[space]play  [-/+]spd {:g}x  [j/k]jump  [c]base<->chg  "
-                  "[e/m]roi  [f]zoom  [u]ok  [p]fix  [x]blink  "
+        legend = ("[space]play  [-/+]spd {:g}x  [,/.]pupil%  [j/k]jump  "
+                  "[c]base<->chg  [e/m]roi  [f]zoom  [u]ok  [p]fix  [x]blink  "
                   "[enter]save  [d]del  [q]quit"
                   ).format(tag.speed)
         return "\n".join([
@@ -687,6 +827,20 @@ def main(argv=None) -> int:
         if key in ("+", "=", "]", "bracketright"):
             tag.speed = min(8.0, tag.speed * 2.0)
             _apply_speed()
+            return True
+        # Pupil dark-pixel percentile tuning (pilot FIX 2). Chosen keys ','/'.'
+        # (with '<'/'>' shift-aliases) collide with NO existing binding and no
+        # live matplotlib default. A HIGHER percentile admits more dark pixels ->
+        # a LARGER proposed blob (the pilot's ellipse was too small). Clamp
+        # 1.0-40.0, step 1.0. Returning True makes the scrubber _refresh, which
+        # re-detects at the new value and redraws the ellipse.
+        if key in (",", "<"):
+            tag.dark_percentile = max(1.0, round(tag.dark_percentile - 1.0, 3))
+            _persist_dark_percentile()
+            return True
+        if key in (".", ">"):
+            tag.dark_percentile = min(40.0, round(tag.dark_percentile + 1.0, 3))
+            _persist_dark_percentile()
             return True
         if key == "c":
             return _toggle_mode(state)

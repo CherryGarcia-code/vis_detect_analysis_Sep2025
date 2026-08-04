@@ -304,6 +304,65 @@ def test_image_extent_round_trip_spans_exactly_crop_no_scale_or_offset():
         assert (bottom - top) == pytest.approx(y1 - y0)
 
 
+# ---------------------------------------------------------------------------
+# Pilot FIX 2: optional, additive per-session pupil_dark_percentile. A HIGHER
+# percentile admits more dark pixels -> a larger proposal blob; the field records
+# the EXACT threshold the human judged the labels against so sub-project C can
+# reproduce it. It must be OPTIONAL and backward-compatible: a sidecar written
+# before the field existed (the pilot's own) must still load and fall back to the
+# detector default. schema_version is NOT bumped for an additive field.
+# ---------------------------------------------------------------------------
+
+
+def test_new_sidecar_includes_pupil_dark_percentile_default():
+    sc = vl.new_sidecar("BG_031", "09042025", [512, 640])
+    assert sc["pupil_dark_percentile"] == vl.DEFAULT_PUPIL_DARK_PERCENTILE
+    assert sc["schema_version"] == 1          # additive field did NOT bump schema
+
+
+def test_pupil_dark_percentile_round_trips_through_save_load(tmp_path):
+    sc = vl.new_sidecar("BG_031", "09042025", [512, 640])
+    vl.set_pupil_dark_percentile(sc, 17.0)
+    vl.save_sidecar(sc, "09042025", "BG_031", labels_dir=str(tmp_path))
+    loaded = vl.load_sidecar("09042025", "BG_031", labels_dir=str(tmp_path))
+    assert loaded["pupil_dark_percentile"] == 17.0
+    assert vl.get_pupil_dark_percentile(loaded) == 17.0
+
+
+def test_get_pupil_dark_percentile_defaults_when_field_absent():
+    # A sidecar predating the field (the exact backward-compat case) must load and
+    # report the detector default without raising.
+    sc = vl.new_sidecar("BG_031", "09042025", [512, 640])
+    del sc["pupil_dark_percentile"]
+    assert "pupil_dark_percentile" not in sc
+    assert vl.get_pupil_dark_percentile(sc) == vl.DEFAULT_PUPIL_DARK_PERCENTILE
+    assert vl.get_pupil_dark_percentile(sc, default=12.5) == 12.5
+
+
+def test_legacy_sidecar_without_field_still_loads(tmp_path):
+    # Simulate the pilot's on-disk sidecar: a valid v1 file lacking the new field.
+    legacy = {
+        "schema_version": 1, "subject": "BG_031", "session": "09042025",
+        "camera": "eye_cam", "frame_size": [512, 640],
+        "rois": {"eye": {"box": [25, 232, 8, 205], "source": "drawn"}},
+        "frames": [],
+    }
+    p = tmp_path / "09042025.json"
+    p.write_text(json.dumps(legacy))
+    loaded = vl.load_sidecar("09042025", "BG_031", labels_dir=str(tmp_path))
+    assert loaded is not None
+    assert "pupil_dark_percentile" not in loaded          # unchanged on load
+    assert vl.get_pupil_dark_percentile(loaded) == vl.DEFAULT_PUPIL_DARK_PERCENTILE
+
+
+def test_set_pupil_dark_percentile_updates_and_coerces_float():
+    sc = vl.new_sidecar("BG_031", "09042025", [512, 640])
+    ret = vl.set_pupil_dark_percentile(sc, 22)   # int in
+    assert ret is sc                              # mutates in place, returns it
+    assert sc["pupil_dark_percentile"] == 22.0
+    assert isinstance(sc["pupil_dark_percentile"], float)
+
+
 def test_image_extent_maps_cropped_pixel_to_true_fullframe_coord():
     # The crux regression, expressed as the imshow pixel->data map: the array
     # pixel that SHOWS a given full-frame point must read back that point's TRUE

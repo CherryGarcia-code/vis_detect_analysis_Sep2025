@@ -20,7 +20,19 @@ Schema (v1)::
       "rois": {"eye": {"box": [y0,y1,x0,x1], "source": "drawn|inherited:<sess>"}, ...},
       "frames": [{"frame_idx": int, "verdict": "confirmed|corrected|blink",
                   "proposed_ellipse": {..}|null, "corrected_ellipse": {..}|null,
-                  "labeled_at": "<iso8601>"}]
+                  "labeled_at": "<iso8601>"}],
+      "pupil_dark_percentile": float   # OPTIONAL, additive (schema stays v1):
+                                       #   the per-session dark-pixel percentile
+                                       #   the human tuned the live pupil proposal
+                                       #   against (mirrors detect_pupil_in_frame's
+                                       #   ``dark_percentile``). A HIGHER value
+                                       #   admits more dark pixels -> a LARGER
+                                       #   blob. Persisted so sub-project C can
+                                       #   extract traces with the SAME threshold
+                                       #   the labels were judged against. A
+                                       #   sidecar that PREDATES this field loads
+                                       #   fine and falls back to the default; this
+                                       #   is why schema_version is NOT bumped.
     }
 """
 from __future__ import annotations
@@ -44,6 +56,14 @@ SCHEMA_VERSION = 1
 VERDICT_CONFIRMED = "confirmed"
 VERDICT_CORRECTED = "corrected"
 VERDICT_BLINK = "blink"
+
+# Fallback for the optional ``pupil_dark_percentile`` sidecar field. MIRRORS
+# ``visdetect.core.video_sync.detect_pupil_in_frame``'s own ``dark_percentile``
+# default (kept here as a literal rather than imported so this module stays free
+# of cv2/matplotlib — importing the detector would pull them in). If the two ever
+# drift, the detector's function default wins at detection time; this value only
+# seeds a brand-new sidecar and backfills a pre-field one.
+DEFAULT_PUPIL_DARK_PERCENTILE = 8.0
 
 
 def label_sidecar_path(session, subject: Optional[str] = None,
@@ -69,6 +89,7 @@ def new_sidecar(subject: str, session, frame_size,
         "frame_size": [int(frame_size[0]), int(frame_size[1])],
         "rois": {},
         "frames": [],
+        "pupil_dark_percentile": float(DEFAULT_PUPIL_DARK_PERCENTILE),
     }
 
 
@@ -123,6 +144,33 @@ def set_roi(sidecar: dict, name: str, box, source: str) -> dict:
         "box": [int(v) for v in box],
         "source": str(source),
     }
+    return sidecar
+
+
+def get_pupil_dark_percentile(
+    sidecar: dict, default: float = DEFAULT_PUPIL_DARK_PERCENTILE
+) -> float:
+    """Return the sidecar's ``pupil_dark_percentile``, or *default* if absent.
+
+    The field is OPTIONAL and additive: sidecars written before it existed (e.g.
+    the pilot's own) simply lack the key, so a plain ``sidecar['...']`` would
+    KeyError. This backward-compatible accessor is how the tagger seeds its live
+    threshold — present value if the human tuned one, else the detector default.
+    """
+    val = sidecar.get("pupil_dark_percentile")
+    return float(val) if val is not None else float(default)
+
+
+def set_pupil_dark_percentile(sidecar: dict, value: float) -> dict:
+    """Set ``sidecar['pupil_dark_percentile'] = float(value)`` (mutated in place).
+
+    Mirrors :func:`set_roi`'s style. The tagger calls this whenever the human
+    nudges the dark-pixel percentile so the label sidecar records the EXACT
+    threshold the proposal was judged against (an under-inclusive threshold
+    biases pupil diameter downward — the very bias these labels quantify).
+    Returns *sidecar*.
+    """
+    sidecar["pupil_dark_percentile"] = float(value)
     return sidecar
 
 
