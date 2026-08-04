@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from visdetect.analysis.tf_glm import TFGLMConfig, TrialRegressors, trial_bin_edges
+from visdetect.analysis.lick_channels import get_lick_times
 
 # ── Column-name constants — verified against the real npx_converted schema ──
 # neural.parquet / clusters.csv:
@@ -488,7 +489,10 @@ def session_trial_regressors(
       - ``tf_bins``: ``trial.baseline_values`` (St1TrialVector) decimated by
         ``stride 3`` -> 50-ms linear-TF grid from baseline start, placed onto the
         trial's per-trial 50-ms bin edges and ZEROED at/after change onset.
-      - ``lick_times``: ``ni_events['Piezo_1']`` in [t_start, t_end).
+      - ``lick_times``: the session's single resolved NI lick channel
+        (``Piezo_1`` or ``Lick_L``/``Lick_R`` depending on extraction
+        convention, contamination-screened -- see ``lick_channels``) in
+        [t_start, t_end).
       - ``reward_time``: first finite ``ni_events['Valve_L'][i]`` (per-trial
         array; NaN if none).
       - ``abort_time``: ``change_time`` if outcome == 'abort' else NaN.
@@ -507,10 +511,11 @@ def session_trial_regressors(
 
     bon = np.asarray(ni.get("Baseline_ON", np.zeros(0)), float).ravel()
     con = np.asarray(ni.get("Change_ON", np.zeros(0)), float).ravel()
-    # Lick channel: BG_046 logs licks on the piezo channel (Piezo_1); other
-    # subjects (e.g. BG_039 cortex) log them on Lick_L / Lick_R instead. Pool
-    # whichever channels are present so the lick regressor is never empty (the
-    # lick control is essential -- this is the "lick-controlled GLM").
+    # Lick channel: resolved to the ONE true lick line for this session
+    # (Piezo_1 or Lick_L/Lick_R depending on which MATLAB extraction wrote the
+    # events), contamination-screened. Raises if none is usable rather than
+    # silently yielding an empty lick regressor -- the lick control is essential
+    # (this is the "lick-controlled GLM").
     licks = _collect_lick_times(ni)
     valve = np.asarray(ni.get("Valve_L", np.zeros(0)), float).ravel()
     rot = np.asarray(ni.get("Rot_enc_A", np.zeros(0)), float).ravel()
@@ -588,26 +593,19 @@ def session_trial_regressors(
     return trials_regs, units
 
 
-# Lick channels, in priority order. BG_046 uses the piezo channel; BG_039 and
-# other subjects use the optical Lick_L/Lick_R channels. Pool all present (a
-# lick is a lick regardless of which spout/channel detected it).
-_LICK_CHANNELS = ("Piezo_1", "Lick_L", "Lick_R", "Piezo_2")
-
-
 def _collect_lick_times(ni: dict) -> np.ndarray:
-    """Sorted, finite lick times pooled across whichever lick channels exist."""
-    parts = []
-    for ch in _LICK_CHANNELS:
-        v = ni.get(ch)
-        if v is None:
-            continue
-        a = np.asarray(v, float).ravel()
-        a = a[np.isfinite(a)]
-        if a.size:
-            parts.append(a)
-    if not parts:
-        return np.zeros(0)
-    return np.sort(np.concatenate(parts))
+    """Sorted, finite lick times from the session's ONE true lick channel.
+
+    Delegates to :func:`visdetect.analysis.lick_channels.get_lick_times`.
+
+    Previously this POOLED all four candidate channels
+    (``Piezo_1``/``Lick_L``/``Lick_R``/``Piezo_2``), which double-counted nearly
+    every lick: ``Lick_R`` is a second detector on the SAME single spout whose
+    events sit 2-3 ms from ``Lick_L`` events, and ``Piezo_2`` is a sparse ~11 ms
+    -shifted subset of ``Piezo_1`` that a circular-shift null showed is not
+    lick-locked at all. See ``lick_channels`` for the full audit.
+    """
+    return get_lick_times(ni)
 
 
 def _tick_density_to_bins(tick_times: np.ndarray, bin_edges: np.ndarray,
