@@ -15,10 +15,15 @@ CONSEQUENCE — scope carefully:
   * NEURAL analyses that align to ni_events (Baseline_ON / Change_ON, PETHs, population
     tensors) are INVALID on affected sessions — trial i does not correspond to event i.
 
-Emits `neural_safe` so downstream neural code can filter:
-  |n_baseline_on - n_trials| <= TOL_BENIGN  ->  safe
-A small POSITIVE excess is normal (a baseline started but the trial never completed/logged
-at session end); large mismatches in either direction are not.
+Emits `neural_safe` so downstream neural code can filter. As of the QC1 repair this is
+the MEASURED verdict from `solve_alignment` (trial<->event pairing actually verified against
+outcome/change-presence and change-time residuals), NOT a count heuristic:
+  neural_safe = a solve_alignment() Alignment was found for the pkl
+The old count proxy is RETAINED alongside it as `count_safe` (downstream code and the QC1
+spec reference the distinction):
+  count_safe  = |n_baseline_on - n_trials| <= TOL_BENIGN
+A small count excess was previously ASSUMED benign; the measured check tests it directly, so
+`count_safe` and `neural_safe` can disagree in either direction. Trust `neural_safe`.
 
 Run: py scripts/QC_technical/audit_trial_baselineon_alignment.py [--subjects BG_046 ...]
 Out: data/cache/qc_alignment/trial_vs_baselineon_audit.csv
@@ -36,8 +41,13 @@ import numpy as np
 import pandas as pd
 
 from visdetect.core.session import load_session
+from visdetect.core.run_alignment import solve_alignment
 
 TOL_BENIGN = 9          # |diff| <= this is treated as a benign end-of-session artifact
+
+# Columns produced by the MEASURED alignment solver (as opposed to the count proxy).
+MEASURED_COLUMNS = ("agreement", "median_resid_s", "resid_n", "runner_up_resid_s", "aligned")
+
 OUT_DIR = os.path.join(_ROOT, "data", "cache", "qc_alignment")
 OUT_CSV = os.path.join(OUT_DIR, "trial_vs_baselineon_audit.csv")
 
@@ -50,9 +60,20 @@ def audit_pkl(path):
         bon = np.asarray((s.ni_events or {}).get("Baseline_ON", []), dtype=float).ravel()
         spikes = [float(np.max(c.spike_times)) for c in (s.clusters or [])[:200]
                   if getattr(c, "spike_times", None) is not None and len(c.spike_times)]
+        a = solve_alignment(s.trials, s.ni_events)
+        measured = {
+            "agreement": a.agreement if a else float("nan"),
+            "median_resid_s": a.resid_s if a else float("nan"),
+            "resid_n": a.resid_n if a else 0,
+            "runner_up_resid_s": a.runner_up_resid_s if a else float("nan"),
+            "aligned": a is not None,
+            "trial_start": a.trial_start if a else -1,
+            "event_offset": a.event_offset if a else -1,
+        }
         return {"n_trials": n, "n_baseline_on": int(len(bon)), "diff": int(len(bon) - n),
                 "ephys_s": round(max(spikes), 1) if spikes else np.nan,
-                "bon_last": round(float(bon.max()), 1) if len(bon) else np.nan}
+                "bon_last": round(float(bon.max()), 1) if len(bon) else np.nan,
+                **measured}
     finally:
         del s
 
@@ -83,12 +104,23 @@ def main():
 
     df = pd.DataFrame(rows)
     df["match"] = df["diff"] == 0
-    df["neural_safe"] = df["diff"].abs() <= TOL_BENIGN
+    df["count_safe"] = df["diff"].abs() <= TOL_BENIGN     # old proxy, retained
+    df["neural_safe"] = df["aligned"].fillna(False).astype(bool)   # measured
     os.makedirs(OUT_DIR, exist_ok=True)
     df.to_csv(OUT_CSV, index=False)
 
     print(f"\naudited {len(df)} pkls | exact match {int(df['match'].sum())} | "
-          f"neural_safe {int(df['neural_safe'].sum())} | NOT safe {int((~df['neural_safe']).sum())}")
+          f"count_safe {int(df['count_safe'].sum())} | "
+          f"neural_safe (measured) {int(df['neural_safe'].sum())} | "
+          f"NOT safe {int((~df['neural_safe']).sum())}")
+
+    # The scientific payoff: sessions the measured check and the count proxy disagree on.
+    disagree = df[df["count_safe"].fillna(False).astype(bool) != df["neural_safe"]]
+    if len(disagree):
+        print(f"\nDISAGREEMENT count_safe vs neural_safe ({len(disagree)}):")
+        print(disagree[["subject", "file", "n_trials", "n_baseline_on", "diff",
+                        "count_safe", "neural_safe", "agreement", "median_resid_s"]]
+              .to_string(index=False))
     bad = df[~df["neural_safe"]].sort_values("diff")
     if len(bad):
         print("\nNEURAL-UNSAFE (do NOT use for ni_events-aligned analyses):")
