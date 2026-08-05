@@ -638,8 +638,17 @@ git commit -m "feat(QC1): add Session.trial_event_index with None default"
 - Produces:
   - `backup_pkl(path: str) -> str` (returns backup path; raises on failure)
   - `repair_session(path: str, dry_run: bool = False) -> dict` (one report row)
+  - `verify_realdata_gate() -> None` (raises `SystemExit` unless the three reference alignments reproduce)
   - CLI: `py scripts/QC_technical/repair_trial_event_alignment.py --subjects BG_046 [--dry-run]`
   - Output: `data/cache/qc_alignment/alignment_repair_report.csv`
+
+> **Ruling (user, 2026-08-04) — the Task 3 gate's skip hole is closed HERE, not in Task 3.**
+> `tests/test_run_alignment_realdata.py` skips when the pkls are absent, so on a data-less machine
+> pytest exits 0 and a green run is indistinguishable from a gate that never executed. Task 3 keeps
+> its skips (CI stays green, as its brief intends); instead **this destructive script defends
+> itself**: it re-solves the three reference sessions in-process and aborts unless all three
+> reproduce their measured triples. The check runs in `main()` only — never inside
+> `repair_session`, which the unit tests call directly with synthetic temp pkls.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -720,6 +729,22 @@ def test_dry_run_does_not_mutate(tmp_path):
     with open(p, "rb") as f:
         after = pickle.load(f)
     assert getattr(after, "trial_event_index", None) is None
+
+
+def test_gate_refuses_when_a_reference_session_is_missing(tmp_path, monkeypatch):
+    """The destructive script must refuse to run if it cannot verify the solver."""
+    import repair_trial_event_alignment as R
+    monkeypatch.setattr(R, "_ROOT", str(tmp_path))   # no data/pkls/ under tmp_path
+    with pytest.raises(SystemExit) as exc:
+        R.verify_realdata_gate()
+    assert "REFUSING TO RUN" in str(exc.value)
+
+
+def test_repair_session_does_not_invoke_the_gate(tmp_path):
+    """repair_session() is called on synthetic pkls by tests; it must not gate-check."""
+    p = _make_pkl(tmp_path)
+    row = repair_session(p, dry_run=True)      # would SystemExit if the gate ran
+    assert row["solved"] is True
 
 
 def test_unsolvable_session_gets_all_minus_one(tmp_path):
@@ -834,12 +859,56 @@ def repair_session(path: str, dry_run: bool = False) -> dict:
         gc.collect()
 
 
+# Reference alignments, measured by hand against the X: raw source (spec §2).
+# These are the SAME triples asserted by tests/test_run_alignment_realdata.py.
+_GATE_CASES = [
+    ("BG_046", "BG_046_19082025.pkl",   0,   0,   587),
+    ("BG_046", "BG_046_20082025.pkl",   0,   228, 486),
+    ("BG_046", "BG_046_05092025_b.pkl", 281, 0,   248),
+]
+
+
+def verify_realdata_gate() -> None:
+    """Abort unless the solver still reproduces the three measured alignments.
+
+    The pytest gate (tests/test_run_alignment_realdata.py) SKIPS when the pkls
+    are absent, so a green test run does not prove the gate ever executed. This
+    script mutates pkls, so it re-checks in-process and refuses to run
+    otherwise. main() only -- repair_session() is called directly by unit tests
+    with synthetic temp pkls and must not trigger this.
+    """
+    for subj, fname, exp_start, exp_off, exp_n in _GATE_CASES:
+        path = os.path.join(_ROOT, "data", "pkls", subj, fname)
+        if not os.path.exists(path):
+            raise SystemExit(
+                f"REFUSING TO RUN: reference session missing: {path}\n"
+                f"  The real-data gate cannot be verified, so the repair is not safe to run."
+            )
+        s = load_session(path)
+        try:
+            a = solve_alignment(s.trials, s.ni_events)
+        finally:
+            del s
+            gc.collect()
+        got = None if a is None else (a.trial_start, a.event_offset, a.n_trials_matched)
+        if got != (exp_start, exp_off, exp_n):
+            raise SystemExit(
+                f"REFUSING TO RUN: solver no longer reproduces {fname}.\n"
+                f"  expected (trial_start, event_offset, n_matched) = "
+                f"{(exp_start, exp_off, exp_n)}\n  got = {got}\n"
+                f"  Fix the solver before repairing any pkl."
+            )
+    print("real-data gate OK: 3/3 reference alignments reproduced")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--subjects", nargs="*", default=["BG_046"])
     ap.add_argument("--files", nargs="*", default=None, help="explicit pkl basenames")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    verify_realdata_gate()      # refuses to proceed if the solver regressed
 
     rows = []
     for subj in args.subjects:
