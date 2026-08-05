@@ -542,6 +542,20 @@ class SyncResult:
         if self.detection_method == "manual_slope_fit":
             return "good" if (self.slope > 0 and self.n_anchors >= 2) else "failed"
 
+        if self.detection_method == "manual_multianchor":
+            from visdetect.analysis.constants import (
+                VIDEO_SYNC_MANUAL_GOOD_CV_MS, VIDEO_SYNC_MANUAL_REVIEW_CV_MS,
+                VIDEO_SYNC_MANUAL_MIN_ANCHORS, VIDEO_SYNC_MAX_DRIFT_PPM,
+            )
+            if self.slope <= 0 or self.n_anchors < VIDEO_SYNC_MANUAL_MIN_ANCHORS:
+                return "failed"
+            low_drift = abs(self.slope_ppm) < VIDEO_SYNC_MAX_DRIFT_PPM
+            if self.cv_rmse_ms < VIDEO_SYNC_MANUAL_GOOD_CV_MS and low_drift:
+                return "good"
+            if self.cv_rmse_ms < VIDEO_SYNC_MANUAL_REVIEW_CV_MS and low_drift:
+                return "review"
+            return "failed"
+
         good_rmse = self.rmse_ms < _GOOD_RMSE_MS
         good_maxres = self.max_residual_ms < VIDEO_SYNC_MAX_RESIDUAL_MS
         good_dw = _GOOD_DW_RANGE[0] <= self.durbin_watson <= _GOOD_DW_RANGE[1]
@@ -571,6 +585,12 @@ class SyncResult:
             return "failed"
 
     def to_dict(self) -> dict:
+        # ORIENTATION CONTRACT: the persisted slope/offset orientation is
+        # detection_method-dependent. ``manual_multianchor`` / ``derivative``
+        # store  nidaq = slope*cam + offset  (the orientation camera_to_nidaq /
+        # nidaq_to_camera assume); legacy ``manual_slope_fit`` stores the
+        # INVERSE  video = slope*nidaq + offset. Downstream consumers must
+        # branch on detection_method before applying those converters.
         d = {
             "slope": self.slope,
             "offset": self.offset,
@@ -608,25 +628,40 @@ def fit_2anchor_clock(
     Parameters
     ----------
     anchors : list of dict
-        Each dict must have ``nidaq_baseline_on_s`` and ``video_time_s`` keys.
-        The fit uses ``video_time_s`` directly; ``fps`` is currently unused and
-        reserved for forward compatibility.
+        Each dict must have ``video_time_s`` plus a nidaq time — either
+        ``nidaq_baseline_on_s`` (baseline anchors) or ``nidaq_event_s`` (change
+        anchors). The fit uses ``video_time_s`` directly; ``fps`` is currently
+        unused and reserved for forward compatibility.
     fps : float
         Camera frame rate (reserved; not used in the fit calculation).
     n_baseline_on : int
         Total number of Baseline_ON events in the session (for coverage reporting).
 
     Returns a SyncResult with detection_method = "manual_slope_fit".
-    Raises ValueError on fewer than 2 anchors, duplicate nidaq times, or
-    non-positive slope.
+    Raises ValueError on fewer than 2 anchors, an anchor missing both nidaq time
+    keys, duplicate nidaq times, or non-positive slope.
     """
     if len(anchors) < 2:
         raise ValueError(
             f"fit_2anchor_clock needs at least 2 anchors; got {len(anchors)}"
         )
 
+    def _anchor_nidaq_s(a: dict) -> float:
+        # Baseline anchors carry ``nidaq_baseline_on_s``; change anchors carry
+        # only ``nidaq_event_s``. Read tolerantly (mirroring fit_multianchor_clock)
+        # so a 2-anchor set that includes a change entry fits instead of raising a
+        # KeyError that fit_sync would not catch. Baseline reads stay identical:
+        # baseline entries store nidaq_baseline_on_s == nidaq_event_s.
+        nidaq = a.get("nidaq_baseline_on_s", a.get("nidaq_event_s"))
+        if nidaq is None:
+            raise ValueError(
+                "Anchor has neither 'nidaq_baseline_on_s' nor 'nidaq_event_s'; "
+                "cannot fit a clock. Check for malformed anchor entries."
+            )
+        return float(nidaq)
+
     x = np.array(
-        [float(a["nidaq_baseline_on_s"]) for a in anchors], dtype=np.float64
+        [_anchor_nidaq_s(a) for a in anchors], dtype=np.float64
     )
     y = np.array(
         [float(a["video_time_s"]) for a in anchors], dtype=np.float64
@@ -669,6 +704,81 @@ def fit_2anchor_clock(
         slope_ppm=float((slope - 1.0) * 1e6),
         durbin_watson=2.0,  # N/A for this fit type; report the neutral value
         detection_method="manual_slope_fit",
+    )
+
+
+def _loo_cv(cam_s: np.ndarray, nidaq_s: np.ndarray) -> float:
+    """Leave-one-out CV RMSE (ms) for the linear clock. Requires n >= 3.
+
+    For sparse manual anchors the dense 5-fold ``_temporal_cv`` leaves ~1
+    anchor/fold (and returns its 999 sentinel below 20 anchors), so we use
+    LOO: fit on all-but-one, predict the held-out anchor, RMS the errors.
+    """
+    n = len(cam_s)
+    if n < 3:
+        return float("nan")
+    errs = []
+    for i in range(n):
+        m = np.ones(n, dtype=bool)
+        m[i] = False
+        A = np.column_stack([cam_s[m], np.ones(m.sum())])
+        params, _, _, _ = np.linalg.lstsq(A, nidaq_s[m], rcond=None)
+        pred = params[0] * cam_s[i] + params[1]
+        errs.append(((nidaq_s[i] - pred) * 1000.0) ** 2)
+    return float(np.sqrt(np.mean(errs)))
+
+
+def fit_multianchor_clock(
+    anchors: List[dict],
+    n_baseline_on: int,
+    outlier_sigma: float = VIDEO_SYNC_OUTLIER_SIGMA,
+) -> SyncResult:
+    """Fit a validated linear clock from >=3 manual anchors (any event type).
+
+    Orientation matches ``camera_to_nidaq``: ``nidaq_s = slope*cam_s + offset``
+    where ``cam_s = anchor['video_time_s']`` and ``nidaq_s`` is the anchor's
+    ``nidaq_event_s`` (falling back to ``nidaq_baseline_on_s`` for legacy).
+    Theil-Sen fit -> MAD outlier rejection -> LOO CV. detection_method =
+    "manual_multianchor". Raises ValueError on <3 anchors or non-positive slope.
+    """
+    from scipy.stats import theilslopes
+    if len(anchors) < 3:
+        raise ValueError(
+            f"fit_multianchor_clock needs >=3 anchors; got {len(anchors)}")
+
+    cam_s = np.array([float(a["video_time_s"]) for a in anchors], dtype=np.float64)
+    nidaq_s = np.array(
+        [float(a.get("nidaq_event_s", a.get("nidaq_baseline_on_s"))) for a in anchors],
+        dtype=np.float64)
+    order = np.argsort(cam_s)
+    cam_s, nidaq_s = cam_s[order], nidaq_s[order]
+
+    slope, intercept, _, _ = theilslopes(nidaq_s, cam_s)
+    resid_ms = (nidaq_s - (slope * cam_s + intercept)) * 1000.0
+    mad = np.median(np.abs(resid_ms - np.median(resid_ms))) or 1.0
+    keep = np.abs(resid_ms - np.median(resid_ms)) <= outlier_sigma * 1.4826 * mad
+    if keep.sum() >= 3 and keep.sum() < len(keep):
+        cam_s, nidaq_s = cam_s[keep], nidaq_s[keep]
+        slope, intercept, _, _ = theilslopes(nidaq_s, cam_s)
+        resid_ms = (nidaq_s - (slope * cam_s + intercept)) * 1000.0
+
+    if slope <= 0:
+        raise ValueError(f"Computed slope {slope} is non-positive; check anchors.")
+
+    return SyncResult(
+        slope=float(slope),
+        offset=float(intercept),
+        n_anchors=int(len(cam_s)),
+        n_baseline_on=int(n_baseline_on),
+        rmse_ms=float(np.sqrt(np.mean(resid_ms ** 2))),
+        max_residual_ms=float(np.max(np.abs(resid_ms))),
+        cv_rmse_ms=_loo_cv(cam_s, nidaq_s),
+        slope_ppm=float((slope - 1.0) * 1e6),
+        durbin_watson=2.0,
+        detection_method="manual_multianchor",
+        residuals_ms=resid_ms,
+        matched_cam_ms=cam_s * 1000.0,
+        matched_nidaq_s=nidaq_s,
     )
 
 
@@ -775,20 +885,39 @@ def write_reconstructed_metadata(csv_path: str, frame_count: int, fps: float) ->
     df.to_csv(csv_path, index=False)
 
 
-def camera_dir_to_session(dirname: str, subject: str = "BG_046") -> str:
-    """Convert camera directory name ``BG_046_DDMMYY`` -> session ``DDMMYYYY``."""
-    parts = dirname.split("_")
-    date6 = parts[-1]  # e.g. "010725"
-    if len(date6) != 6:
-        raise ValueError(f"Cannot parse 6-digit date from '{dirname}'")
-    dd, mm, yy = date6[:2], date6[2:4], date6[4:6]
-    return f"{dd}{mm}20{yy}"
+def local_reconstructed_metadata_path(
+    session_name: str, cam_label: str, subject: Optional[str] = None) -> str:
+    """LOCAL path for a reconstructed metadata CSV (never on X:/CAMERA_ROOT).
+
+    ``<subject_video_sync_dir>/<DDMMYYYY>_<cam_label>_metadata.reconstructed.csv``.
+    """
+    from visdetect.analysis.config import subject_video_sync_dir, canonical_camera_session
+    sn = canonical_camera_session(session_name)
+    return os.path.join(
+        subject_video_sync_dir(subject), f"{sn}_{cam_label}_metadata.reconstructed.csv")
+
+
+def write_local_reconstructed_metadata(
+    session_name: str, cam_label: str, frame_count: int, fps: float,
+    subject: Optional[str] = None) -> str:
+    """Write reconstructed steady-fps metadata to LOCAL cache (never X:)."""
+    out = local_reconstructed_metadata_path(session_name, cam_label, subject)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    write_reconstructed_metadata(out, frame_count, fps)  # existing writer, local path
+    return out
+
+
+def camera_dir_to_session(dirname: str, subject: str = None) -> str:
+    """Convert a camera directory name (``BG_046_DDMMYY``, possibly with a
+    re-record suffix like ``BG_039_010425_b``) to session ``DDMMYYYY``."""
+    from visdetect.analysis.config import canonical_camera_session
+    return canonical_camera_session(dirname)
 
 
 def find_camera_files(
     session_name: str,
     camera_root: Optional[str] = None,
-    subject: str = "BG_046",
+    subject: str = None,
 ) -> Dict[str, Dict[str, str]]:
     """Locate video + metadata files for a session.
 
@@ -797,15 +926,13 @@ def find_camera_files(
         {"eye_cam": {"video": "path.mp4", "metadata": "path.csv"},
          "front_cam": {"video": "path.mp4", "metadata": "path.csv"}}
 
-    Note: keys are only present if both video and metadata files are found.
-    Callers should check ``"eye_cam" in result`` before accessing.
+    Keys are present only if both video and metadata files are found.
     """
+    from visdetect.analysis.config import SUBJECT, camera_dir_token
     root = camera_root or CAMERA_ROOT
-
-    sn = str(session_name).zfill(8)
-    dd, mm, yyyy = sn[:2], sn[2:4], sn[4:]
-    yy = yyyy[2:]
-    cam_dir = os.path.join(root, f"{subject}_{dd}{mm}{yy}")
+    subject = subject or SUBJECT
+    token = camera_dir_token(session_name)
+    cam_dir = os.path.join(root, f"{subject}_{token}")
 
     if not os.path.isdir(cam_dir):
         raise FileNotFoundError(f"Camera directory not found: {cam_dir}")
@@ -822,7 +949,67 @@ def find_camera_files(
         if video and meta:
             result[cam_label] = {"video": video, "metadata": meta}
 
+    # Prefer a LOCAL reconstructed metadata CSV (X: stays read-only). The video
+    # path always stays on CAMERA_ROOT; only the metadata is redirected local.
+    from visdetect.analysis.config import canonical_camera_session
+    sn = canonical_camera_session(session_name)
+    for cam_label in list(result.keys()):
+        local_meta = local_reconstructed_metadata_path(sn, cam_label, subject)
+        if os.path.exists(local_meta):
+            result[cam_label]["metadata"] = local_meta
+
     return result
+
+
+# =====================================================================
+# Local video staging (read-only X: source -> local scratch)
+# =====================================================================
+
+
+def _staging_dir(session_name: str, subject: Optional[str], staging_dir: Optional[str]) -> str:
+    from visdetect.analysis.config import VIDEO_STAGING_DIR, SUBJECT, canonical_camera_session
+    base = staging_dir or VIDEO_STAGING_DIR
+    return os.path.join(base, subject or SUBJECT, canonical_camera_session(session_name))
+
+
+def stage_session_video(
+    session_name: str,
+    subject: Optional[str] = None,
+    cams=("eye_cam",),
+    camera_root: Optional[str] = None,
+    staging_dir: Optional[str] = None,
+    force: bool = False,
+) -> Dict[str, Dict[str, str]]:
+    """Copy a session's camera video+metadata from X: (read-only) to local scratch.
+
+    Bulk sequential read only; never writes to CAMERA_ROOT. Returns the same
+    dict shape as find_camera_files but with LOCAL paths.
+    """
+    import shutil
+    src = find_camera_files(session_name, camera_root=camera_root, subject=subject)
+    dst_dir = _staging_dir(session_name, subject, staging_dir)
+    os.makedirs(dst_dir, exist_ok=True)
+    out: Dict[str, Dict[str, str]] = {}
+    for cam in cams:
+        if cam not in src:
+            continue
+        out[cam] = {}
+        for kind, spath in src[cam].items():
+            dpath = os.path.join(dst_dir, os.path.basename(spath))
+            if force or not os.path.exists(dpath):
+                shutil.copy2(spath, dpath)  # copy2, never move -> source intact
+            out[cam][kind] = dpath
+    return out
+
+
+def unstage_session_video(
+    session_name: str, subject: Optional[str] = None,
+    staging_dir: Optional[str] = None) -> None:
+    """Delete the local staged copy for a session (frees disk)."""
+    import shutil
+    dst_dir = _staging_dir(session_name, subject, staging_dir)
+    if os.path.isdir(dst_dir):
+        shutil.rmtree(dst_dir)
 
 
 # =====================================================================
@@ -1766,14 +1953,36 @@ def select_anchors(
 # =====================================================================
 
 
+# ---------------------------------------------------------------------------
+# ORIENTATION CONTRACT (read before applying these converters)
+# ---------------------------------------------------------------------------
+# The ``slope``/``offset`` stored on a SyncResult are NOT a single fixed
+# orientation — they depend on ``detection_method``:
+#   * ``derivative`` / ``manual_multianchor``  -> store  nidaq = slope*cam + offset
+#       (the orientation the two converters below ASSUME).
+#   * legacy ``manual_slope_fit``               -> store the INVERSE
+#       video = slope*nidaq + offset.
+# Downstream consumers MUST branch on ``detection_method`` and invert
+# (slope' = 1/slope, offset' = -offset/slope) for a ``manual_slope_fit`` result
+# BEFORE passing slope/offset to camera_to_nidaq / nidaq_to_camera.
 def camera_to_nidaq(t_camera_ms, slope: float, offset: float):
-    """Convert camera timestamp(s) (ms) to NI-DAQ time (seconds)."""
+    """Convert camera timestamp(s) (ms) to NI-DAQ time (seconds).
+
+    Assumes the ``nidaq = slope*cam + offset`` orientation (see ORIENTATION
+    CONTRACT above): valid for ``derivative`` / ``manual_multianchor`` results.
+    For a legacy ``manual_slope_fit`` result invert slope/offset first.
+    """
     t = np.asarray(t_camera_ms, dtype=np.float64)
     return slope * (t / 1000.0) + offset
 
 
 def nidaq_to_camera(t_nidaq_s, slope: float, offset: float):
-    """Convert NI-DAQ time (seconds) to camera timestamp(s) (ms)."""
+    """Convert NI-DAQ time (seconds) to camera timestamp(s) (ms).
+
+    Assumes the ``nidaq = slope*cam + offset`` orientation (see ORIENTATION
+    CONTRACT above): valid for ``derivative`` / ``manual_multianchor`` results.
+    For a legacy ``manual_slope_fit`` result invert slope/offset first.
+    """
     t = np.asarray(t_nidaq_s, dtype=np.float64)
     return ((t - offset) / slope) * 1000.0
 
@@ -1833,6 +2042,44 @@ def load_video_sync(
         return None
     with open(path) as f:
         return json.load(f)
+
+
+def archive_sync_artifacts(
+    session_name: str,
+    subject: Optional[str] = None,
+    sync_dir: Optional[str] = None,
+    when: Optional[str] = None,
+    include_anchor: bool = True,
+) -> Optional[str]:
+    """Move existing sync (+ optionally anchor) JSONs into ``<sync_dir>/_archive/<when>/``.
+
+    Called before a re-fit so a re-tag never silently clobbers a prior fit
+    (spec migration policy). Returns the archive dir, or None if nothing moved.
+
+    Parameters
+    ----------
+    include_anchor : bool
+        When True (default), archive BOTH ``_video_sync.json`` and
+        ``_anchor.json`` (the §3.14 migration semantics used by Plan 2's future
+        tagger). When False, archive ONLY ``_video_sync.json`` and leave the
+        live anchor in place — required so a re-fit (fit_sync) is repeatable
+        without stranding the anchor it reads.
+    """
+    import shutil
+    from visdetect.analysis.config import subject_video_sync_dir, canonical_camera_session
+    out_dir = sync_dir or subject_video_sync_dir(subject)
+    sn = canonical_camera_session(session_name)
+    when = when or _dt.date.today().isoformat()
+    moved = False
+    arch = os.path.join(out_dir, "_archive", when)
+    suffixes = ("_video_sync.json", "_anchor.json") if include_anchor else ("_video_sync.json",)
+    for suffix in suffixes:
+        src = os.path.join(out_dir, f"{sn}{suffix}")
+        if os.path.exists(src):
+            os.makedirs(arch, exist_ok=True)
+            shutil.move(src, os.path.join(arch, f"{sn}{suffix}"))
+            moved = True
+    return arch if moved else None
 
 
 # =====================================================================
@@ -2781,6 +3028,27 @@ def _migrate_anchor_v1_to_v2(d: dict) -> dict:
     }
 
 
+def _migrate_anchor_to_v3(d: dict) -> dict:
+    """Add event_type/nidaq_event_s to v2 baseline-only anchors (idempotent)."""
+    d = _migrate_anchor_v1_to_v2(d)
+    if d.get("schema_version") == 3:
+        return d
+    # Copy each entry so a passed-in v2 dict's caller entries are not mutated
+    # in place. Only derive nidaq_event_s from nidaq_baseline_on_s when that
+    # key is present (a change-type entry may lack it -> avoid float(None)).
+    new_anchors = []
+    for a in d["anchors"]:
+        a = dict(a)
+        a.setdefault("event_type", "baseline_on")
+        if "nidaq_event_s" not in a and "nidaq_baseline_on_s" in a:
+            a["nidaq_event_s"] = float(a["nidaq_baseline_on_s"])
+        new_anchors.append(a)
+    d = dict(d)
+    d["anchors"] = new_anchors
+    d["schema_version"] = 3
+    return d
+
+
 def compute_implied_offset(anchor: dict) -> float:
     """Return ``video_time_s - nidaq_baseline_on_s`` for a single anchor entry.
 
@@ -2807,6 +3075,28 @@ def _build_anchor_entry(
     }
 
 
+def _build_change_anchor_entry(
+    change_on_s: float,
+    ts_ms: np.ndarray,
+    trial_index: int,
+    frame_idx: int,
+    change_size: float,
+    outcome: str,
+) -> dict:
+    """Build a v3 change-onset anchor entry from a clicked frame index."""
+    fi = int(frame_idx)
+    return {
+        "trial_index": int(trial_index),
+        "event_type": "change_on",
+        "nidaq_event_s": float(change_on_s),
+        "change_size": float(change_size),
+        "outcome": str(outcome),
+        "video_frame_idx": fi,
+        "video_time_s": float(ts_ms[fi] / 1000.0),
+        "clicked_at": _dt.datetime.now().isoformat(timespec="seconds"),
+    }
+
+
 def _build_v2_anchor_file(
     session_name: str,
     fps: float,
@@ -2823,16 +3113,38 @@ def _build_v2_anchor_file(
     }
 
 
+def _build_v3_anchor_file(session_name, fps, n_trials, anchor_entries) -> dict:
+    """Top-level v3 anchor dict: schema_version 3; every entry carries event_type.
+    Baseline entries (lacking event_type) get event_type='baseline_on' + nidaq_event_s."""
+    entries = []
+    for a in anchor_entries:
+        a = dict(a)
+        a.setdefault("event_type", "baseline_on")
+        if "nidaq_event_s" not in a and "nidaq_baseline_on_s" in a:
+            a["nidaq_event_s"] = float(a["nidaq_baseline_on_s"])
+        entries.append(a)
+    return {
+        "session": str(session_name),
+        "schema_version": 3,
+        "frame_rate_fps": float(fps),
+        "n_trials": int(n_trials),
+        "anchors": list(entries),
+    }
+
+
 def _merge_anchor_into_file(base: dict, new_entry: dict) -> dict:
     """Return a copy of *base* with *new_entry* merged into its anchors list.
 
-    Replaces any existing anchor with the same ``trial_index``. The result is
-    sorted by ``trial_index``.
+    Replaces an existing anchor with the same ``(trial_index, event_type)``
+    (default event_type ``baseline_on`` for legacy entries). Sorted by
+    ``(trial_index, event_type)``.
     """
-    new_idx = int(new_entry["trial_index"])
-    kept = [a for a in base["anchors"] if int(a["trial_index"]) != new_idx]
+    def key(a):
+        return (int(a["trial_index"]), a.get("event_type", "baseline_on"))
+    nk = key(new_entry)
+    kept = [a for a in base["anchors"] if key(a) != nk]
     kept.append(new_entry)
-    kept.sort(key=lambda a: int(a["trial_index"]))
+    kept.sort(key=key)
     out = dict(base)
     out["anchors"] = kept
     return out
@@ -2860,18 +3172,18 @@ def load_anchor(
     session_name: str,
     sync_dir: Optional[str] = None,
 ) -> Optional[dict]:
-    """Read the anchor JSON for *session_name* and return it in v2 form.
+    """Read the anchor JSON for *session_name* and return it in v3 form.
 
-    Legacy v1 JSONs are migrated in memory (the on-disk file is NOT rewritten
-    by this read; it gets rewritten next time :func:`save_anchor` is called).
-    Returns ``None`` if no file exists.
+    Legacy v1/v2 JSONs are migrated in memory (the on-disk file is NOT
+    rewritten by this read; it gets rewritten next time :func:`save_anchor`
+    is called). Returns ``None`` if no file exists.
     """
     path = _anchor_path(session_name, sync_dir=sync_dir)
     if not os.path.exists(path):
         return None
     with open(path, "r") as f:
         raw = json.load(f)
-    return _migrate_anchor_v1_to_v2(raw)
+    return _migrate_anchor_to_v3(raw)
 
 
 def compute_predicted_frame_idx(

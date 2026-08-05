@@ -58,7 +58,7 @@ B8's per-trial latent table is the shared **input** to B0/A1/E1/D1; those rows a
 | D5 | Slow drift ↔ a slowly-varying neural/engagement axis | T1 | not-started | — | — |
 | E1 | DDM tests on the evidence axis (Hit vs Miss diverge; amplitude→RT) | T1 | not-started | — | — |
 | E2 ⭐ | Distributed vs specialist evidence coding (decode the non-responsive 90%) | T1 | not-started | — | — |
-| E3 | Movement-null vs movement-potent; movement ⊥ sensory orthogonality | T2 | not-started | — | — |
+| E3 | Movement-null vs movement-potent; movement ⊥ sensory orthogonality (incl. sensory ⊥ *impulsive-motor* β_FA geometry across regulation) | T2 | **prototype done — near-null (2026-07-21)**: cheap-axis θ(β_TF,β_FA)-vs-impulsivity is a 2-confound artifact (β_FA reliability + β_TF support); DMS null, weak ns single-animal VMS hint; dense-β_TF refit deprioritised → revisit with the VMS cohort | [results](2026-07-21-sensory-motor-geometry-regulation-null.md) | — |
 | E4 ⭐ | Quantitative match to the Lohse sister study + emergence across learning | T2 | not-started | — | — |
 | F1 | Triangulate the D1/D2 baseline shift: photometry vs ephys | T2 | not-started | — | — |
 | F2 | Tracking quality as a scientific gate (plasticity vs matching error) | T1 | not-started | — | — |

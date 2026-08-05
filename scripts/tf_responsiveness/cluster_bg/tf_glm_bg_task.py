@@ -53,6 +53,7 @@ from visdetect.analysis.tf_glm import (  # noqa: E402
     tf_pulse_peth,
 )
 from visdetect.analysis.tf_glm_data import session_trial_regressors  # noqa: E402
+from visdetect.analysis.lick_channels import NoLickChannelError  # noqa: E402
 
 MIN_SPIKES = 500  # per-unit spike-count gate (paper-power floor), applied at fit
 
@@ -143,7 +144,15 @@ def run_task(targets_csv, task_id, data_root, out_dir, with_linear=True, verbose
 
     cfg_log = _cfg("log2")
     sess = load_session(str(pkl_path))
-    trials, units = session_trial_regressors(sess, cfg_log)
+    try:
+        trials, units = session_trial_regressors(sess, cfg_log)
+    except NoLickChannelError as exc:
+        # The lick nuisance regressor is essential to this GLM, so a session
+        # without a usable NI lick channel cannot be fit correctly. Fail this
+        # task cleanly (rc=2, same as a missing pkl) rather than aborting -- one
+        # array task is one session, so the rest of the sweep is unaffected.
+        print(f"[task {task_id}] FATAL: no usable lick channel: {exc}", flush=True)
+        return 2
     # self-partition: slowest (highest-spike) units first, strided across chunks
     spk = {u: float(np.sum(np.isfinite(units[u]))) for u in units}
     ordered = sorted(units, key=lambda u: spk[u], reverse=True)

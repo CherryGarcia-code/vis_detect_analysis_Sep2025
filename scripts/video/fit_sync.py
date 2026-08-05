@@ -25,7 +25,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg", force=True)
 
-from visdetect.suite.loader import load_session
+from visdetect.suite.loader import load_session_for_subject
 from visdetect.core.video_sync import (
     find_camera_files,
     load_camera_metadata,
@@ -33,7 +33,10 @@ from visdetect.core.video_sync import (
     load_video_sync,
     save_video_sync,
     fit_2anchor_clock,
+    fit_multianchor_clock,
+    archive_sync_artifacts,
 )
+from visdetect.analysis.config import subject_video_sync_dir, canonical_camera_session
 
 # Reuse the barcode-montage renderer from click_anchor.py
 import importlib.util
@@ -57,42 +60,35 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Phase 2: fit linear clock model from manual anchors.",
     )
-    parser.add_argument(
-        "--session", required=True, help="Session name (e.g. 09092025).",
-    )
+    parser.add_argument("--session", required=True, help="Session name (e.g. 09092025).")
+    parser.add_argument("--subject", default=None, help="Subject (default: config.SUBJECT).")
     args = parser.parse_args()
 
     try:
-        session_name = str(int(args.session)).zfill(8)
-    except (TypeError, ValueError):
-        logger.error(
-            "Invalid session name %r — expected a numeric string such as '09092025'.",
-            args.session,
-        )
+        session_name = canonical_camera_session(args.session)
+    except (ValueError, TypeError):
+        logger.error("Session name '%s' could not be parsed to a date.", args.session)
         return 2
+    sync_dir = subject_video_sync_dir(args.subject)
 
-    # Load anchors.
-    anchor_file = load_anchor(session_name)
+    anchor_file = load_anchor(session_name, sync_dir=sync_dir)
     if anchor_file is None:
-        logger.error(
-            "No anchor JSON for %s. Run click_anchor.py --session %s first.",
-            session_name, session_name,
-        )
+        logger.error("No anchor JSON for %s in %s. Run click_anchor first.",
+                     session_name, sync_dir)
         return 2
     anchors = anchor_file["anchors"]
     if len(anchors) < 2:
-        logger.error(
-            "Anchor JSON has %d anchor(s); need >=2. "
-            "Run click_anchor.py --session %s --anchor-last to add a second anchor.",
-            len(anchors), session_name,
-        )
+        logger.error("Anchor JSON has %d anchor(s); need >=2.", len(anchors))
         return 2
 
-    # Load session for baseline_on / n_trials sanity.
-    sess = load_session(session_name)
-    baseline_on = np.asarray(
-        sess.ni_events.get("Baseline_ON", []), dtype=float
-    )
+    # Subject-aware load (NOT the frozen config.SUBJECT env): --subject BG_031
+    # must load BG_031's behaviour, not silently resolve against BG_046.
+    try:
+        sess = load_session_for_subject(session_name, args.subject)
+    except FileNotFoundError as exc:
+        logger.error("%s", exc)
+        return 2
+    baseline_on = np.asarray(sess.ni_events.get("Baseline_ON", []), dtype=float)
     baseline_on = baseline_on[baseline_on > 0]
     n_task_trials = len(sess.trials)
     if n_task_trials > 0 and len(baseline_on) > n_task_trials:
@@ -102,44 +98,39 @@ def main() -> int:
     gc.collect()
     fps = float(anchor_file["frame_rate_fps"])
 
-    # Fit.
     try:
-        sync_result = fit_2anchor_clock(
-            anchors=anchors, fps=fps, n_baseline_on=n_baseline_on,
-        )
+        if len(anchors) >= 3:
+            sync_result = fit_multianchor_clock(anchors, n_baseline_on=n_baseline_on)
+        else:
+            sync_result = fit_2anchor_clock(
+                anchors=anchors, fps=fps, n_baseline_on=n_baseline_on)
     except ValueError as exc:
-        logger.error("Slope fit failed: %s", exc)
+        logger.error("Clock fit failed: %s", exc)
         return 2
 
-    # Preserve any manual per-trial overrides from a prior tag_trials run:
-    # re-fitting must not silently erase the user's hand-verified frames.
-    existing_sync = load_video_sync(session_name)
+    existing_sync = load_video_sync(session_name, sync_dir=sync_dir)
     if existing_sync is not None:
         prior = (existing_sync.get("eye_cam") or {}).get("per_trial_overrides") or {}
         if prior:
             sync_result.per_trial_overrides = {int(k): int(v) for k, v in prior.items()}
-            logger.info(
-                "Preserved %d existing per-trial override(s) from prior sync JSON.",
-                len(sync_result.per_trial_overrides),
-            )
 
-    # Persist via existing save_video_sync.
+    # Never silent-overwrite: archive the prior sync JSON before writing.
+    # include_anchor=False leaves the live anchor in place so a re-fit is
+    # repeatable (fit_sync re-reads that anchor on the next run).
+    archive_sync_artifacts(session_name, sync_dir=sync_dir, include_anchor=False)
+
     out_path = save_video_sync(
-        session_name=session_name, eye_cam=sync_result,
-    )
-    logger.info(
-        "Slope fit: slope=%.6f (%.2f ppm), offset=%.4f s, "
-        "n_anchors=%d, rmse=%.2f ms, quality=%s",
-        sync_result.slope, sync_result.slope_ppm, sync_result.offset,
-        sync_result.n_anchors, sync_result.rmse_ms, sync_result.quality,
-    )
+        session_name=session_name, eye_cam=sync_result, sync_dir=sync_dir)
+    logger.info("Fit: slope=%.6f (%.2f ppm), offset=%.4f s, n=%d, cv_rmse=%.2f ms, quality=%s",
+                sync_result.slope, sync_result.slope_ppm, sync_result.offset,
+                sync_result.n_anchors, sync_result.cv_rmse_ms, sync_result.quality)
     print(f"Sync JSON: {out_path}")
 
     # Render the slope-fitted barcode montage. Use the new slope+offset_s
     # kwargs on render_barcode_montage (added in Step 4.0) so each row is
     # centred on the slope-fitted prediction for that trial.
     try:
-        cam = find_camera_files(session_name)
+        cam = find_camera_files(session_name, subject=args.subject)
     except Exception as exc:
         logger.error("Could not locate camera files for %s: %s", session_name, exc)
         return 2
@@ -169,6 +160,15 @@ def main() -> int:
     montage_path = os.path.join(
         FIGS_DIR, f"{session_name}_barcode_montage_slopefit.png",
     )
+    # render_barcode_montage expects the fit_2anchor orientation
+    # (video_time_s = slope*nidaq + offset_s). fit_multianchor_clock stores the
+    # INVERSE (nidaq = slope*cam + offset), so invert before handing it over.
+    if sync_result.detection_method == "manual_multianchor":
+        montage_slope = 1.0 / sync_result.slope
+        montage_offset = -sync_result.offset / sync_result.slope
+    else:
+        montage_slope = sync_result.slope
+        montage_offset = sync_result.offset
     render_barcode_montage(
         session_name=session_name,
         anchor=sentinel_anchor,
@@ -177,8 +177,8 @@ def main() -> int:
         ts_ms=ts_ms,
         fps=fps,
         out_path=montage_path,
-        slope=sync_result.slope,
-        offset_s=sync_result.offset,
+        slope=montage_slope,
+        offset_s=montage_offset,
     )
     print(f"Montage:   {montage_path}")
     return 0

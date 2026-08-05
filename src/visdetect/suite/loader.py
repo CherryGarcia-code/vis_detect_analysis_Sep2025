@@ -43,6 +43,7 @@ from visdetect.analysis.config import (   # noqa: F401
     load_staging_manifest,
     load_filtered_manifest,
     load_valid_sessions,
+    canonical_camera_session,
 )
 
 from visdetect.analysis.constants import DEFAULT_Z_THRESH_TF
@@ -174,6 +175,11 @@ def load_session(session_name) -> "Session":
 
     Tries multiple date-format variants to handle subjects with mixed naming;
     see :func:`_session_pkl_candidates`.
+
+    NOTE: frozen to the import-time ``config.SUBJECT`` (the ``VISDETECT_SUBJECT``
+    env). For an explicit, subject-aware load (cross-subject tools that take a
+    ``--subject`` flag) use :func:`load_session_for_subject` instead — this
+    signature is kept unchanged for the many existing single-subject callers.
     """
     pkl_path = resolve_session_pkl(session_name)
     if pkl_path is not None:
@@ -184,6 +190,51 @@ def load_session(session_name) -> "Session":
         f"(tried {SUBJECT}_<date>.pkl with candidates: "
         f"{_session_pkl_candidates(session_name)})"
     )
+
+
+def resolve_subject_pkl(session, subject: Optional[str] = None) -> Optional[str]:
+    """On-disk pkl path for *subject*'s *session*, or None if none exists.
+
+    Subject-aware sibling of :func:`resolve_session_pkl`. ``resolve_session_pkl``
+    is frozen to the import-time ``config.SUBJECT`` (the ``VISDETECT_SUBJECT``
+    env), so a cross-subject tool that passes ``--subject`` but resolves through it
+    silently loads BG_046's behaviour instead. This honours an explicit ``subject``:
+    it enumerates that subject's pkls (:func:`list_pkl_sessions`, the on-disk
+    convention ``data/pkls/<subject>/<subject>_<token>.pkl``) and matches each token
+    to ``session`` via :func:`canonical_camera_session`, so a 6-digit ``DDMMYY``
+    token matches an 8-digit ``DDMMYYYY`` request (and leading-zero days resolve).
+    Cheap: only lists directory names, no unpickling — safe to pre-filter with.
+    """
+    subj = subject or SUBJECT
+    try:
+        want = canonical_camera_session(session)
+    except (TypeError, ValueError):
+        return None
+    pkl_dir = os.path.join(ROOT, "data", "pkls", subj)
+    for token in list_pkl_sessions(subj):
+        if canonical_camera_session(token) == want:
+            return os.path.join(pkl_dir, f"{subj}_{token}.pkl")
+    return None
+
+
+def load_session_for_subject(session, subject: Optional[str] = None) -> "Session":
+    """Load *subject*'s :class:`Session`, honouring an explicit ``subject``.
+
+    Unlike :func:`load_session` (frozen to ``config.SUBJECT``), this resolves the
+    pkl for ``subject`` via :func:`resolve_subject_pkl` and loads it through the
+    PATH-based core loader. Raises :class:`FileNotFoundError` with a clear message
+    (not a bare traceback) when no pkl matches, so callers can surface a friendly
+    error.
+    """
+    pkl_path = resolve_subject_pkl(session, subject)
+    if pkl_path is None:
+        subj = subject or SUBJECT
+        raise FileNotFoundError(
+            f"pkl not found for subject '{subj}' session '{session}' under "
+            f"{os.path.join(ROOT, 'data', 'pkls', subj)} "
+            f"(expected {subj}_<token>.pkl matching that date)."
+        )
+    return _load_session_raw(pkl_path)
 
 
 def session_iterator(

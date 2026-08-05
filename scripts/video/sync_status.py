@@ -23,36 +23,43 @@ import sys
 from visdetect.analysis.config import (
     load_staging_manifest,
     chronological_sort,
-    session_int_to_iso,
+    canonical_camera_session,
+    subject_video_sync_dir,
 )
 from visdetect.core.video_sync import load_anchor, load_video_sync
 
 
-def _session_status(session_int: int) -> dict:
+def _session_status(session_int: int, sync_dir: str) -> dict:
     """Gather anchor + sync state for one session (read-only)."""
-    name = str(int(session_int)).zfill(8)
+    name = canonical_camera_session(session_int)
 
-    anchor = load_anchor(name)
+    anchor = load_anchor(name, sync_dir=sync_dir)
     n_anchors = len(anchor["anchors"]) if anchor else 0
 
-    sync = load_video_sync(name)
+    sync = load_video_sync(name, sync_dir=sync_dir)
     if sync is not None:
         eye = sync.get("eye_cam") or {}
         slope_ppm = eye.get("slope_ppm")
+        cv_rmse = eye.get("cv_rmse_ms")
         quality = sync.get("quality") or eye.get("quality")
         n_over = len(eye.get("per_trial_overrides") or {})
         status = "DONE"
     else:
-        slope_ppm = quality = None
+        slope_ppm = quality = cv_rmse = None
         n_over = 0
         status = "PARTIAL" if n_anchors >= 1 else "TODO"
 
+    # Derive iso from the 8-digit `name` (DDMMYYYY) directly. Routing the raw
+    # int through session_int_to_iso zero-pads 6-digit subjects wrongly
+    # (50325 -> 00050325 -> 0325-05-00); `name` already canonicalised above.
+    iso = f"{name[4:]}-{name[2:4]}-{name[:2]}"
     return {
         "session": name,
-        "iso": session_int_to_iso(session_int),
+        "iso": iso,
         "status": status,
         "n_anchors": n_anchors,
         "slope_ppm": slope_ppm,
+        "cv_rmse": cv_rmse,
         "quality": quality,
         "n_over": n_over,
     }
@@ -69,7 +76,15 @@ def main() -> int:
     p.add_argument("--order", choices=["reverse", "chrono"], default="reverse",
                    help="reverse = Expert->Naive (default, matches batch order); "
                         "chrono = Naive->Expert.")
+    p.add_argument("--subject", default=None,
+                   help="Subject (default: config.SUBJECT).")
     args = p.parse_args()
+
+    # Per-subject sync cache: data/cache/video_sync/<SUBJECT>/.
+    sync_dir = subject_video_sync_dir(args.subject)
+    # NOTE: load_staging_manifest keys the roster off config.SUBJECT; for a
+    # non-default subject set VISDETECT_SUBJECT (or pass a manifest_path). E.g.:
+    #   VISDETECT_SUBJECT=BG_031 py scripts/video/sync_status.py --subject BG_031
 
     if args.all:
         manifest = load_staging_manifest(qc_only=False, apply_filter=False)
@@ -79,25 +94,27 @@ def main() -> int:
     if args.order == "reverse":
         sessions = list(reversed(sessions))
 
-    rows = [_session_status(s) for s in sessions]
+    rows = [_session_status(s, sync_dir) for s in sessions]
     shown = [r for r in rows if not (args.remaining and r["status"] == "DONE")]
 
     roster = "all manifest rows" if args.all else "QC-passed roster"
     order_lbl = "Expert->Naive" if args.order == "reverse" else "Naive->Expert"
     print(f"\nVideo-sync status: {roster}, {order_lbl}  ({len(rows)} sessions)\n")
     hdr = (f"{'#':>3}  {'date':<10}  {'session':<8}  {'status':<7}  "
-           f"{'anc':>3}  {'ppm':>8}  {'quality':<9}  {'ovr':>3}")
+           f"{'anc':>3}  {'ppm':>8}  {'cv_ms':>6}  {'quality':<9}  {'ovr':>3}")
     print(hdr)
     print("-" * len(hdr))
     for i, r in enumerate(shown, 1):
         ppm = (f"{r['slope_ppm']:+.1f}"
                if isinstance(r["slope_ppm"], (int, float)) else "-")
+        cv_ms = (f"{r['cv_rmse']:.1f}"
+                 if isinstance(r["cv_rmse"], (int, float)) else "-")
         qual = r["quality"] or "-"
         if qual not in ("good", "-"):
             qual = qual + " !"           # flag review/failed fits
         over = str(r["n_over"]) if r["n_over"] else "-"
         print(f"{i:>3}  {r['iso']:<10}  {r['session']:<8}  {r['status']:<7}  "
-              f"{r['n_anchors']:>3}  {ppm:>8}  {qual:<9}  {over:>3}")
+              f"{r['n_anchors']:>3}  {ppm:>8}  {cv_ms:>6}  {qual:<9}  {over:>3}")
 
     n_done = sum(1 for r in rows if r["status"] == "DONE")
     n_part = sum(1 for r in rows if r["status"] == "PARTIAL")

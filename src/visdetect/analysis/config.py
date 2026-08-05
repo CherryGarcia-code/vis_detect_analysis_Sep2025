@@ -132,6 +132,20 @@ VIDEO_SYNC_FIG_DIR     = os.path.join(ROOT, "figures", "video_sync")
 # Camera feature extraction cache directories
 MOTION_ENERGY_DIR      = os.path.join(ROOT, "data", "cache", "motion_energy")
 PUPIL_DIR              = os.path.join(ROOT, "data", "cache", "pupil")
+VIDEO_LABELS_DIR       = os.path.join(ROOT, "data", "cache", "video_labels")
+# Local scratch for staged camera videos (gitignored). NEVER on X:.
+VIDEO_STAGING_DIR      = os.getenv(
+    "VISDETECT_VIDEO_STAGING", os.path.join(ROOT, "data", "_staging", "video"))
+
+
+def subject_video_sync_dir(subject: Optional[str] = None) -> str:
+    """Per-subject sync cache dir: data/cache/video_sync/<SUBJECT>/."""
+    return os.path.join(VIDEO_SYNC_DIR, subject or SUBJECT)
+
+
+def subject_video_labels_dir(subject: Optional[str] = None) -> str:
+    """Per-subject label sidecar dir: data/cache/video_labels/<SUBJECT>/."""
+    return os.path.join(VIDEO_LABELS_DIR, subject or SUBJECT)
 
 # =====================================================================
 # Learning stages (full set — used internally for manifest validation)
@@ -435,6 +449,24 @@ def session_int_to_iso(session_int) -> str:
     """Convert a DDMMYYYY session id to a 'YYYY-MM-DD' string."""
     s = canonical_session_id(session_int)
     return f"{s[4:]}-{s[2:4]}-{s[:2]}"
+
+
+def canonical_camera_session(session) -> str:
+    """8-digit ``DDMMYYYY`` for ANY session token (camera-path safe).
+
+    Unlike :func:`canonical_session_id` (which zero-pads and would turn the
+    6-digit ``DDMMYY`` ids BG_031/039 carry into ``00050325``), this routes
+    through :func:`session_date_key`, which parses 6-/7-/8-digit, subject-
+    prefixed (``BG_031_050325``) and re-record-suffixed (``..._b``) forms.
+    """
+    y, m, d = session_date_key(session)
+    return f"{d:02d}{m:02d}{y:04d}"
+
+
+def camera_dir_token(session) -> str:
+    """6-digit ``DDMMYY`` token used in camera directory names."""
+    y, m, d = session_date_key(session)
+    return f"{d:02d}{m:02d}{y % 100:02d}"
 
 
 def iso_to_session_int(iso_str) -> Optional[int]:

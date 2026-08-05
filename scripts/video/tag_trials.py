@@ -174,11 +174,11 @@ def _load_overrides(session_name: str) -> Dict[int, int]:
 def _slope_fit_frame(
     sync_json: dict, nidaq_baseline_on_s: float, fps: float,
 ) -> int:
+    from visdetect.analysis.tagging import nidaq_to_frame_oriented
     eye = sync_json["eye_cam"]
-    slope = float(eye["slope"])
-    offset_s = float(eye["offset"])
-    video_time_s = slope * float(nidaq_baseline_on_s) + offset_s
-    return int(round(video_time_s * fps))
+    return nidaq_to_frame_oriented(
+        nidaq_baseline_on_s, float(eye["slope"]), float(eye["offset"]), fps,
+        eye.get("detection_method", "manual_slope_fit"))
 
 
 # ---------------------------------------------------------------------------
@@ -371,11 +371,11 @@ def main() -> int:
         logger.error("Sync JSON for %s has no eye_cam entry.", session_name)
         return 2
     method = (sync.get("eye_cam") or {}).get("detection_method", "")
-    if method != "manual_slope_fit":
+    if method not in ("manual_slope_fit", "manual_multianchor"):
         logger.error(
             "Sync JSON for %s was not produced by fit_sync.py "
-            "(detection_method=%r, expected 'manual_slope_fit'). "
-            "Run fit_sync.py --session %s first.",
+            "(detection_method=%r, expected 'manual_slope_fit' or "
+            "'manual_multianchor'). Run fit_sync.py --session %s first.",
             session_name, method, session_name,
         )
         return 2
