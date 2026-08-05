@@ -368,7 +368,25 @@ incomplete until systematically run.
 | **1** | `run_alignment.py` + tests; repair BG_046 `20082025` and `05092025_b` | Both solve at ~0.005 s; behaviour diff clean |
 | **2** | Extend audit to residuals; re-verify all 253 pkls including the 48 benign | Residual distribution characterised |
 | **3** | Repair the remaining 15 unsafe non-BG_012 sessions (13 ordinary + the 2 special cases in §7) | Each solves or is flagged `-1` with a recorded reason |
-| **4** | Patch `ingest.py`; honour `trial_event_index` downstream | Converter refuses to emit a misaligned pkl |
+| **4** | Patch `ingest.py`; honour `trial_event_index` downstream; **regenerate the TF registries** | Converter refuses to emit a misaligned pkl; registries rebuilt from repaired pkls |
+
+### Measured downstream contamination (TF-GLM registries)
+
+Affected sessions **are** already in the shipped registries, so this is not hypothetical:
+
+| subject | region | affected | pooled `resp_log2` (on record) | clean-only | affected-only |
+|---|---|---|---|---|---|
+| BG_046 | DMS | 2/46 sess, 7.1 % of units | 2.77 % | 2.84 % | 1.79 % |
+| BG_031 | **VMS** | **7/42 sess, 20.0 % of units** | **5.29 %** | **6.31 %** | **1.26 %** |
+| BG_039 | DMS | 1/32 sess, 3.1 % of units | 3.07 % | 3.04 % | 3.95 % (n=76 — too thin to read) |
+
+The recorded headline "VMS 5.3 % > DMS 2.8–3.1 %" (`tf_glm_replication_jun2026`) **is** the pooled,
+contaminated figure. The direction is a **deflation** — exactly the mechanism's fingerprint, since
+decorrelating stimulus from spikes drives units toward non-responsive. So the bug works *against*
+the VMS>DMS result rather than creating it; excluding affected sessions widens the gap from 1.9× to
+2.2×. The qualitative conclusion stands; the **effect sizes on record do not**, and the registries
+must be regenerated from repaired pkls in Phase 4. ⚠ "Clean-only" above is an *exclusion* analysis,
+not a repaired one — post-repair those sessions contribute real units and the numbers move again.
 
 ---
 
