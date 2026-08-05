@@ -69,6 +69,7 @@ import json
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -171,6 +172,56 @@ def _read_coarse_offset(session: str, sync_dir: str) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
+# Playback pacing + capture advance (pure, module-level so the pace-measurement
+# probe can drive the REAL logic without reconstructing main()'s closures).
+# ---------------------------------------------------------------------------
+
+
+def _playback_target_frame(start_frame, start_time, now, fps, speed, n_frames):
+    """Frame index that SHOULD be displayed *now* for wall-clock-paced playback.
+
+    Playback is time-driven, not frame-driven: the frame is chosen from elapsed
+    wall time since the pace reference (``start_frame`` shown at ``start_time``),
+    so a slow display simply DROPS intermediate frames instead of falling behind.
+    At ``speed`` s of video per s of wall clock::
+
+        target = start_frame + round((now - start_time) * fps * speed)
+
+    Clamped to the last frame. This is the sole pacing rule; the ratio of
+    video-seconds to wall-seconds equals ``speed`` by construction (until the
+    clamp at end-of-video).
+    """
+    target = int(start_frame) + int(round((now - start_time) * fps * speed))
+    if target < 0:
+        return 0
+    return min(target, int(n_frames) - 1)
+
+
+def _advance_capture(cap, next_fi, target, max_grab_skip):
+    """Position *cap* to decode frame *target*, reusing decoder state where cheap.
+
+    A small FORWARD gap is closed with decode-light ``grab()``s (skip intermediate
+    frames without a BGR convert/copy); a backward / large / unknown gap re-seeks
+    with ``set(CAP_PROP_POS_FRAMES)``. ``next_fi`` is the index *cap* would return
+    next (``None`` = position unknown -> force a seek). Returns
+    ``(ok, bgr_frame, new_next_fi)`` where ``new_next_fi = target + 1``.
+
+    This is the sequential fast path shared by the live reader and the pace probe,
+    so both exercise the identical grab/seek logic (never a per-frame seek).
+    """
+    target = int(target)
+    if next_fi != target:
+        gap = (target - next_fi) if next_fi is not None else None
+        if gap is not None and 0 < gap <= max_grab_skip:
+            for _ in range(gap):          # skip intermediate frames cheaply
+                cap.grab()
+        else:                             # backward / large / unknown -> seek
+            cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+    ok, frame = cap.read()
+    return ok, frame, target + 1
+
+
+# ---------------------------------------------------------------------------
 # Session state
 # ---------------------------------------------------------------------------
 
@@ -201,6 +252,19 @@ class TagSessionState:
     dark_percentile: float = 8.0           # live detect_pupil dark-pixel percentile
     play_next_fi: Optional[int] = None     # frame index play_cap will read NEXT
                                            # (None = position unknown -> force seek)
+    # --- Wall-clock playback pacing (FIX 1: time-driven, drops frames) ---------
+    play_start_time: Optional[float] = None   # perf_counter at the pace reference
+    play_start_frame: Optional[int] = None    # frame index shown at the reference
+    last_played_fi: Optional[int] = None      # last frame the tick itself set (used
+                                              # to detect user navigation mid-play)
+    disp_count: int = 0                    # display refreshes in the current window
+    disp_t0: Optional[float] = None        # start of the display-rate window
+    disp_fps: float = 0.0                  # achieved display refresh rate (HUD)
+    # --- HUD sync-quality cache (FIX 2: skip the LOO-CV fit per played frame) --
+    sync_cache_str: Optional[str] = None   # cached "cv_rmse: ..." line
+    sync_cache_sig: object = None          # anchor-set signature the cache is for
+    pred_cache_key: object = None          # (anchor_sig, mode, target-pos) of pred
+    pred_cache_val: Optional[int] = None   # cached predicted frame for the target
 
 
 def main(argv=None) -> int:
@@ -360,26 +424,23 @@ def main(argv=None) -> int:
     # play_next_fi, so the tracked position never drifts from reality.
     # ---------------------------------------------------------------------
     play_cap = cv2.VideoCapture(video_path)
-    _MAX_GRAB_SKIP = 30  # forward gaps up to this advance via grab(); larger -> seek
+    # Forward gaps up to this advance via grab() (decode-light); larger -> seek.
+    # Time-driven playback drops frames to hold pace, so at higher speeds a tick's
+    # gap grows; keep it comfortably above the per-tick gap at the top speed so
+    # normal playback never falls back to an expensive keyframe re-seek.
+    _MAX_GRAB_SKIP = 60
 
     def _read_seq_full(fi: int) -> Optional[np.ndarray]:
         """Full-frame grayscale for frame *fi*, read SEQUENTIALLY where possible.
 
-        Re-seeks only when play_cap is not already positioned to return *fi*; a
-        small forward gap is closed with cheap grab()s (frame-skip for speed>1).
-        Updates tag.play_next_fi to the frame play_cap will read next. Returns
-        ``None`` on a failed/absent read (callers substitute a placeholder).
+        Delegates the grab/seek advance to the shared, probe-tested
+        ``_advance_capture`` (re-seeks only on a discontinuity; a small forward gap
+        is closed with cheap grab()s). Updates tag.play_next_fi to the frame
+        play_cap will read next. Returns ``None`` on a failed/absent read (callers
+        substitute a placeholder).
         """
-        fi = int(fi)
-        if tag.play_next_fi != fi:
-            gap = (fi - tag.play_next_fi) if tag.play_next_fi is not None else None
-            if gap is not None and 0 < gap <= _MAX_GRAB_SKIP:
-                for _ in range(gap):          # skip intermediate frames cheaply
-                    play_cap.grab()
-            else:                             # backward / large / unknown -> seek
-                play_cap.set(cv2.CAP_PROP_POS_FRAMES, fi)
-        ok, frame = play_cap.read()
-        tag.play_next_fi = fi + 1
+        ok, frame, tag.play_next_fi = _advance_capture(
+            play_cap, tag.play_next_fi, fi, _MAX_GRAB_SKIP)
         if not ok or frame is None:
             return None
         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -546,25 +607,36 @@ def main(argv=None) -> int:
         fig.canvas.draw_idle()
 
     # ---------------------------------------------------------------------
-    # Playback timer
+    # Playback timer (FIX 1: TIME-DRIVEN, not frame-driven).
     #
-    # Pilot FIX 1: speed is now REAL. For speed>=1 we advance ``_play_step()``
-    # frames per tick (skipping the intermediate ones via grab() in _read_seq_full)
-    # and keep the tick interval near real-time, so 2x/4x advance 2/4 as many
-    # frames per second — a clearly different rate. For speed<1 we keep 1
-    # frame/tick and LENGTHEN the interval (the original behaviour). Because
-    # decode can still dominate on this file, the interval is derived so that
-    # frames-advanced-per-second targets fps*speed as closely as the decoder
-    # allows; if decode is the bottleneck the rate is capped there, but the
-    # frame-skip guarantees higher speeds visibly move faster.
+    # A video player holds wall-clock pace by SHOWING THE FRAME DUE NOW and
+    # dropping the ones it had no time to draw — it never tries to draw every
+    # frame. We do the same: each tick asks _playback_target_frame() which frame
+    # the elapsed wall time calls for (start_frame + elapsed*fps*speed) and jumps
+    # there, skipping the intermediates via grab() in _read_seq_full. So 1x plays
+    # at TRUE real time (~fps of VIDEO time) even if the display only manages
+    # ~15-30 redraws/s; 2x plays twice real time; 0.5x half. Micro-optimising the
+    # draw (FIX 2) cannot GUARANTEE real time on every backend — this can, because
+    # the ratio of video-seconds to wall-seconds equals `speed` by construction.
+    #
+    # The timer interval is a small, speed-independent cadence (pacing is done by
+    # the wall-clock formula, not the interval). When no new frame is due yet
+    # (e.g. 0.5x, or the display briefly outrunning video time) the tick is a
+    # cheap no-op, so a fast cadence just maximises the achievable display rate.
     # ---------------------------------------------------------------------
-    def _play_step() -> int:
-        return max(1, int(round(tag.speed))) if tag.speed >= 1.0 else 1
+    _TICK_INTERVAL_MS = 5
 
-    def _play_interval_ms() -> int:
-        # Interval so that step frames / interval ~= fps*speed frames per second.
-        step = _play_step()
-        return max(10, int(round(1000.0 * step / (fps * tag.speed))))
+    def _anchor_pace(now=None):
+        """(Re)set the wall-clock pace reference to the current frame + now.
+
+        Called on play/resume, on a speed change, and whenever the user navigates
+        mid-playback, so pace never "catches up" in a burst and always continues
+        from where the frame actually is.
+        """
+        cur = tag.scrub_state["frame_idx"]
+        tag.play_start_frame = cur
+        tag.play_start_time = time.perf_counter() if now is None else now
+        tag.last_played_fi = cur
 
     def _stop_play():
         tag.playing = False
@@ -578,34 +650,56 @@ def main(argv=None) -> int:
         if fig is None or not plt.fignum_exists(getattr(fig, "number", -1)):
             _stop_play()
             return
+        now = time.perf_counter()
         cur = tag.scrub_state["frame_idx"]
-        if cur >= n_frames - 1:                       # already at the last frame
-            _stop_play()
+        # User navigated (arrow / jump / mode toggle) since the last tick? Re-anchor
+        # the pace reference to the new position rather than yanking playback back
+        # to the old trajectory.
+        if tag.last_played_fi is None or cur != tag.last_played_fi:
+            _anchor_pace(now)
+        target = _playback_target_frame(
+            tag.play_start_frame, tag.play_start_time, now, fps, tag.speed, n_frames)
+        if target <= cur:                     # no new frame due yet -> cheap no-op
+            if cur >= n_frames - 1:
+                _stop_play()
             return
-        fi = min(n_frames - 1, cur + _play_step())    # advance by the speed step
-        tag.scrub_state["frame_idx"] = fi
-        _draw_current(fi)                             # skips fi-1 intermediates
-        if fi >= n_frames - 1:
+        tag.scrub_state["frame_idx"] = target
+        _draw_current(target)                 # drops cur+1..target-1 via grab()
+        tag.last_played_fi = target
+        # Rolling achieved display-rate estimate (HUD truth: shows the user that
+        # frames are being DROPPED to hold pace, not that playback is choppy).
+        tag.disp_count += 1
+        if tag.disp_t0 is None:
+            tag.disp_t0 = now
+        elif now - tag.disp_t0 >= 0.5:
+            tag.disp_fps = tag.disp_count / (now - tag.disp_t0)
+            tag.disp_count = 0
+            tag.disp_t0 = now
+        if target >= n_frames - 1:
             _stop_play()
 
     def _toggle_play(event) -> bool:
         if tag.timer is None:
-            tag.timer = event.canvas.new_timer(interval=_play_interval_ms())
+            tag.timer = event.canvas.new_timer(interval=_TICK_INTERVAL_MS)
             tag.timer.add_callback(_tick)
         if tag.playing:
             _stop_play()
         else:
             tag.playing = True
+            _anchor_pace()                    # resume from HERE (no catch-up burst)
+            tag.disp_count = 0
+            tag.disp_t0 = None
             tag.timer.stop()
-            tag.timer.interval = _play_interval_ms()
+            tag.timer.interval = _TICK_INTERVAL_MS
             tag.timer.start()
         return True
 
     def _apply_speed():
-        if tag.playing and tag.timer is not None:
-            tag.timer.stop()
-            tag.timer.interval = _play_interval_ms()
-            tag.timer.start()
+        # Re-anchor at the current frame so the NEW speed applies from here forward
+        # (time-driven) instead of rescaling the whole elapsed interval and jumping.
+        # The tick cadence is speed-independent, so the timer keeps running as-is.
+        if tag.playing:
+            _anchor_pace()
 
     def _persist_dark_percentile():
         """Record the live pupil dark-pixel percentile in the sidecar (atomic).
@@ -720,37 +814,72 @@ def main(argv=None) -> int:
     # ---------------------------------------------------------------------
     def _hud_fn(fi: int) -> str:
         video_s = float(ts_ms[fi] / 1000.0)
+
+        # Anchor-set signature: the expensive HUD terms (the LOO-CV sync fit AND
+        # the change-mode predicted frame, which itself calls fit_multianchor_clock
+        # via provisional_change_clock) depend ONLY on this set, never on fi, so
+        # they are constant across a whole playback run. Cache them keyed on the
+        # signature and reuse while playing (FIX 2: the fits are far too costly to
+        # run on every dropped/played frame). Idle refreshes still recompute, so
+        # what the HUD shows when the user is stepping is unchanged.
+        entries = tag.anchors["anchors"] if tag.anchors else []
+        # Anchor entries key the clicked frame as "video_frame_idx" (see
+        # video_sync._build_anchor_entry); .get keeps the signature crash-proof for
+        # any seeded/legacy entry that might omit it.
+        sig = tuple((int(a["trial_index"]), a.get("event_type", "baseline_on"),
+                     a.get("video_frame_idx")) for a in entries)
+
         if tag.mode == "change":
             if tag.queue:
                 tgt = tag.queue[tag.queue_pos]
                 mode_line = (f"{subj_display}  {session}   MODE: CHANGE "
                              f"(size{tgt.change_size:g}, {tgt.outcome})")
                 pos, ntot, trial_no = tag.queue_pos + 1, len(tag.queue), tgt.trial_index
-                pred = _change_frame(tag.queue_pos)
             else:
                 mode_line = (f"{subj_display}  {session}   "
                              f"MODE: CHANGE (no big-change targets)")
-                pos, ntot, trial_no, pred = 0, 0, -1, fi
+                pos, ntot, trial_no = 0, 0, -1
         else:
             mode_line = f"{subj_display}  {session}   MODE: BASELINE"
             pos, ntot, trial_no = tag.baseline_pos + 1, len(baseline_on), tag.baseline_pos
-            pred = compute_predicted_frame_idx(
-                float(baseline_on[tag.baseline_pos]),
-                -_baseline_implied_offset(), ts_ms)
+
+        # Predicted frame for the current target (cached; see above). The no-queue
+        # change case has no target -> pred tracks fi (delta 0) and is never cached.
+        if tag.mode == "change" and not tag.queue:
+            pred = fi
+        else:
+            sel = tag.queue_pos if tag.mode == "change" else tag.baseline_pos
+            pred_key = (sig, tag.mode, sel)
+            if (not tag.playing) or pred_key != tag.pred_cache_key \
+                    or tag.pred_cache_val is None:
+                if tag.mode == "change":
+                    pred = _change_frame(tag.queue_pos)
+                else:
+                    pred = compute_predicted_frame_idx(
+                        float(baseline_on[tag.baseline_pos]),
+                        -_baseline_implied_offset(), ts_ms)
+                tag.pred_cache_key = pred_key
+                tag.pred_cache_val = pred
+            else:
+                pred = tag.pred_cache_val
         delta = fi - pred
 
-        entries = tag.anchors["anchors"] if tag.anchors else []
         n_chg = sum(1 for a in entries
                     if a.get("event_type", "baseline_on") == "change_on")
         n_base = len(entries) - n_chg
-        if len(entries) >= 3:
-            try:
-                sync = fit_multianchor_clock(entries, len(baseline_on))
-                qc = f"cv_rmse: {sync.cv_rmse_ms:.1f} ms  {sync.quality}"
-            except ValueError:
-                qc = "cv_rmse: fit failed (degenerate anchors)"
+        if (not tag.playing) or sig != tag.sync_cache_sig or tag.sync_cache_str is None:
+            if len(entries) >= 3:
+                try:
+                    sync = fit_multianchor_clock(entries, len(baseline_on))
+                    qc = f"cv_rmse: {sync.cv_rmse_ms:.1f} ms  {sync.quality}"
+                except ValueError:
+                    qc = "cv_rmse: fit failed (degenerate anchors)"
+            else:
+                qc = "cv_rmse: need >=3 anchors"
+            tag.sync_cache_str = qc
+            tag.sync_cache_sig = sig
         else:
-            qc = "cv_rmse: need >=3 anchors"
+            qc = tag.sync_cache_str
 
         eye_state = "set" if tag.eye_roi is not None else "none"
         mouth_state = "set" if tag.mouth_roi is not None else "none"
@@ -767,14 +896,22 @@ def main(argv=None) -> int:
         n_blink = sum(1 for f in _frames if f["verdict"] == vl.VERDICT_BLINK)
         label_line = f"labels: {n_conf} ok / {n_corr} fix / {n_blink} blink"
 
+        # Speed reads truthfully: the requested multiplier AND, while playing, the
+        # achieved display refresh rate (FIX 1 drops frames to hold pace, so a low
+        # disp rate means "showing fewer, correctly-spaced frames", not "choppy /
+        # slow"). Idle shows just the requested speed (unchanged from before).
+        spd = f"{tag.speed:g}x"
+        if tag.playing and tag.disp_fps > 0:
+            spd += f" (~{tag.disp_fps:.0f}fps disp)"
+
         # Correction-first (Pilot FIX B): the detector is unreliable on this
         # close-camera rig, so DRAGGING the true pupil (p) is the PRIMARY
         # labelling action; confirm (u) and blink (x) are secondary. The keys
         # themselves are unchanged -- only the emphasis/order is.
         legend = ("LABEL: [p]DRAG pupil (PRIMARY)  [u]confirm  [x]blink   |   "
-                  "[space]play  [-/+]spd {:g}x  [,/.]pupil%  [j/k]jump  "
+                  "[space]play  [-/+]spd {}  [,/.]pupil%  [j/k]jump  "
                   "[c]base<->chg  [e/m]roi  [f]zoom  [enter]save  [d]del  [q]quit"
-                  ).format(tag.speed)
+                  ).format(spd)
         return "\n".join([
             mode_line,
             (f"trial {pos}/{ntot} (idx {trial_no})   frame {fi} ({video_s:.2f}s)"

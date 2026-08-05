@@ -151,7 +151,20 @@ def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
             return gray[y0:y1, x0:x1]
         return gray
 
-    fig = plt.figure(figsize=(8, 10))
+    # Figure size (playback perf, FIX 2): the dominant per-frame cost is
+    # RASTERISING the frame image into the axes, which scales with the DISPLAYED
+    # image pixels — i.e. with how far the axes is upsampled past the source. The
+    # old 8x10 gave a frame axes ~800x833 px that upsampled a 640x512 eye frame to
+    # ~800x640; trimming the (portrait-letterboxed) height to 6.5 makes the axes
+    # height BIND the fit, so the image displays near 1:1 (~677x542) — measured
+    # ~46 -> ~41 ms/full-draw (Agg), lifting the achievable display rate with no
+    # loss of detail (it was upsampled, not downsampled). WIDTH stays 8 so the
+    # wide HUD legend row is byte-for-byte unaffected, and the 2-row layout /
+    # height_ratios are unchanged, so click_anchor's fixed-crop view is only
+    # slightly shorter (never restructured). interpolation="nearest" (below) is
+    # both faster than the antialiased default AND the honest choice for judging
+    # raw pixels: no invented smoothing between real pixel values.
+    fig = plt.figure(figsize=(8, 6.5))
     gs = fig.add_gridspec(2, 1, height_ratios=[5, 1], hspace=0.1)
     ax_frame = fig.add_subplot(gs[0])
     ax_hud = fig.add_subplot(gs[1])
