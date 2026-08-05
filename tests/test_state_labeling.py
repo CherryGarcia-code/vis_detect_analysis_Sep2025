@@ -233,12 +233,16 @@ def test_list_pkl_sessions_filters_and_sorts(tmp_path, monkeypatch):
     pkl_dir = tmp_path / "data" / "pkls" / "BG_999"
     pkl_dir.mkdir(parents=True)
     for fn in ["BG_999_01072025.pkl", "BG_999_27062025.pkl",
-               "BG_999_05092025_b.pkl",     # variant token -> skipped (not numeric)
+               "BG_999_05092025_b.pkl",     # suffixed-only date -> INCLUDED (see below)
                "OTHER_01012025.pkl"]:        # wrong subject prefix -> ignored
         (pkl_dir / fn).touch()
     monkeypatch.setattr(LOADER, "ROOT", str(tmp_path))
     names = LOADER.list_pkl_sessions("BG_999")
-    assert names == ["27062025", "01072025"]   # numeric only, chronological
+    # 943fbdf deliberately stopped dropping suffixed-only dates: when a date's
+    # ONLY recording carries a _b/_c/_v2 suffix, discarding it silently hid a
+    # real session. The date token is returned; the suffix is resolved later by
+    # resolve_session_pkl. Chronological, not lexicographic.
+    assert names == ["27062025", "01072025", "05092025"]
 
 
 def test_render_tag_figure_two_and_three_track(tmp_path):
