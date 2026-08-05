@@ -114,3 +114,106 @@ def alignment_residual(
     if n_fin < MIN_RESID_N:
         return float("nan"), n_fin
     return float(np.median(np.abs(resid[finite]))), n_fin
+
+
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass
+class Alignment:
+    """A verified pairing of a contiguous trial block to a contiguous event block."""
+
+    trial_start: int
+    n_trials_matched: int
+    event_offset: int
+    agreement: float
+    resid_s: float
+    resid_n: int
+    runner_up_agreement: float = float("nan")
+    runner_up_resid_s: float = float("nan")
+
+
+def _passes(agreement: float, resid_s: float) -> bool:
+    return (
+        np.isfinite(agreement)
+        and agreement >= ACCEPT_AGREEMENT
+        and np.isfinite(resid_s)
+        and resid_s < ACCEPT_RESID_S
+    )
+
+
+def solve_alignment(trials: Sequence[Any], ni_events: Dict[str, Any]) -> Optional[Alignment]:
+    """Brute-force search for the unique (trial_start, event_offset) pairing.
+
+    NOTE: this operates on a built pkl, where the per-run JSON boundaries are no
+    longer available -- so the search is exhaustive by construction. The
+    converter has a different, JSON-informed path (see ingest.py).
+
+    Search space:
+      sign B  -> trial_start = 0, event_offset varies   (events outnumber trials)
+      sign A  -> event_offset = 0, trial_start varies   (trials outnumber events)
+    Both reduce to matching a contiguous trial block against a contiguous event
+    block; we scan whichever dimension has slack.
+    """
+    trials = list(trials or [])
+    n_tr = len(trials)
+    ni = ni_events or {}
+    n_ev = len(_arr(ni.get("Baseline_ON")))
+    if n_tr == 0 or n_ev == 0:
+        return None
+    for key in _REQUIRED_KEYS:
+        if len(_arr(ni.get(key))) != n_ev:
+            return None
+
+    candidates = []
+    if n_ev >= n_tr:
+        # sign B: whole trial table fits; slide it along the event arrays
+        for off in range(0, n_ev - n_tr + 1):
+            candidates.append((0, n_tr, off))
+    else:
+        # sign A: whole event array is covered; slide the trial window
+        for start in range(0, n_tr - n_ev + 1):
+            candidates.append((start, n_ev, 0))
+
+    scored = []
+    for start, n_match, off in candidates:
+        sl = slice(start, start + n_match)
+        agr, _ = outcome_change_agreement(trials, ni, sl, off)
+        if not np.isfinite(agr):
+            continue
+        res, res_n = alignment_residual(trials, ni, sl, off)
+        scored.append((agr, res, res_n, start, n_match, off))
+
+    if not scored:
+        return None
+
+    # rank on Check 1 (full coverage) first, then Check 2 (precision)
+    scored.sort(key=lambda r: (-r[0], r[1] if np.isfinite(r[1]) else np.inf))
+    best = scored[0]
+    runner = scored[1] if len(scored) > 1 else None
+    if not _passes(best[0], best[1]):
+        return None
+
+    return Alignment(
+        trial_start=best[3],
+        n_trials_matched=best[4],
+        event_offset=best[5],
+        agreement=best[0],
+        resid_s=best[1],
+        resid_n=best[2],
+        runner_up_agreement=runner[0] if runner else float("nan"),
+        runner_up_resid_s=runner[1] if runner else float("nan"),
+    )
+
+
+def build_trial_event_index(n_trials: int, alignment: Optional[Alignment]) -> np.ndarray:
+    """Per-trial map into the per-trial ni_events arrays. -1 = no ephys event."""
+    idx = np.full(int(n_trials), -1, dtype=int)
+    if alignment is None:
+        return idx
+    a = alignment
+    idx[a.trial_start : a.trial_start + a.n_trials_matched] = np.arange(
+        a.event_offset, a.event_offset + a.n_trials_matched, dtype=int
+    )
+    return idx
