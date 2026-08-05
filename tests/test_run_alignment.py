@@ -16,13 +16,16 @@ class FakeTrial:
         self.change_time = change_time
 
 
-def make_case(n=60, offset=0, n_pad=0):
+def make_case(n=60, offset=0, n_pad=0, seed=0):
     """Build trials + ni_events that are aligned at `offset`.
 
     Every 2nd trial is a Hit (change presented); the rest alternate FA/abort.
     `n_pad` prepends unrelated events so the true alignment is at index n_pad.
+    `seed` controls the change_time draws: distinct seeds produce genuinely
+    different change_times, so concatenated runs don't accidentally align on a
+    shared-seed prefix (which would let a wrong trial_start pass Check 2).
     """
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(seed)
     trials, bon, con = [], [], []
     for _ in range(n_pad):                      # orphan events from earlier runs
         t0 = len(bon) * 10.0
@@ -103,13 +106,17 @@ def test_solver_finds_sign_b_offset():
 def test_solver_finds_sign_a_trial_slice():
     """Sign A: trial table spans runs; only a suffix belongs to this recording."""
     trials_run2, ni = make_case(n=60)
-    trials_run1, _ = make_case(n=40)
+    trials_run1, _ = make_case(n=40, seed=1)    # DISTINCT change_times from run 2
     trials = trials_run1 + trials_run2          # concatenated, as the converter does
     a = solve_alignment(trials, ni)
     assert a is not None
     assert a.trial_start == 40
     assert a.n_trials_matched == 60
     assert a.event_offset == 0
+    # Uniqueness: the runner-up must NOT also pass both checks. This is the same
+    # gate Task 3's real-data repair uses -- without distinct seeds, trial_start=0
+    # would spuriously pass Check 2 on the shared-seed prefix and this would fail.
+    assert not (a.runner_up_agreement >= 1.0 and a.runner_up_resid_s < 0.05)
 
 
 def test_solver_returns_none_when_unsolvable():
@@ -124,7 +131,7 @@ def test_solver_returns_none_for_empty_trial_table():
 
 
 def test_build_trial_event_index_maps_and_marks_missing():
-    trials_run1, _ = make_case(n=40)
+    trials_run1, _ = make_case(n=40, seed=1)    # DISTINCT change_times from run 2
     trials_run2, ni = make_case(n=60)
     trials = trials_run1 + trials_run2
     a = solve_alignment(trials, ni)
