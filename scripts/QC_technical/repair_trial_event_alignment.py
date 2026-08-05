@@ -72,12 +72,24 @@ def repair_session(path: str, dry_run: bool = False) -> dict:
         with open(path, "wb") as f:
             pickle.dump(s, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-        # behaviour must be byte-identical
+        # behaviour must be byte-identical, and the map must have landed.
+        # Use explicit raises, NOT assert: `py -O` strips asserts, and this is
+        # the integrity gate on an irreplaceable-data mutation.
         chk = load_session(path)
         try:
-            assert [getattr(t, "trialoutcome", None) for t in (chk.trials or [])] == outcomes_before, (
-                f"{path}: trial outcomes changed during repair"
-            )
+            outcomes_after = [getattr(t, "trialoutcome", None) for t in (chk.trials or [])]
+            if outcomes_after != outcomes_before:
+                raise RuntimeError(
+                    f"{path}: REPAIR CORRUPTED BEHAVIOUR — trial outcomes changed "
+                    f"({len(outcomes_before)} before, {len(outcomes_after)} after). "
+                    f"Restore from the backup in qc1_backup/."
+                )
+            written = getattr(chk, "trial_event_index", None)
+            if written is None or not np.array_equal(np.asarray(written, dtype=int), idx):
+                raise RuntimeError(
+                    f"{path}: trial_event_index did not round-trip through the write. "
+                    f"Restore from the backup in qc1_backup/."
+                )
         finally:
             del chk
         return row

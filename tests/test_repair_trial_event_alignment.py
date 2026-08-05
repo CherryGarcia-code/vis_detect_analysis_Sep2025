@@ -104,3 +104,49 @@ def test_unsolvable_session_gets_all_minus_one(tmp_path):
     with open(p, "rb") as f:
         after = pickle.load(f)
     assert (after.trial_event_index == -1).all()
+
+
+def test_post_write_check_raises_if_map_did_not_round_trip(tmp_path, monkeypatch):
+    """The post-write integrity gate must RAISE (not a strippable assert) when
+    the written map does not survive the reload. We force the verification
+    reload to return a session whose trial_event_index differs from what was
+    written, simulating a write that silently failed to persist the map.
+    """
+    import repair_trial_event_alignment as R
+    p = _make_pkl(tmp_path)
+
+    real_load = R.load_session
+    calls = {"n": 0}
+
+    def fake_load(path):
+        s = real_load(path)
+        calls["n"] += 1
+        if calls["n"] >= 2:  # the verification reload inside repair_session
+            s.trial_event_index = np.full(len(s.trials or []), -999, dtype=int)
+        return s
+
+    monkeypatch.setattr(R, "load_session", fake_load)
+    with pytest.raises(RuntimeError, match="did not round-trip through the write"):
+        repair_session(p)
+
+
+def test_post_write_check_raises_if_behaviour_changed(tmp_path, monkeypatch):
+    """If the reloaded behaviour differs from before the write, the gate must
+    RAISE RuntimeError (not a strippable assert) and point to the backup.
+    """
+    import repair_trial_event_alignment as R
+    p = _make_pkl(tmp_path)
+
+    real_load = R.load_session
+    calls = {"n": 0}
+
+    def fake_load(path):
+        s = real_load(path)
+        calls["n"] += 1
+        if calls["n"] >= 2 and s.trials:  # the verification reload
+            s.trials[0].trialoutcome = "CORRUPTED"
+        return s
+
+    monkeypatch.setattr(R, "load_session", fake_load)
+    with pytest.raises(RuntimeError, match="REPAIR CORRUPTED BEHAVIOUR"):
+        repair_session(p)
