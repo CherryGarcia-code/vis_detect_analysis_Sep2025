@@ -49,6 +49,13 @@ class Session:
     good_cluster_ids: Optional[List[int]] = None
     good_and_stable_ids: Optional[List[int]] = None
     ni_events: Optional[Dict[str, Any]] = None
+    # QC1: per-trial map into the per-trial ni_events arrays (Baseline_ON,
+    # Change_ON, Valve_L). -1 = this trial has no corresponding ephys event.
+    # None = alignment not yet verified for this session.
+    # MUST be a plain None default: field(default_factory=...) leaves the key
+    # out of __dict__ on pkls written before this field existed, so attribute
+    # access would raise AttributeError.
+    trial_event_index: Optional[np.ndarray] = None
 
 def _normalize_event_array(x):
     """Normalize an NI event entry to a 1D numpy array of times.
