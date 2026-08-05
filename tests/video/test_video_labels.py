@@ -363,6 +363,83 @@ def test_set_pupil_dark_percentile_updates_and_coerces_float():
     assert isinstance(sc["pupil_dark_percentile"], float)
 
 
+# ---------------------------------------------------------------------------
+# Pilot FIX A: ROI-scaled pupil-detection bounds. The absolute BG_046 corneal-
+# calibration caps (min 50 / max 8000 px^2) do not transfer across camera
+# geometry: on the close-camera BG_031 rig the true pupil (~31,300 px^2) EXCEEDS
+# the 8000 cap, so the correct contour is rejected and a ~105-px speck wins.
+# pupil_area_bounds scales the caps to the eye ROI the human drew instead, and
+# the effective bounds are recorded in the sidecar (additive, optional).
+# ---------------------------------------------------------------------------
+
+
+def test_pupil_area_bounds_scales_to_roi_and_admits_ground_truth():
+    # The pilot's real eye ROI: [30,222,1,210] -> (222-30)*(210-1) = 40,128 px^2.
+    eye_roi = (30, 222, 1, 210)
+    roi_area = (222 - 30) * (210 - 1)
+    assert roi_area == 40128
+    min_area, max_area = vl.pupil_area_bounds(eye_roi)   # defaults 0.01 / 0.95
+    assert min_area == int(roi_area * 0.01) == 401
+    assert max_area == int(roi_area * 0.95) == 38121
+    # The human ground-truth pupil (~31,300 px^2) must be ADMITTED — the whole
+    # point of the fix. The absolute 8000-px cap would have rejected it.
+    gt_area = 31300
+    assert min_area < gt_area < max_area
+    assert gt_area > 8000                    # would have been rejected before
+    # The measured reflection specks (105-268 px^2) must be REJECTED.
+    assert 105 < min_area and 268 < min_area
+
+
+def test_pupil_area_bounds_normalizes_inverted_box():
+    # A box's area is direction-independent, so an inverted drag gives the SAME
+    # bounds as its normalized form (safe to order-normalize; cannot invent an ROI).
+    assert vl.pupil_area_bounds((222, 30, 210, 1)) == vl.pupil_area_bounds((30, 222, 1, 210))
+
+
+def test_pupil_area_bounds_custom_fractions():
+    # 100x100 = 10,000 px^2 ROI; fractions applied directly.
+    assert vl.pupil_area_bounds((0, 100, 0, 100), min_frac=0.02, max_frac=0.5) == (200, 5000)
+
+
+def test_pupil_area_bounds_degenerate_raises():
+    with pytest.raises(ValueError):
+        vl.pupil_area_bounds((50, 50, 10, 200))          # zero height
+    with pytest.raises(ValueError):
+        vl.pupil_area_bounds((10, 200, 80, 80))          # zero width
+
+
+def test_pupil_detect_bounds_round_trips_through_save_load(tmp_path):
+    sc = vl.new_sidecar("BG_031", "09042025", [512, 640])
+    vl.set_pupil_detect_bounds(sc, 401, 38121, 0.35, 0.01, 0.95)
+    vl.save_sidecar(sc, "09042025", "BG_031", labels_dir=str(tmp_path))
+    loaded = vl.load_sidecar("09042025", "BG_031", labels_dir=str(tmp_path))
+    got = vl.get_pupil_detect_bounds(loaded)
+    assert got == {"min_area": 401, "max_area": 38121, "min_circularity": 0.35,
+                   "min_frac": 0.01, "max_frac": 0.95}
+
+
+def test_get_pupil_detect_bounds_none_when_absent_backward_compat():
+    # A fresh sidecar has no bounds recorded yet (they are written at detect time
+    # from the eye ROI); a pre-field sidecar likewise lacks the key. Both must
+    # return None, never KeyError, so the caller falls back to the defaults.
+    sc = vl.new_sidecar("BG_031", "09042025", [512, 640])
+    assert "pupil_detect_bounds" not in sc
+    assert vl.get_pupil_detect_bounds(sc) is None
+    legacy = {"schema_version": 1, "subject": "BG_031", "session": "09042025",
+              "camera": "eye_cam", "frame_size": [512, 640], "rois": {}, "frames": []}
+    assert vl.get_pupil_detect_bounds(legacy) is None
+
+
+def test_set_pupil_detect_bounds_coerces_and_is_additive():
+    sc = vl.new_sidecar("BG_031", "09042025", [512, 640])
+    ret = vl.set_pupil_detect_bounds(sc, 401.0, 38121.0, 0.35, 0.01, 0.95)
+    assert ret is sc                                     # mutates in place
+    assert sc["schema_version"] == 1                     # additive: no schema bump
+    b = sc["pupil_detect_bounds"]
+    assert isinstance(b["min_area"], int) and isinstance(b["max_area"], int)
+    assert isinstance(b["min_circularity"], float)
+
+
 def test_image_extent_maps_cropped_pixel_to_true_fullframe_coord():
     # The crux regression, expressed as the imshow pixel->data map: the array
     # pixel that SHOWS a given full-frame point must read back that point's TRUE

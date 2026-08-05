@@ -33,6 +33,16 @@ Schema (v1)::
                                        #   sidecar that PREDATES this field loads
                                        #   fine and falls back to the default; this
                                        #   is why schema_version is NOT bumped.
+      "pupil_detect_bounds": {         # OPTIONAL, additive (schema stays v1):
+        "min_area": int, "max_area": int,   # EFFECTIVE px^2 caps passed to the
+                                       #   detector (scaled to the eye ROI, Pilot
+                                       #   FIX A -- absolute BG_046 pixels do not
+                                       #   transfer across camera geometry).
+        "min_circularity": float,      # relaxed cap (reflections/irregular boundary)
+        "min_frac": float, "max_frac": float  # the ROI-area fractions used, so
+      },                               #   sub-project C reproduces the exact
+                                       #   bounds the label was judged against.
+                                       #   Absent on a pre-field sidecar -> None.
     }
 """
 from __future__ import annotations
@@ -64,6 +74,30 @@ VERDICT_BLINK = "blink"
 # drift, the detector's function default wins at detection time; this value only
 # seeds a brand-new sidecar and backfills a pre-field one.
 DEFAULT_PUPIL_DARK_PERCENTILE = 8.0
+
+# --- Pilot FIX A: ROI-relative pupil-detection bounds -----------------------
+# ``visdetect.core.video_sync.detect_pupil_in_frame`` defaults to ABSOLUTE pixel
+# bounds tuned for corneal CALIBRATION on BG_046 (min 50 / max 8000 px^2, min
+# circularity 0.55), where the camera sat far from the eye and the pupil was
+# small in pixels. On a close-camera rig (BG_031) the true pupil is ~31,300 px^2
+# -- it EXCEEDS the 8000 cap, so the correct contour is rejected and a tiny
+# reflection speck (~105 px^2, ~300x too small) wins; raising the threshold makes
+# the blob bigger and it is rejected entirely (None). Absolute-pixel bounds do
+# not transfer across camera geometry, so the tagger scales them to the eye ROI
+# the human drew (see :func:`pupil_area_bounds`). These are NOT changes to the
+# shared detector's defaults (that would perturb corneal auto-calibration) --
+# they are the tagger's per-call arguments.
+DEFAULT_PUPIL_MIN_AREA_FRAC: float = 0.01   # min blob area = 1% of the eye-ROI area
+DEFAULT_PUPIL_MAX_AREA_FRAC: float = 0.95   # max blob area = 95% of the eye-ROI area
+# Relaxed from the corneal-cal 0.55: two bright corneal reflections sit INSIDE
+# the pupil (punching holes) and the temporal eyeball boundary is irregular on a
+# close-up rig, both of which depress 4*pi*area/perimeter^2. Determined
+# EXPERIMENTALLY on BG_031/09042025 frame 8063 -- the blob whose major diameter
+# best matches the human ground truth (dark_percentile 40: major 205.8 px vs GT
+# 214 px, -4%) has circularity 0.581, so any floor <= ~0.55 admits it; 0.35
+# keeps margin for the mid-range fill-out blobs (circ 0.53-0.77 across pct 25-45)
+# while still rejecting jagged fur/eyelash fragments (circ < 0.35).
+DEFAULT_PUPIL_MIN_CIRCULARITY: float = 0.35
 
 
 def label_sidecar_path(session, subject: Optional[str] = None,
@@ -172,6 +206,75 @@ def set_pupil_dark_percentile(sidecar: dict, value: float) -> dict:
     """
     sidecar["pupil_dark_percentile"] = float(value)
     return sidecar
+
+
+def pupil_area_bounds(eye_roi, min_frac: float = DEFAULT_PUPIL_MIN_AREA_FRAC,
+                      max_frac: float = DEFAULT_PUPIL_MAX_AREA_FRAC
+                      ) -> Tuple[int, int]:
+    """``(min_area, max_area)`` in px^2 scaled to the eye ROI box, so the pupil
+    detector transfers across camera geometries instead of using the absolute
+    BG_046 corneal-calibration pixels (50 / 8000 px^2).
+
+    ``eye_roi`` is a full-frame ``(y0, y1, x0, x1)`` box -- the SAME coords the
+    tagger stores and hands to ``detect_pupil_in_frame`` -- and ``min_frac`` /
+    ``max_frac`` are fractions of the ROI's pixel area. Inverted coords are
+    order-normalized (a box's area is direction-independent, so normalizing here
+    cannot invent an ROI the user never drew).
+
+    Why these defaults (measured on BG_031/09042025 frame 8063, eye ROI
+    ``[30,222,1,210]`` = 40,128 px^2): the human ground-truth pupil is
+    ~31,300 px^2 = **78% of the ROI area**, so ``max_frac=0.95`` comfortably
+    exceeds it (the absolute 8000-px cap rejected it, letting a 105-px reflection
+    speck win ~300x too small) while still rejecting a fully-dark closed-eye /
+    blink frame (~100% of the ROI). ``min_frac=0.01`` -> 401 px^2 here, which
+    rejects the measured reflection specks (105-268 px^2 = 0.26-0.67% of the ROI)
+    yet sits far below any real (even constricted) pupil.
+
+    Raises ``ValueError`` on a zero-area box -- a degenerate ROI has no
+    meaningful area bounds.
+    """
+    y0, y1, x0, x1 = (int(v) for v in eye_roi)
+    y0, y1 = sorted((y0, y1))
+    x0, x1 = sorted((x0, x1))
+    roi_area = (y1 - y0) * (x1 - x0)
+    if roi_area <= 0:
+        raise ValueError(f"degenerate eye_roi (zero area): {tuple(eye_roi)!r}")
+    return (int(roi_area * min_frac), int(roi_area * max_frac))
+
+
+def set_pupil_detect_bounds(sidecar: dict, min_area: int, max_area: int,
+                            min_circularity: float, min_frac: float,
+                            max_frac: float) -> dict:
+    """Record the EFFECTIVE pupil-detection bounds the live proposal was judged
+    against (Pilot FIX A), mirroring :func:`set_pupil_dark_percentile`'s style.
+
+    Stores BOTH the effective px^2 caps (``min_area`` / ``max_area``, already
+    scaled to the current eye ROI) AND the policy that produced them
+    (``min_frac`` / ``max_frac`` / ``min_circularity``), so sub-project C can
+    reproduce EXACTLY what the human judged against without re-deriving anything.
+    Additive + optional: it does NOT bump ``schema_version`` and a sidecar
+    lacking it loads fine (see :func:`get_pupil_detect_bounds`). Mutated in place;
+    returns *sidecar*.
+    """
+    sidecar["pupil_detect_bounds"] = {
+        "min_area": int(min_area),
+        "max_area": int(max_area),
+        "min_circularity": float(min_circularity),
+        "min_frac": float(min_frac),
+        "max_frac": float(max_frac),
+    }
+    return sidecar
+
+
+def get_pupil_detect_bounds(sidecar: dict) -> Optional[dict]:
+    """Return the recorded ``pupil_detect_bounds`` dict, or ``None`` if absent.
+
+    OPTIONAL + backward-compatible: a sidecar written before the field existed
+    (e.g. the pilot's own) simply lacks the key, so this accessor returns
+    ``None`` rather than ``KeyError``-ing -- the caller then falls back to the
+    module defaults (``DEFAULT_PUPIL_*``).
+    """
+    return sidecar.get("pupil_detect_bounds")
 
 
 def upsert_frame_label(sidecar: dict, frame_idx: int, verdict: str,

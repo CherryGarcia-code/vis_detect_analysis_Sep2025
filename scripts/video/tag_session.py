@@ -45,6 +45,15 @@ Keybindings (see docs/superpowers/specs/2026-07-23-camera-tagger-ux-design.md)
   e / m                   drag the eye / mouth ROI (full-frame view only); each is
                           drawn as a persistent rectangle (eye=cyan, mouth=orange)
   f                       toggle full-frame <-> clamped eye-zoom
+  p                       CORRECT the pupil: drag the true ellipse. PRIMARY
+                          labelling action (Pilot FIX B) — the dark-blob detector
+                          is unreliable on this close-camera rig, so drawing the
+                          truth is the norm, not confirming a proposal. Works even
+                          when the detector proposed NOTHING: the correction is
+                          recorded with proposed=None (the detector-miss case).
+  u                       confirm the proposed ellipse is correct (secondary;
+                          no-ops when there is no proposal to confirm)
+  x                       blink / occluded: no valid pupil this frame (secondary)
   home / end              first / last target
   d                       delete this target's anchor (current mode's type)
   enter                   save anchor and KEEP the window open (design-primary;
@@ -410,6 +419,16 @@ def main(argv=None) -> int:
         admits more dark pixels -> a larger blob, so the human can widen an
         under-inclusive proposal with `,`/`.` and the label records the exact
         threshold it was judged against.
+
+        Pilot FIX A: the area/circularity bounds are SCALED to the eye ROI the
+        human drew (vl.pupil_area_bounds + the relaxed vl.DEFAULT_PUPIL_*), NOT
+        the shared detector's absolute BG_046 corneal-calibration pixels (max
+        8000 px^2). On a close-camera rig the true pupil EXCEEDS 8000 px^2, so
+        the absolute cap rejected the correct contour and a tiny speck won. The
+        effective bounds are recorded in the sidecar (in-memory here; persisted
+        on the next save) so sub-project C reproduces what was judged against.
+        The shared ``detect_pupil_in_frame`` is UNCHANGED -- only its per-call
+        arguments differ, leaving corneal auto-calibration's defaults intact.
         """
         if tag.eye_roi is None:
             tag.last_proposed = None
@@ -418,9 +437,21 @@ def main(argv=None) -> int:
         if gray is None:
             tag.last_proposed = None
             return
-        det = detect_pupil_in_frame(gray, search_roi=tag.eye_roi,
-                                    dark_percentile=tag.dark_percentile)
+        min_area, max_area = vl.pupil_area_bounds(tag.eye_roi)
+        det = detect_pupil_in_frame(
+            gray, search_roi=tag.eye_roi,
+            min_area=min_area, max_area=max_area,
+            min_circularity=vl.DEFAULT_PUPIL_MIN_CIRCULARITY,
+            dark_percentile=tag.dark_percentile)
         tag.last_proposed = vl.ellipse_from_detection(det)  # {cx,cy,major,minor,angle}|None
+        # Record the EXACT bounds this proposal was judged against (Pilot FIX A).
+        # In-memory only here (detection runs every frame); it rides along on the
+        # next atomic save_sidecar (label / ROI draw / percentile nudge / quit).
+        if tag.sidecar is not None:
+            vl.set_pupil_detect_bounds(
+                tag.sidecar, min_area, max_area,
+                vl.DEFAULT_PUPIL_MIN_CIRCULARITY,
+                vl.DEFAULT_PUPIL_MIN_AREA_FRAC, vl.DEFAULT_PUPIL_MAX_AREA_FRAC)
 
     def _update_overlay():
         """Draw/refresh the proposed-ellipse patch on the scrubber's frame axis.
@@ -736,9 +767,13 @@ def main(argv=None) -> int:
         n_blink = sum(1 for f in _frames if f["verdict"] == vl.VERDICT_BLINK)
         label_line = f"labels: {n_conf} ok / {n_corr} fix / {n_blink} blink"
 
-        legend = ("[space]play  [-/+]spd {:g}x  [,/.]pupil%  [j/k]jump  "
-                  "[c]base<->chg  [e/m]roi  [f]zoom  [u]ok  [p]fix  [x]blink  "
-                  "[enter]save  [d]del  [q]quit"
+        # Correction-first (Pilot FIX B): the detector is unreliable on this
+        # close-camera rig, so DRAGGING the true pupil (p) is the PRIMARY
+        # labelling action; confirm (u) and blink (x) are secondary. The keys
+        # themselves are unchanged -- only the emphasis/order is.
+        legend = ("LABEL: [p]DRAG pupil (PRIMARY)  [u]confirm  [x]blink   |   "
+                  "[space]play  [-/+]spd {:g}x  [,/.]pupil%  [j/k]jump  "
+                  "[c]base<->chg  [e/m]roi  [f]zoom  [enter]save  [d]del  [q]quit"
                   ).format(tag.speed)
         return "\n".join([
             mode_line,
