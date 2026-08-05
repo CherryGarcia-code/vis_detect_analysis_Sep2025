@@ -17,8 +17,13 @@ def test_old_pickle_without_the_field_still_loads_and_reads_none():
     raw = pickle.loads(pickle.dumps(s))
     del raw.__dict__["trial_event_index"]          # what an old pkl looks like
     revived = pickle.loads(pickle.dumps(raw))
-    # A plain None default makes this safe; default_factory would AttributeError.
-    assert getattr(revived, "trial_event_index", None) is None
+    # Plain attribute access is deliberate: the guarantee under test is that
+    # accessing the attribute WORKS on a pkl that lacks the key, resolving to
+    # the class-level None default. Under field(default_factory=...) the key is
+    # absent from __dict__ AND there is no class-level default, so this line
+    # raises AttributeError. Using getattr(..., None) here would silently
+    # supply its own None and mask exactly that failure.
+    assert revived.trial_event_index is None
 
 
 def test_field_round_trips_an_array():
