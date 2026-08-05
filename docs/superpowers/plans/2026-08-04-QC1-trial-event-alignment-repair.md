@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.10, numpy, pandas, pytest. Repo venv invoked as `py`.
 
+**Branch state:** `feature/early-lick-and-session-sorting`, **merged up to main on 2026-08-04** (`bf0c875`) so that `tf_glm_data.py` carries the lick-channel fix. Do not revert `_collect_lick_times`'s delegation to `lick_channels.get_lick_times`. Two pre-existing stale test modules (`tests/test_coding_direction.py`, `tests/test_population.py`) reference modules deleted in the `analysis_suite` archival and fail to import — that is not caused by this work; leave them alone.
+
 **Spec:** `docs/superpowers/specs/2026-08-03-QC1-trial-event-alignment-repair-design.md` — read §1 (root cause), §2 (both checks), §3 (representation) before starting.
 
 ## Global Constraints
@@ -1092,8 +1094,14 @@ git commit -m "feat(QC1): align.py honours trial_event_index; -1 trials never ba
 This is the highest-stakes consumer: it bypasses `align.py` entirely and is the validated TF-encoding GLM already run on all three mice. Contamination is measured in the spec (BG_031 VMS: 7/42 sessions, `resp_log2` 1.26% on affected vs 6.31% clean).
 
 **Files:**
-- Modify: `src/visdetect/analysis/tf_glm_data.py:519-541`
+- Modify: `src/visdetect/analysis/tf_glm_data.py:524-546` (line numbers are **post-merge with main**, which brought in the lick-channel fix — `_collect_lick_times` now delegates to `lick_channels.get_lick_times`. Do not revert that.)
 - Test: `tests/test_tf_glm_data_alignment.py`
+
+> **Not in scope for this task:** the separate builder at `tf_glm_data.py:321-345` reads `ks.trials`
+> — a pandas table whose `Baseline_ON`/`Change_ON` are already columns, aligned within that table by
+> construction. It is a different ingestion path, not the `session.ni_events` positional bug. Its
+> alignment is inherited from whatever built that table, so it is a **Task 9 audit item**, not an
+> assumption. Do not "fix" it here.
 
 **Interfaces:**
 - Consumes: Task 4's field.
@@ -1155,7 +1163,7 @@ def _event_index_for(session, i: int) -> int:
     return int(tei[i]) if i < tei.size else -1
 ```
 
-Then in the trial loop, replace the positional reads (`tf_glm_data.py:534` and `:541`):
+Then in the trial loop, replace the positional reads (`tf_glm_data.py:539` and `:546`):
 
 ```python
     for i, trial in enumerate(session.trials):
@@ -1175,7 +1183,7 @@ and
         raw_change = float(con[j]) if (j < con.size and np.isfinite(con[j])) else np.nan
 ```
 
-Also fix the `ends` computation at `tf_glm_data.py:519-530`, which is indexed by trial index. Replace `n = len(session.trials)` with the event count and drop the `i >= n` guard so `ends` is an **event**-indexed array:
+Also fix the `ends` computation at `tf_glm_data.py:524-535`, which is indexed by trial index. Replace `n = len(session.trials)` with the event count and drop the `i >= n` guard so `ends` is an **event**-indexed array:
 
 ```python
     n_ev = int(bon.size)
@@ -1474,60 +1482,43 @@ git commit -m "feat(QC1): repair all solvable sessions; audit closed with measur
 
 ---
 
-### Task 12: Regenerate the contaminated TF registries
+## Follow-on work — NOT in this plan
 
-The spec measures the damage: BG_031 (VMS) has 7/42 sessions and 20% of its units from affected sessions, scoring `resp_log2` 1.26% vs 6.31% clean. The recorded headline "VMS 5.3% > DMS 2.8–3.1%" is the pooled contaminated figure.
+### The TF registries must be rebuilt ONCE, for BOTH defects
 
-**Files:**
-- Regenerate: `data/cache/tf_responsive/bg046_tf_responsive.csv`, `bg031_tf_responsive.csv`, `bg039_tf_responsive.csv`
-- Modify: `docs/science/2026-08-04-QC1-alignment-repair-results.md`
+An earlier task in this plan proposed regenerating `data/cache/tf_responsive/*.csv` here. **That was
+removed on 2026-08-04**, for reasons established by the already-merged lick-channel work
+(`fix/lick-channel-resolver`, merged to main as `c62448a`; memory note `lick_channel_defect_jul2026`):
 
-**Interfaces:**
-- Consumes: Tasks 8, 11 (patched GLM + repaired pkls).
-- Produces: corrected registries and a before/after comparison.
+- **The registries were already stale before QC1.** A MATLAB re-extraction batch (6 Mar 2026,
+  33 BG_046 sessions) under-detects licks 10-40x, and the old `_collect_lick_times` pooled all four
+  lick channels. Both are now fixed, but the shipped registries predate the fix and are **not
+  reproducible from current code** (a banner already says so in that directory's README).
+- **A local re-run cannot reproduce the registry schema.** `resp_lin` / `c1_r_lin` / `kernel_fwhm`
+  come only from `cluster_bg/tf_glm_bg_task.py` (3 fits/unit); the local runner does 2. The original
+  build was a **cluster** job; a faithful rebuild is ~**624 core-hr**.
+- **The cheap trick does not transfer to QC1.** The lick fix leaves `trial_index` unchanged, so the
+  seed-fixed `make_trial_folds` yields identical CV folds and a *paired within-unit re-fit*
+  (~150-500 units, 1-4 wall-h locally) sizes the impact. QC1 **changes which trials have events**
+  (offset 228; trials mapped to -1), so folds change on the 17 affected sessions — those need
+  genuine refits, not paired comparisons.
+- **The two contaminations are entangled.** All three BG_046 sessions checked are `piezo_2026`,
+  including both QC1-affected ones — they are double-affected. The spec's "clean-only VMS 6.31 %"
+  is therefore **not** a clean baseline; it isolates nothing, because those sessions still carry the
+  lick defect. Do not quote it as a corrected figure.
 
-- [ ] **Step 1: Record the pre-repair baseline**
+**Therefore:** this plan ends at a closed audit and repaired pkls. The registry rebuild is its own
+scoped piece of work covering both defects in a single pass.
 
-```bash
-py -c "
-import pandas as pd
-for f,s in [('bg046','BG_046'),('bg031','BG_031'),('bg039','BG_039')]:
-    d=pd.read_csv(f'data/cache/tf_responsive/{f}_tf_responsive.csv')
-    print(s,'pooled resp_log2 = %.2f%%'%(100*d['resp_log2'].mean()),'| units',len(d))
-" | tee /tmp/qc1_tf_before.txt
-```
-
-- [ ] **Step 2: Regenerate the registries**
-
-Find the generating script (it writes `data/cache/tf_responsive/*_tf_responsive.csv`) and re-run it per subject. Do **not** guess the entry point — locate it first:
-
-```bash
-grep -rl "tf_responsive" scripts/ --include=*.py | head
-```
-
-- [ ] **Step 3: Compare before and after**
-
-```bash
-py -c "
-import pandas as pd
-for f,s,r in [('bg046','BG_046','DMS'),('bg031','BG_031','VMS'),('bg039','BG_039','DMS')]:
-    d=pd.read_csv(f'data/cache/tf_responsive/{f}_tf_responsive.csv')
-    print(f'{s} ({r}): pooled resp_log2 = {100*d[\"resp_log2\"].mean():.2f}%  units={len(d)}')
-"
-```
-Expected direction: the affected sessions' rates rise toward their subject's clean rate, so pooled DMS moves toward ~2.84%/3.04% and pooled VMS toward ~6.31%. **A pooled VMS rate that does not rise is a signal the repair did not take** — investigate rather than accept.
-
-- [ ] **Step 4: Update the results document and memory**
-
-Append the before/after table to `docs/science/2026-08-04-QC1-alignment-repair-results.md`, and update the memory note `tf_glm_replication_jun2026` so the recorded "VMS 5.3% > DMS 2.8-3.1%" is superseded by the post-repair figures, with a line saying the originals were contaminated by QC1.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add docs/science/2026-08-04-QC1-alignment-repair-results.md
-git add -f data/cache/tf_responsive/bg046_tf_responsive.csv data/cache/tf_responsive/bg031_tf_responsive.csv data/cache/tf_responsive/bg039_tf_responsive.csv
-git commit -m "fix(QC1): regenerate TF registries from repaired pkls"
-```
+Traps for whoever picks it up (all from `lick_channel_defect_jul2026`):
+- **Clear `data/cache/tf_glm_*` and `results_bg_*` first.** `run_tf_glm_bg046.py` skips on file
+  existence and the cluster task resumes per-unit, so old pooled rows silently interleave with new.
+- `run_tf_glm_bg046.py:35` prepends the **deleted** sibling `E:/python_analysis/git_repos/vd_tf_bg046/src`;
+  it needs `PYTHONPATH=<worktree>/src` and an `--out-dir` fix before any local run.
+- Cluster is re-run-ready on ceph: `tf_glm_cluster/bg_mice/` (46 pkls, `targets_bg_046.csv`,
+  sbatch `--array=1-368%80`).
+- When it is done, supersede the recorded headline "VMS 5.3 % > DMS 2.8-3.1 %" in
+  `tf_glm_replication_jun2026`, noting it was contaminated by **both** defects.
 
 ---
 
@@ -1552,7 +1543,7 @@ git commit -m "fix(QC1): regenerate TF registries from repaired pkls"
 | §5 verification (regression, null, behaviour diff, uniqueness, audit closes) | 3, 5, 11 |
 | §6 phasing (BG_046 first, then generalise) | 5 step 5, 11 |
 | §7 special cases (BG_031 20052025, BG_038 22082025) | 11 step 3 |
-| §4 measured TF contamination → regenerate | 12 |
+| §4 measured TF contamination → regenerate | **deliberately deferred** — see "Follow-on work"; the registries are stale from the lick fix independently of QC1 and must be rebuilt once, for both defects, as separate scoped work |
 
 **Placeholder scan:** no TBD/TODO; every code step carries runnable code. Task 9 step 3 and Task 12 step 2 require judgement rather than fixed code — both say explicitly what to produce and forbid guessing entry points.
 
