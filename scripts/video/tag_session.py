@@ -142,6 +142,12 @@ logger = logging.getLogger("tag_session")
 # scientific constant — replaced the instant the user places one anchor.
 DEFAULT_COARSE_OFFSET_S = 15.0
 
+# Pilot5 FIX 3: how long the transient "saved <verdict> @ f<idx>" HUD flash stays
+# on screen after a label is written. The HUD only re-renders on a refresh event
+# (key/nav/label), so the flash naturally clears on the next interaction once it
+# has expired; this bound just stops a stale confirmation lingering indefinitely.
+_FLASH_SECONDS = 4.0
+
 
 # ---------------------------------------------------------------------------
 # Small pure helpers
@@ -249,6 +255,10 @@ class TagSessionState:
     overlay: object = None                 # matplotlib Ellipse artist on ax_frame
     eye_rect: object = None                # matplotlib Rectangle artist: eye ROI
     mouth_rect: object = None              # matplotlib Rectangle artist: mouth ROI
+    label_ell: object = None               # matplotlib Ellipse: STORED correction
+    label_badge: object = None             # matplotlib Text: this-frame label badge
+    flash_msg: str = ""                    # transient "saved ..." HUD confirmation
+    flash_t: float = 0.0                   # perf_counter when flash_msg was set
     dark_percentile: float = 8.0           # live detect_pupil dark-pixel percentile
     play_next_fi: Optional[int] = None     # frame index play_cap will read NEXT
                                            # (None = position unknown -> force seek)
@@ -576,14 +586,108 @@ def main(argv=None) -> int:
             rect.set_height(float(y1 - y0))
             rect.set_visible(True)
 
+    def _frame_label(fi: int) -> Optional[dict]:
+        """The stored sidecar label entry for frame *fi*, or None if unlabelled.
+
+        Frames are frame_idx-keyed upserts, so at most one entry matches (Pilot5
+        FIX 2/3: drives both the on-frame stored-label artist and the HUD's
+        this-frame line so the user can SEE what is recorded)."""
+        if tag.sidecar is None:
+            return None
+        for fr in tag.sidecar.get("frames", []):
+            if int(fr.get("frame_idx", -1)) == int(fi):
+                return fr
+        return None
+
+    def _flash(msg: str) -> None:
+        """Arm the transient HUD save-confirmation (Pilot5 FIX 3)."""
+        tag.flash_msg = str(msg)
+        tag.flash_t = time.perf_counter()
+
+    def _update_stored_label(fi: int):
+        """Draw the user's STORED label for the current frame (Pilot5 FIX 2).
+
+        The whole point of the tool is comparing the detector's PROPOSAL (green
+        ellipse) against the human's truth, but before this nothing the user
+        recorded was ever drawn back — a correction read as "nothing happened"
+        because the green proposal (unchanged by a correction) stayed put. Now:
+
+          * ``corrected`` -> the stored ``corrected_ellipse`` in YELLOW (#ffd400),
+            visually distinct from and directly comparable to the green proposal.
+          * ``confirmed``  -> a green "confirmed" badge (the green proposal, which
+            _update_overlay still draws, IS the confirmed geometry).
+          * ``blink``      -> a red "blink" badge flagging the frame.
+          * unlabelled     -> both artists hidden.
+
+        The frame axes live in FULL-FRAME data coords in BOTH the full and zoom
+        views (run_scrubber re-derives the imshow extent from cfg.crop every
+        redraw), so the ellipse is drawn at its stored cx/cy DIRECTLY — no
+        crop-origin offset math (an origin add-back cannot undo the coordinate
+        stretch a frozen extent would impose). Called from the same on_refresh
+        path as the proposal + ROI overlays so it survives the scrubber's
+        internal arrow-step / jump redraws, and it UPDATES in place when a frame
+        is re-labelled (upsert), so a redrawn correction shows its new geometry.
+        The badge rides in axes-fraction coords so it stays legible in the corner
+        regardless of zoom."""
+        fig = tag.fig
+        if fig is None or not fig.axes:
+            return
+        ax = fig.axes[0]
+        if tag.label_ell is None:
+            tag.label_ell = Ellipse((0.0, 0.0), 1.0, 1.0, angle=0.0, fill=False,
+                                    edgecolor="#ffd400", linewidth=2.2)
+            ax.add_patch(tag.label_ell)
+        if tag.label_badge is None:
+            tag.label_badge = ax.text(
+                0.015, 0.985, "", transform=ax.transAxes, fontsize=11,
+                family="monospace", fontweight="bold",
+                verticalalignment="top", horizontalalignment="left",
+                color="#ffffff",
+                bbox=dict(boxstyle="round,pad=0.25", facecolor="#000000",
+                          alpha=0.55, edgecolor="none"))
+        entry = _frame_label(fi)
+        if entry is None:
+            tag.label_ell.set_visible(False)
+            tag.label_badge.set_visible(False)
+            return
+        verdict = entry.get("verdict")
+        if verdict == vl.VERDICT_CORRECTED:
+            ell = entry.get("corrected_ellipse")
+            if ell is not None:
+                tag.label_ell.set_center((float(ell["cx"]), float(ell["cy"])))
+                tag.label_ell.width = float(ell["major"])
+                tag.label_ell.height = float(ell["minor"])
+                tag.label_ell.angle = float(ell["angle"])
+                tag.label_ell.set_visible(True)
+                tag.label_badge.set_text(f"corrected  maj {float(ell['major']):.0f}")
+            else:
+                tag.label_ell.set_visible(False)
+                tag.label_badge.set_text("corrected")
+            tag.label_badge.set_color("#ffd400")
+            tag.label_badge.set_visible(True)
+        elif verdict == vl.VERDICT_CONFIRMED:
+            tag.label_ell.set_visible(False)
+            tag.label_badge.set_text("confirmed")
+            tag.label_badge.set_color("#39ff14")
+            tag.label_badge.set_visible(True)
+        elif verdict == vl.VERDICT_BLINK:
+            tag.label_ell.set_visible(False)
+            tag.label_badge.set_text("blink")
+            tag.label_badge.set_color("#ff5555")
+            tag.label_badge.set_visible(True)
+        else:
+            tag.label_ell.set_visible(False)
+            tag.label_badge.set_visible(False)
+
     def _on_frame_shown(fi: int, fig) -> None:
         """cfg.on_refresh hook: re-detect + redraw the overlay AND ROI rectangles
-        on every manual frame change (arrow step / jump / mode toggle / ROI draw /
-        zoom toggle)."""
+        AND the stored per-frame label on every manual frame change (arrow step /
+        jump / mode toggle / ROI draw / zoom toggle / label save)."""
         tag.fig = fig
         _run_detect(fi)
         _update_overlay()
         _update_rois()
+        _update_stored_label(fi)
 
     def _draw_current(fi: int):
         fig = tag.fig
@@ -600,10 +704,17 @@ def main(argv=None) -> int:
         im.set_data(_apply_crop(_read_seq_full(fi)))
         hud.set_text(_hud_fn(fi))
         # Playback streams frames without per-frame detection; hide any stale
-        # pupil ellipse. It reappears on the next manual step via _on_frame_shown.
-        # The ROI rectangles are static overlays and stay visible while playing.
+        # pupil ellipse AND stored-label artist (both are per-frame; a corrected
+        # ellipse / badge from the play-start frame would otherwise linger over
+        # unrelated frames). They reappear on the next manual step via
+        # _on_frame_shown. The ROI rectangles are static session-level overlays
+        # and correctly stay visible while playing.
         if tag.overlay is not None:
             tag.overlay.set_visible(False)
+        if tag.label_ell is not None:
+            tag.label_ell.set_visible(False)
+        if tag.label_badge is not None:
+            tag.label_badge.set_visible(False)
         fig.canvas.draw_idle()
 
     # ---------------------------------------------------------------------
@@ -894,7 +1005,30 @@ def main(argv=None) -> int:
         n_conf = sum(1 for f in _frames if f["verdict"] == vl.VERDICT_CONFIRMED)
         n_corr = sum(1 for f in _frames if f["verdict"] == vl.VERDICT_CORRECTED)
         n_blink = sum(1 for f in _frames if f["verdict"] == vl.VERDICT_BLINK)
-        label_line = f"labels: {n_conf} ok / {n_corr} fix / {n_blink} blink"
+
+        # This-frame label state (Pilot5 FIX 3): an unambiguous TEXT confirmation
+        # of what is recorded for the shown frame, independent of the drawn
+        # artists — so the user knows their correction landed even if they doubt
+        # the drawing.
+        _entry = _frame_label(fi)
+        if _entry is None:
+            this_state = "unlabelled"
+        elif _entry.get("verdict") == vl.VERDICT_CORRECTED:
+            _ce = _entry.get("corrected_ellipse") or {}
+            _maj = _ce.get("major")
+            this_state = (f"corrected (maj {float(_maj):.0f})"
+                          if _maj is not None else "corrected")
+        elif _entry.get("verdict") == vl.VERDICT_CONFIRMED:
+            this_state = "confirmed"
+        elif _entry.get("verdict") == vl.VERDICT_BLINK:
+            this_state = "blink"
+        else:
+            this_state = str(_entry.get("verdict"))
+        label_line = (f"labels: {n_conf} ok / {n_corr} fix / {n_blink} blink"
+                      f"   |   this frame: {this_state}")
+        # Transient save confirmation, shown only while fresh (Pilot5 FIX 3).
+        if tag.flash_msg and (time.perf_counter() - tag.flash_t) < _FLASH_SECONDS:
+            label_line += f"   <<{tag.flash_msg}>>"
 
         # Speed reads truthfully: the requested multiplier AND, while playing, the
         # achieved display refresh rate (FIX 1 drops frames to hold pace, so a low
@@ -969,6 +1103,8 @@ def main(argv=None) -> int:
                                   corrected_ellipse=corrected)
             vl.save_sidecar(tag.sidecar, session, subject)
             logger.info("corrected frame %d", state["frame_idx"])
+            _flash(f"saved corrected @ f{state['frame_idx']} "
+                   f"maj={float(corrected['major']):.0f}")
         tag.arming = None
 
     def _on_selector_cancel(state) -> None:
@@ -1067,6 +1203,7 @@ def main(argv=None) -> int:
                                   proposed_ellipse=tag.last_proposed)
             vl.save_sidecar(tag.sidecar, session, subject)
             logger.info("confirmed frame %d", state["frame_idx"])
+            _flash(f"saved confirmed @ f{state['frame_idx']}")
             return True
         if key == "p":  # proposal is WRONG -> drag the true pupil
             # Reuse the SAME correction-drag path Task 5 wired: arm the shared
@@ -1090,6 +1227,7 @@ def main(argv=None) -> int:
                                   proposed_ellipse=tag.last_proposed)
             vl.save_sidecar(tag.sidecar, session, subject)
             logger.info("blink frame %d", state["frame_idx"])
+            _flash(f"saved blink @ f{state['frame_idx']}")
             return True
         # Self-diagnosing: log (cheap, debug-level, not to the HUD) any key we do
         # not handle so a future dead-key report (like the bracket keys above) is

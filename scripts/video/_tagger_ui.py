@@ -229,6 +229,23 @@ def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
     if cfg.on_selector is not None:
         from matplotlib.widgets import RectangleSelector
 
+        # In-progress drag rubber-band visual props (Pilot5 FIX 1). Before this
+        # the selector was built with no explicit props, so the user dragged the
+        # pupil-correction box BLIND — no rubber band showed while dragging, so
+        # they aimed at nothing and their corrections came out with a ~9x spread.
+        # A high-contrast HOT-MAGENTA outline (#ff2d95) reads clearly against a
+        # grayscale eye image and is distinct from every other overlay: the green
+        # (#00ff00) pupil proposal, the cyan (#00bfff) eye ROI and orange
+        # (#ff8c00) mouth ROI rectangles, and the yellow (#ffd400) stored
+        # correction ellipse. ``fill=False`` keeps the pupil visible underneath
+        # so the user can aim at it. The kwarg is ``props`` (NOT the pre-3.7
+        # ``rectprops``); verified against matplotlib 3.10.8 — a wrong kwarg
+        # raises only at construction time, i.e. on the user's next GUI launch,
+        # never in the Agg tests, so it is pinned + probe-verified here.
+        _selector_props = dict(
+            facecolor="none", fill=False, edgecolor="#ff2d95",
+            linewidth=2.0, linestyle="-", alpha=1.0)
+
         def _on_select(eclick, erelease):
             if eclick.xdata is None or erelease.xdata is None:
                 _cancel_selector()
@@ -250,7 +267,8 @@ def run_scrubber(cfg: ScrubberConfig) -> Optional[dict]:
 
         selector["obj"] = RectangleSelector(
             ax_frame, _on_select, useblit=False, button=[1],
-            minspanx=3, minspany=3, spancoords="pixels", interactive=False)
+            minspanx=3, minspany=3, spancoords="pixels", interactive=False,
+            props=_selector_props)
         selector["obj"].set_active(False)
         state["selector_armed"] = False
 
