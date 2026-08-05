@@ -59,6 +59,18 @@ def seed_from_archive(session_name, subject: Optional[str] = None,
         return None
     for a in seeded["anchors"]:
         a["source"] = "legacy"
+    # Pilot6 data-loss fix: archive_sync_artifacts MOVED the live anchor file into
+    # _archive/, so the seeds now exist only in memory and in the archive. Re-persist
+    # them to the LIVE anchor path immediately, so the on-disk live file always
+    # reflects what the HUD renders (one source of truth) from the moment the tagger
+    # starts. Without this, the live file is left empty until the user happens to
+    # save, and quitting before saving — or simply re-opening the tagger, which
+    # then finds no live file to seed from — strands the seeds in the archive and a
+    # fresh save writes only the newly-placed anchors. The pilot lost a validated
+    # 10-anchor sync (BG_031/09042025) exactly this way. Every subsequent GUI save
+    # overwrites this same live file with the full in-memory anchor set, so the
+    # invariant holds for the rest of the session.
+    _vs.save_anchor(session_name, seeded, sync_dir=out_dir)
     return seeded
 
 

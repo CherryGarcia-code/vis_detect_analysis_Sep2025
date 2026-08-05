@@ -43,6 +43,7 @@ from visdetect.core import video_sync as vs
 
 
 def test_seed_from_archive_archives_and_marks_legacy(tmp_path):
+    import datetime as _dtmod
     d = tmp_path
     anchor = {"session": "01072025", "schema_version": 3, "frame_rate_fps": 50.0,
               "n_trials": 2, "anchors": [
@@ -52,11 +53,102 @@ def test_seed_from_archive_archives_and_marks_legacy(tmp_path):
     (d / "01072025_anchor.json").write_text(json.dumps(anchor))
     (d / "01072025_video_sync.json").write_text(json.dumps({"session_name": "01072025"}))
     seeded = tg.seed_from_archive("01072025", sync_dir=str(d))
-    # prior files archived (not in live dir)
-    assert not (d / "01072025_anchor.json").exists()
+    # The ORIGINAL prior artifacts were archived (both the anchor + the sync JSON).
+    arch = d / "_archive" / _dtmod.date.today().isoformat()
+    assert (arch / "01072025_anchor.json").exists()
+    assert (arch / "01072025_video_sync.json").exists()
+    # The live sync JSON was moved away and NOT re-created.
+    assert not (d / "01072025_video_sync.json").exists()
+    # Pilot6 fix: the live ANCHOR file is re-persisted with the seeds immediately,
+    # so the live file reflects the HUD state from startup (no data-loss window).
+    assert (d / "01072025_anchor.json").exists()
+    live = json.loads((d / "01072025_anchor.json").read_text())
+    assert [a["source"] for a in live["anchors"]] == ["legacy"]
     # seed returned, legacy-marked
     assert seeded is not None
     assert seeded["anchors"][0]["source"] == "legacy"
+
+
+def test_seeded_anchors_survive_reopen_and_save(tmp_path, monkeypatch):
+    """Pilot6 regression: re-opening the tagger must not strand the prior anchors.
+
+    Reproduces the real data-loss sequence (BG_031/09042025): a validated
+    10-anchor sync, re-opened in the tagger, ended with ONLY the newly-placed
+    anchors in the live file and the 10 originals stranded in ``_archive/``. Root
+    cause: ``seed_from_archive`` MOVES the live anchor file into the archive but
+    the seed then lives only in memory, so the live file is empty until the user
+    saves. If the run ends (or the tagger is re-opened) before every seed has been
+    re-saved, the next run finds no live file to seed from and a fresh save writes
+    only the new anchors.
+
+    The two runs archive into per-day dirs (matching the real 08-04 / 08-05 case);
+    a fixed ``date.today`` keeps them separate and deterministic.
+    """
+    import datetime as _dtmod
+
+    class _FixedDate(_dtmod.date):
+        _iso = {"v": "2026-08-04"}
+
+        @classmethod
+        def today(cls):
+            return _dtmod.date.fromisoformat(cls._iso["v"])
+
+    monkeypatch.setattr(vs._dt, "date", _FixedDate)
+
+    d = tmp_path
+    session, fps, n_trials = "01072025", 50.0, 40
+    ts_ms = np.arange(2000, dtype=float) * 20.0
+    baseline_on = np.arange(n_trials, dtype=float) + 5.0
+
+    # --- A prior validated sync: N seeded baseline anchors on distinct trials. ---
+    N = 10
+    raws = [vs._build_anchor_entry(baseline_on, ts_ms, trial_index=i,
+                                   frame_idx=100 + 10 * i) for i in range(N)]
+    live0 = vs._build_v3_anchor_file(session, fps, n_trials, raws)
+    (d / f"{session}_anchor.json").write_text(json.dumps(live0))
+    (d / f"{session}_video_sync.json").write_text(json.dumps({"s": session}))
+
+    # --- RUN 1 (day 1): open the tagger, seed, then QUIT WITHOUT SAVING. ---------
+    seed1 = tg.seed_from_archive(session, sync_dir=str(d))
+    assert seed1 is not None and len(seed1["anchors"]) == N
+    # INVARIANT (pre-fix this FAILS: the live file was moved to the archive and the
+    # seed lived only in memory, so load_anchor returns None): after seeding, the
+    # live file must already hold the N seeds so a quit-before-save loses nothing.
+    live_after_seed = vs.load_anchor(session, sync_dir=str(d))
+    assert live_after_seed is not None, "live anchor file lost after seeding (pilot6 bug)"
+    assert len(live_after_seed["anchors"]) == N
+
+    # --- RUN 2 (day 2): re-open, place ONE new anchor, save (GUI merge path). ----
+    _FixedDate._iso["v"] = "2026-08-05"
+    seed2 = tg.seed_from_archive(session, sync_dir=str(d))
+    # pre-fix: seed2 is None (no live file to archive) -> the new save starts empty.
+    assert seed2 is not None and len(seed2["anchors"]) == N
+    tag_anchors = seed2  # GUI: tag.anchors = seed
+
+    new_raw = vs._build_anchor_entry(baseline_on, ts_ms, trial_index=20, frame_idx=1500)
+    new_entry = vs._build_v3_anchor_file(session, fps, n_trials, [new_raw])["anchors"][0]
+    merged = vs._merge_anchor_into_file(tag_anchors, new_entry)
+    vs.save_anchor(session, merged, sync_dir=str(d))
+
+    live = vs.load_anchor(session, sync_dir=str(d))
+    assert len(live["anchors"]) == N + 1, "seeded anchors were dropped on save (pilot6 bug)"
+    legacy = [a for a in live["anchors"] if a.get("source") == "legacy"]
+    fresh = [a for a in live["anchors"] if a.get("source") != "legacy"]
+    assert len(legacy) == N          # inherited seeds keep provenance
+    assert len(fresh) == 1 and fresh[0]["trial_index"] == 20  # new one is not legacy
+
+    # --- Re-placing a SEEDED trial REPLACES it (keyed on (trial, event_type)). ---
+    replace_raw = vs._build_anchor_entry(baseline_on, ts_ms, trial_index=5, frame_idx=1750)
+    replace_entry = vs._build_v3_anchor_file(session, fps, n_trials, [replace_raw])["anchors"][0]
+    merged2 = vs._merge_anchor_into_file(merged, replace_entry)
+    vs.save_anchor(session, merged2, sync_dir=str(d))
+
+    live2 = vs.load_anchor(session, sync_dir=str(d))
+    assert len(live2["anchors"]) == N + 1  # replaced, not duplicated
+    trial5 = [a for a in live2["anchors"] if a["trial_index"] == 5]
+    assert len(trial5) == 1
+    assert trial5[0]["video_frame_idx"] == 1750      # the re-placed geometry
+    assert trial5[0].get("source") != "legacy"       # re-placed -> no longer inherited
 
 
 def test_seed_from_archive_none_when_empty(tmp_path):
