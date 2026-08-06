@@ -341,6 +341,27 @@ sub-project 2:
 | At least one test, offline-runnable | Coverage gate |
 | Docstring states the scientific question and the literature grounding it | Auditor (judgment, not mechanical) |
 | Registered in the analysis index | Index-freshness check |
+| **No redefinition of a registered shared helper** | Gate: a must-import registry (`partial_spearman`, `save_fig`, session-id and date helpers, bootstrap / permutation / FDR primitives); a local `def` of a registered name fails the build |
+| **No near-duplicate of existing library code** | Gate: AST-normalised structural similarity across the repo; above threshold it fails and names the existing function |
+| **Same name, different behaviour** | Gate: **hard fail — a separate and more severe category than duplication** |
+| **A reuse statement** — what was searched for, what was found, why it is insufficient | ADR-007 packet section (judgment) |
+
+**On reuse specifically.** "Search before writing" is already the first workflow rule in the current
+repo's `CLAUDE.md`, and the audit measured exactly what prose achieved: `make_figure` defined 13
+times, `process_session` 10, `save_fig` 8, `_stage_map` and `_mwu` 6 each, 22 local date parsers
+against 4 files importing the canonical one, 78 ad-hoc `zfill(8)` sites against 35 using
+`canonical_session_id`, and 142 files deriving their own repo root against 17 importing `ROOT`.
+
+The severity split matters. Plain duplication wastes effort and drifts. **Same-name-different-
+behaviour silently corrupts comparisons**, because a reader reasonably assumes a shared name means
+shared meaning. `partial_spearman` is the worked example: two copies compute `spearmanr` on
+rank-residuals and one computes `np.corrcoef` on residuals — a *different estimator*, without
+re-ranking and without the small-n guard. Two numbers both reported as "partial Spearman rho" are
+therefore not comparable, and that statistic underpins the width-vs-coupling and theta-vs-regulation
+claims. `CHANGE_SIZES` is the same pathology in constant form. These fail hardest.
+
+Structural similarity catches copy-paste; it cannot catch "conceptually the same analysis, expressed
+differently". That is what the reuse statement and a human reader are for.
 
 **Alternatives.** (a) Template plus documentation, no scaffold and no enforcement — the status quo.
 (b) Code review only. (c) No convention; let each analysis find its own shape.
