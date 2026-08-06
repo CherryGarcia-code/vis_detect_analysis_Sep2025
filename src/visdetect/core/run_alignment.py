@@ -143,12 +143,16 @@ def _passes(agreement: float, resid_s: float) -> bool:
     )
 
 
-def solve_alignment(trials: Sequence[Any], ni_events: Dict[str, Any]) -> Optional[Alignment]:
-    """Brute-force search for the unique (trial_start, event_offset) pairing.
+def best_candidate(trials: Sequence[Any], ni_events: Dict[str, Any]) -> Optional[Alignment]:
+    """Top-ranked candidate pairing WITHOUT applying the acceptance test.
 
-    NOTE: this operates on a built pkl, where the per-run JSON boundaries are no
-    longer available -- so the search is exhaustive by construction. The
-    converter has a different, JSON-informed path (see ingest.py).
+    Same enumeration and ranking as `solve_alignment`; it just does not judge.
+    Returns None only when no candidate could be scored at all (no trials, no
+    events, per-trial key length mismatch, or nothing scoreable).
+
+    The returned Alignment is therefore a *hypothesis*, not a verified pairing --
+    it is what a rejected session's evidence looks like (see `rejection_reason`).
+    Never treat this as usable alignment; call `solve_alignment` for that.
 
     Search space:
       sign B  -> trial_start = 0, event_offset varies   (events outnumber trials)
@@ -192,8 +196,6 @@ def solve_alignment(trials: Sequence[Any], ni_events: Dict[str, Any]) -> Optiona
     scored.sort(key=lambda r: (-r[0], r[1] if np.isfinite(r[1]) else np.inf))
     best = scored[0]
     runner = scored[1] if len(scored) > 1 else None
-    if not _passes(best[0], best[1]):
-        return None
 
     return Alignment(
         trial_start=best[3],
@@ -205,6 +207,67 @@ def solve_alignment(trials: Sequence[Any], ni_events: Dict[str, Any]) -> Optiona
         runner_up_agreement=runner[0] if runner else float("nan"),
         runner_up_resid_s=runner[1] if runner else float("nan"),
     )
+
+
+def solve_alignment(trials: Sequence[Any], ni_events: Dict[str, Any]) -> Optional[Alignment]:
+    """Brute-force search for the unique (trial_start, event_offset) pairing.
+
+    `best_candidate`, then accept-or-None -- the two share one enumeration so the
+    ranking cannot drift apart. Returns None unless the top candidate passes BOTH
+    Check 1 (agreement == 1.0) and Check 2 (median residual < ACCEPT_RESID_S over
+    at least MIN_RESID_N trials).
+
+    NOTE: this operates on a built pkl, where the per-run JSON boundaries are no
+    longer available -- so the search is exhaustive by construction. The
+    converter has a different, JSON-informed path (see ingest.py).
+    """
+    best = best_candidate(trials, ni_events)
+    if best is None or not _passes(best.agreement, best.resid_s):
+        return None
+    return best
+
+
+_UNSET = object()
+
+
+def rejection_reason(
+    trials: Sequence[Any], ni_events: Dict[str, Any], best: Any = _UNSET
+) -> str:
+    """Why `solve_alignment` rejected this pkl. Empty string when it accepted.
+
+    Distinguishes the exits that all otherwise collapse to a bare None:
+      no_trials / no_events / key_len_mismatch  -- structurally unscoreable
+      no_candidates                             -- nothing could be scored
+      agreement_below_1                         -- Check 1 failed (primary)
+      resid_n_below_min                         -- Check 2 not evaluable
+      resid_above_tol                           -- Check 2 failed on precision
+
+    Pass `best` (from `best_candidate`) to avoid re-running the search.
+    """
+    trials = list(trials or [])
+    ni = ni_events or {}
+    n_ev = len(_arr(ni.get("Baseline_ON")))
+    if len(trials) == 0:
+        return "no_trials"
+    if n_ev == 0:
+        return "no_events"
+    for key in _REQUIRED_KEYS:
+        if len(_arr(ni.get(key))) != n_ev:
+            return "key_len_mismatch"
+
+    if best is _UNSET:
+        best = best_candidate(trials, ni)
+    if best is None:
+        return "no_candidates"
+
+    # Check 1 is primary and is judged first, exactly as _passes does.
+    if not (np.isfinite(best.agreement) and best.agreement >= ACCEPT_AGREEMENT):
+        return "agreement_below_1"
+    if not np.isfinite(best.resid_s):
+        return "resid_n_below_min"      # alignment_residual returns nan below MIN_RESID_N
+    if best.resid_s >= ACCEPT_RESID_S:
+        return "resid_above_tol"
+    return ""
 
 
 def build_trial_event_index(n_trials: int, alignment: Optional[Alignment]) -> np.ndarray:

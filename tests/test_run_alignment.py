@@ -144,3 +144,41 @@ def test_build_trial_event_index_maps_and_marks_missing():
 def test_build_trial_event_index_all_minus_one_when_unsolved():
     idx = build_trial_event_index(7, None)
     assert (idx == -1).all()
+
+
+# ── best_candidate / rejection_reason: evidence for REJECTED pairings ────────
+from visdetect.core.run_alignment import best_candidate, rejection_reason  # noqa: E402
+
+
+def test_best_candidate_equals_solver_when_accepted():
+    """The two share one enumeration; on an accepted pkl they must agree exactly."""
+    trials, ni = make_case(n=60, n_pad=25)
+    assert best_candidate(trials, ni) == solve_alignment(trials, ni)
+
+
+def test_best_candidate_reports_evidence_where_solver_returns_none():
+    """solve_alignment rejects; best_candidate still explains what it saw."""
+    trials, ni = make_case(n=60)
+    ni["Change_ON"] = np.full(len(ni["Change_ON"]), np.nan)
+    assert solve_alignment(trials, ni) is None
+    best = best_candidate(trials, ni)
+    assert best is not None
+    assert np.isfinite(best.agreement) and best.agreement < 1.0
+
+
+def test_rejection_reason_names_each_exit():
+    trials, ni = make_case(n=60, n_pad=25)
+    assert rejection_reason(trials, ni) == ""              # accepted
+
+    assert rejection_reason([], ni) == "no_trials"
+    assert rejection_reason(trials, {"Baseline_ON": [], "Change_ON": []}) == "no_events"
+
+    bad_len = {"Baseline_ON": ni["Baseline_ON"], "Change_ON": ni["Change_ON"][:-1]}
+    assert rejection_reason(trials, bad_len) == "key_len_mismatch"
+
+    t_thin, ni_thin = make_case(n=10)                      # Check 1 ok, too few Hits
+    assert rejection_reason(t_thin, ni_thin) == "resid_n_below_min"
+
+    t_bad, ni_bad = make_case(n=60)
+    ni_bad["Change_ON"] = np.full(len(ni_bad["Change_ON"]), np.nan)
+    assert rejection_reason(t_bad, ni_bad) == "agreement_below_1"
