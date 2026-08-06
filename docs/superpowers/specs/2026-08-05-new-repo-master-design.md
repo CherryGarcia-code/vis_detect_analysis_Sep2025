@@ -195,6 +195,75 @@ the two-stage spec process (§8). **Mitigation:** the audit must produce measure
 just inventories; and the cross-spec consistency pass (§7, sub-project 6) is mandatory rather than
 optional, because under this strategy no earlier execution will have caught spec contradictions.
 
+### ADR-007 — Nothing lands without a plain-language approval packet
+
+**Decision.** Every component entering the new repo is presented for approval *before* it lands,
+as a fixed-shape packet. The reviewable unit is **one module or one gate** — not a file, not a
+layer. Roughly 20–40 approvals across the build.
+
+The packet has six required sections:
+
+| Section | Content |
+|---|---|
+| What it is | Plain language, one short paragraph, no unglossed jargon |
+| Why it exists | What breaks without it |
+| Provenance | New / copied verbatim / ported-with-changes — and exactly what changed and why |
+| How we know it's right | The specific check, **run**, with its actual output |
+| Blast radius | What depends on it; what it depends on |
+| Decision | Approve / change / reject |
+
+Two rules make this a gate rather than a ceremony:
+
+1. **No exemption for "trivial".** The defect that silently nulls every QC profile in the current
+   repo is a single character: `parents[1]` where `parents[3]` was meant. Triviality is not a
+   predictor of harm.
+2. **"How we know it's right" must contain executed output, never an argument.** This is the
+   existing project rule that fixes are proven by execution, applied to construction.
+
+**Alternatives.** (a) Layer-level approval — 6–8 packets, far less interruption, but each is large
+enough that genuine review degrades into assent. (b) File-level — over a hundred packets; review
+quality collapses from fatigue. (c) Post-hoc review after a layer is built — cheapest, but by then
+the cost of reversing a decision is highest.
+
+**Why.** In scientific code a subtly wrong constant is worse than a crash, because it produces a
+plausible number instead of an error. The audit found several such: four disagreeing firing-rate
+floors, a 5×-wrong sampling period, two `CHANGE_SIZES` with different membership. Each would pass
+any test that did not know the right answer. A human who understands the science is the only
+reliable check, and that check only works if the explanation is legible.
+
+**Commits us to.** Slower construction, and to writing every explanation in plain language —
+including for machinery whose correctness is obvious to the author.
+
+### ADR-008 — New repo is a sibling directory and contains no junctions
+
+**Decision.** The new repo lives at `E:\python_analysis\git_repos\visdetect` — a sibling of
+`vis_detect_analysis_Sep2025`, never nested inside it. It contains **no NTFS junctions or symlinks**
+to data. Large inputs (`data/pkls`, `data/unit_match`, `data/anatomy`, existing `FIGURES/`) are
+reached through a single configured root, per ADR-004.
+
+**Alternatives.** (a) Nested inside the current repo. (b) A dated name in the existing family
+(`vis_detect_analysis_2026`). (c) A different physical drive.
+
+**Why.** Three independent reasons:
+
+- **Nesting reproduces a bug the audit just measured.** `check_refactor_guardrails.py` reports 1,375
+  violations of which ~1,157 are phantom, solely because it walks into `.claude/worktrees/` and
+  finds other copies of the codebase. Every tree-walking tool — linters, pytest collection, and the
+  gates of sub-project 2 — would do the same to a nested repo.
+- **No junctions closes the June-2026 data-loss class permanently.** That incident occurred because
+  `git worktree remove` followed a junction into the primary data. If the repo contains no links,
+  no recursive delete can traverse one, regardless of who runs it.
+- **The date-stamp naming is itself a defect.** `Sep2025` records when the repo started, not what it
+  holds — and it already misleads, since the repo contains 2023–2026 work. `visdetect` matches the
+  package name and cannot go stale.
+
+A different drive was considered and rejected: the 30.5 GB of pkls and 36 GB of figures are on `E:`,
+so cross-drive reads would tax every analysis. Off-disk safety is the remote's job, not the
+filesystem's.
+
+**Commits us to.** Configuring a data root explicitly on every machine, rather than relying on paths
+that happen to resolve.
+
 ---
 
 ## 6. The known-defect register
