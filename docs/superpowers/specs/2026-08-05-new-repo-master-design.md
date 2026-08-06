@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-05
 **Status:** Approved (design); sub-project specs pending
-**Authors:** Ben Gonzales + Claude (Opus 5)
+**Authors:** Project owner + Claude (Opus 5)
 **Supersedes:** `docs/REFACTOR_PLAN.md` (in-place refactor; never completed)
 
 ---
