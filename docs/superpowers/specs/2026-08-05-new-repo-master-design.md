@@ -58,7 +58,7 @@ demonstrated by an executing check, not by argument.
 | S2 | Subject/session identity is typed; filenames are parsed in exactly one place | CI gate bans filename parsing outside the registry builder and bans `str`/`int` session ids in public signatures |
 | S3 | Layer boundaries hold (`ingest → qc/tracking → analysis → figures`, no upward imports) | Import-contract check in CI |
 | S4 | Every numerical difference from the old repo is attributed; none is unexplained | Per-component difference report (ADR-009) with each delta tagged `defect-fixed` / `known-defect` / `design-change`; any `unexplained` blocks |
-| S5 | Every figure and results artefact is traceable to the exact code, parameters and inputs that produced it | Provenance sidecar written by the plotting/caching layer; check that fails on an artefact without one |
+| S5 | Every figure and results artefact carries five-part provenance: **execution log** (authoritative), code, environment (language + every package version), inputs (registry snapshot + decision-log revision), and git sha | Provenance sidecar written by the artefact layer; check that fails on an artefact without one. **Where the recorded code and the execution log disagree, the log is authoritative** — the current repo's failure is not unrecorded scripts but scripts whose stated behaviour diverged from what ran |
 | S6 | The AI layer's factual claims cannot go stale | Generator script + CI check that regeneration produces no diff |
 | S7 | Carried-over memory is true of the new repo | Every migrated note passed the verification gate; failures archived with a RETRACTED marker |
 | S8 | Analysis is installable without the heavy stack | `pip install -e .[analysis]` succeeds in a clean env with no UnitMatch/GPU/MATLAB dependency |
@@ -127,6 +127,20 @@ constants defined outside the registry, layer-violating imports, raw session ids
 per-condition baselines, missing normalization, artefacts without provenance. The AI auditor skill
 covers only what a gate cannot decide — whether a test is appropriate, whether an analysis is
 circular, whether an effect size is meaningful.
+
+**Auditor checklist** (adopted 2026-08-06 from Claude Science's reviewer, whose categories map
+almost exactly onto defects this audit found). The auditor checks claims against the **execution
+record**, and does not re-run analyses:
+
+- a result reported as computed when nothing ran *(cf. the ten scripts writing into a deleted
+  `vd_tf_bg046/` tree, which "succeed" and produce nothing)*;
+- a value that contradicts the file it came from *(cf. `CLAUDE.md`'s constants table vs
+  `constants.py`)*;
+- a citation that does not support the claim attributed to it;
+- a plan step recorded as done that was not completed;
+- a conclusion not supported by the method used *(cf. the retracted transient/sustained result)*.
+
+Project-specific checks may be **added** to this list but may never remove or weaken a member of it.
 
 **Alternatives.** (a) Gates only, no AI review. (b) Runtime-enforced frozen registry that raises on
 unregistered access. (c) Convention and review only.
@@ -311,6 +325,71 @@ and that the known-defect register is consulted per component rather than once.
 
 **Note on scope.** This changes what "landing" means for every ported component, but does not change
 ADR-001's clean-room foundation decision, which stands.
+
+### ADR-010 — A paved road for new analyses
+
+**Decision.** New analyses are not written from a blank file. Each is created by a scaffold command
+from a template, and must satisfy a written **analysis contract**, enforced by the gates of
+sub-project 2:
+
+| The contract requires | Enforced by |
+|---|---|
+| Session set obtained from the registry, never by globbing or parsing filenames | Gate: filename parsing banned outside the registry builder (ADR-004) |
+| Constants imported from the canonical module, never retyped | Gate: shadow-definition check (ADR-003) |
+| Outputs written through the artefact API, never a hardcoded path | Gate: artefact without provenance fails (S5) |
+| Declares which layer it belongs to; imports respect layer direction | Import-contract check |
+| At least one test, offline-runnable | Coverage gate |
+| Docstring states the scientific question and the literature grounding it | Auditor (judgment, not mechanical) |
+| Registered in the analysis index | Index-freshness check |
+
+**Alternatives.** (a) Template plus documentation, no scaffold and no enforcement — the status quo.
+(b) Code review only. (c) No convention; let each analysis find its own shape.
+
+**Why.** (a) is precisely what the current repo has, and it produced: 378 scripts across 30 topic
+directories, 20+ mutually inconsistent `sys.path` idioms, READMEs in 5 of 30 directories,
+`partial_spearman` reimplemented **seven times in three mathematically different forms** (two
+`spearmanr`-on-residuals variants and one `np.corrcoef`-on-residuals, which is a different
+estimator), `save_fig` defined 8 times, `make_figure` 13 times, and 245 of 378 scripts importing
+none of the canonical config modules.
+
+None of that is carelessness. It is what happens when **the easy way and the right way are
+different**. A repo with corrected constants but the same absent scaffolding re-sprawls within a
+year, and the corrected constants go stale exactly as they did before.
+
+This ADR exists because the rest of the design is about repairing the past and porting the present;
+without it, nothing addresses the future — which is the stated reason for the rebuild.
+
+**Commits us to.** Maintaining a scaffold and template, and to the risk that the template itself
+drifts from the gates. Mitigation: **the template is generated from the same source as the gates**,
+so a rule change updates both or fails CI — the same principle as ADR-005.
+
+### ADR-011 — Data decisions are versioned, append-only, and attributed
+
+**Decision.** The session roster and every inclusion/exclusion decision are version-controlled in an
+append-only **decision log**: what changed, why, when, and who decided. Staging manifests become
+**build artefacts** derived from the registry plus the decision log — generated, never hand-edited.
+
+**Alternatives.** (a) Track the existing hand-edited manifests in git. (b) A database. (c) Status
+quo: gitignored CSVs edited in place.
+
+**Why.** ADR-007 gates *code* components, but which sessions are included, which units pass QC, and
+why a session was dropped are **scientific** decisions with a larger effect on results than most
+code. Today they have no home at all: the seven staging manifests are gitignored
+(`.gitignore:46 data/*`), untracked, and mutated in place. The `.bak` files prove it — on 2026-08-03
+BG_031 lost the row `19052025,Expert` and BG_039 lost a duplicate `23042025`, with **no record
+anywhere of who decided that or why**. Consequently no figure or cache in the repo can be
+reproduced, because the exact roster that produced it was never versioned.
+
+(a) is a real improvement but preserves hand-editing, so a silent edit stays possible and the
+*reason* still goes unrecorded. (b) adds infrastructure without adding accountability; the problem is
+not storage, it is attribution.
+
+Generated-not-edited also closes the divergence the audit measured: 28 scripts read a manifest CSV
+directly rather than through `load_staging_manifest()`, bypassing `SESSION_FILTER` entirely, so two
+figures in the same paper can silently disagree on n.
+
+**Commits us to.** A decision-log format, and the discipline of writing a reason whenever a session
+is excluded — including when the reason is "obviously bad recording".
 
 ---
 
