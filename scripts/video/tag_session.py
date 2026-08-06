@@ -52,7 +52,9 @@ Keybindings (see docs/superpowers/specs/2026-07-23-camera-tagger-ux-design.md)
                           when the detector proposed NOTHING: the correction is
                           recorded with proposed=None (the detector-miss case).
   u                       confirm the proposed ellipse is correct (secondary;
-                          no-ops when there is no proposal to confirm)
+                          never fabricates a confirmation when there is no
+                          proposal — it flashes WHY, distinguishing "no eye ROI"
+                          from "detector found no pupil here", and no-ops)
   x                       blink / occluded: no valid pupil this frame (secondary)
   home / end              first / last target
   d                       delete this target's anchor (current mode's type)
@@ -841,6 +843,11 @@ def main(argv=None) -> int:
     def _toggle_mode(state) -> bool:
         tag.mode = "change" if tag.mode == "baseline" else "baseline"
         _reseed_target(state)
+        # Switching INTO change mode when the session has no big-change targets
+        # leaves j/k/home/end/d inert. The HUD "(no big-change targets)" line is
+        # easy to miss, so flash the reason + how to get back.
+        if tag.mode == "change" and not tag.queue:
+            _flash("no change targets this session - [c] for baseline")
         return True
 
     def _step_target(state, delta: int) -> bool:
@@ -850,6 +857,9 @@ def main(argv=None) -> int:
         elif tag.queue:
             tag.queue_pos = int(
                 np.clip(tag.queue_pos + delta, 0, len(tag.queue) - 1))
+        else:
+            # change mode + empty queue: j/k had nothing to step -> explain it.
+            _flash("no change targets - [c] for baseline")
         _reseed_target(state)
         return True
 
@@ -858,6 +868,9 @@ def main(argv=None) -> int:
             tag.baseline_pos = 0 if first else len(baseline_on) - 1
         elif tag.queue:
             tag.queue_pos = 0 if first else len(tag.queue) - 1
+        else:
+            # change mode + empty queue: home/end had nothing to jump to.
+            _flash("no change targets - [c] for baseline")
         _reseed_target(state)
         return True
 
@@ -904,10 +917,16 @@ def main(argv=None) -> int:
         return True
 
     def _delete_current() -> bool:
+        # `d` could silently do nothing three ways (no anchors at all, no target
+        # selected, or no anchor on THIS target). Each now flashes its reason, and
+        # a successful delete flashes a confirmation (it previously only logged, so
+        # the GUI gave no sign the anchor was gone).
         if tag.anchors is None:
+            _flash("no anchors yet - nothing to delete")
             return True
         key = _current_key()
         if key is None:
+            _flash("no change target selected - [c] for baseline")
             return True
         kept = [a for a in tag.anchors["anchors"]
                 if (int(a["trial_index"]), a.get("event_type", "baseline_on")) != key]
@@ -918,6 +937,9 @@ def main(argv=None) -> int:
             tag.anchors = merged
             logger.info("Deleted %s anchor for trial %s (%d remain).",
                         key[1], key[0], len(kept))
+            _flash(f"deleted {tag.mode} anchor (trial {key[0]})")
+        else:
+            _flash(f"no {tag.mode} anchor here to delete")
         return True
 
     # ---------------------------------------------------------------------
@@ -992,11 +1014,18 @@ def main(argv=None) -> int:
         else:
             qc = tag.sync_cache_str
 
-        eye_state = "set" if tag.eye_roi is not None else "none"
         mouth_state = "set" if tag.mouth_roi is not None else "none"
         view = "ZOOM" if tag.zoomed else "full"
-        roi_line = (f"ROI: eye[{eye_state}] mouth[{mouth_state}]   view: {view}"
-                    f"   pupil%: {tag.dark_percentile:g}")
+        # A MISSING eye ROI silently disables `f` zoom AND the green proposal, so
+        # the HUD must announce it at a glance (the pilot never noticed the ROI was
+        # absent — it just looked like features had broken). An explicit MISSING
+        # banner + the remedy key, not a quiet "eye[none]" the eye skims past.
+        if tag.eye_roi is not None:
+            roi_line = (f"ROI: eye[set] mouth[{mouth_state}]   view: {view}"
+                        f"   pupil%: {tag.dark_percentile:g}")
+        else:
+            roi_line = (f"eye ROI: MISSING - press [e]   |   mouth[{mouth_state}]"
+                        f"   view: {view}   pupil%: {tag.dark_percentile:g}")
 
         # Per-frame label tally for the session (Plan 2b, Task 6). Counts come
         # straight from the sidecar's frame-keyed upserts, so re-labelled frames
@@ -1060,15 +1089,22 @@ def main(argv=None) -> int:
     # ROI capture + eye-zoom (Plan 2b)
     # ---------------------------------------------------------------------
     def _toggle_zoom() -> bool:
+        # `f` derives its zoom from the eye ROI; with no ROI there is nothing to
+        # zoom to, so it did NOTHING and the pilot read that as "f is broken".
+        # Never no-op silently: SAY why (no ROI) and HOW to fix it ([e]).
         if tag.eye_roi is None:
             logger.warning("No eye ROI yet; draw one with 'e' before zooming.")
+            _flash("no eye ROI - press [e] to draw one")
             return True
         if not tag.zoomed:
             raw = eye_zoom_crop(tag.eye_roi)              # UNCLAMPED (y0,y1,x0,x1)
             crop = vl.clamp_crop(raw, frame_h, frame_w)  # None if it misses the frame
             if crop is None:                             # no valid crop -> stay full-frame
+                # DISTINCT cause from "no ROI": an ROI exists but its padded box
+                # lands wholly off-frame, so the message + remedy differ.
                 logger.warning("Eye ROI does not intersect the frame; staying on "
                                "the full view (no zoom).")
+                _flash("eye ROI misses the frame - redraw with [e]")
                 return True                              # do NOT toggle into a broken zoom
             tag.zoomed = True
             cfg.crop = crop                              # guaranteed non-empty crop
@@ -1172,6 +1208,7 @@ def main(argv=None) -> int:
         if key == "e":
             if tag.zoomed:
                 logger.warning("Return to full frame (press f) before drawing an ROI.")
+                _flash("exit zoom [f] before drawing an ROI")
                 return True
             tag.arming = "eye"
             state["arm_selector"]()
@@ -1179,6 +1216,7 @@ def main(argv=None) -> int:
         if key == "m":
             if tag.zoomed:
                 logger.warning("Return to full frame (press f) before drawing an ROI.")
+                _flash("exit zoom [f] before drawing an ROI")
                 return True
             tag.arming = "mouth"
             state["arm_selector"]()
@@ -1191,12 +1229,19 @@ def main(argv=None) -> int:
         # costs more than the un-saved current keystroke.
         if key == "u":  # proposed ellipse is CORRECT
             # A confirmation must reference a real proposal: if the detector
-            # returned nothing (no eye ROI, or no pupil found), do NOT invent a
-            # null-proposal "confirmation" -- say so and no-op instead.
+            # returned nothing, do NOT invent a null-proposal "confirmation" --
+            # say WHY and no-op instead. The two causes need different remedies:
+            # no eye ROI at all (draw one) vs. an ROI whose detector found no
+            # pupil on THIS frame (draw the truth with [p]).
             if tag.last_proposed is None:
-                logger.warning("No proposed ellipse to confirm "
-                               "(set the eye ROI with 'e' and land on a frame "
-                               "with a detected pupil).")
+                if tag.eye_roi is None:
+                    logger.warning("No proposed ellipse to confirm: no eye ROI. "
+                                   "Press 'e' to draw one.")
+                    _flash("can't confirm: no eye ROI - press [e]")
+                else:
+                    logger.warning("No proposed ellipse to confirm: detector found "
+                                   "no pupil on this frame. Use 'p' to draw the truth.")
+                    _flash("can't confirm: no pupil found here - use [p]")
                 return True
             vl.upsert_frame_label(tag.sidecar, state["frame_idx"],
                                   vl.VERDICT_CONFIRMED,
@@ -1216,6 +1261,16 @@ def main(argv=None) -> int:
             # a frozen extent imposes, which is what corrupted zoomed
             # corrections before 1d8866b. So correcting while zoomed is fully
             # supported and is the expected workflow (judge the pupil close-up).
+            #
+            # `p` KEEPS WORKING with no proposal (a correction with proposed=None
+            # is the valid detector-miss record sub-project C needs), but we WARN
+            # so the user knows this label will lack the proposal-vs-correction
+            # comparison. Distinguish the two reasons the proposal is absent.
+            if tag.last_proposed is None:
+                if tag.eye_roi is None:
+                    _flash("no eye ROI - correction has no proposal to compare ([e])")
+                else:
+                    _flash("no pupil proposal here - recording a detector miss")
             tag.arming = "correct"
             state["arm_selector"]()
             return True
