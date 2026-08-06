@@ -226,7 +226,8 @@ Too large for one spec. Six sub-projects, each with its own spec → plan → bu
 
 | # | Sub-project | Produces | Depends on |
 |---|---|---|---|
-| **0** | Deep empirical audit | Findings corpus: definition inventory, duplication map, layering graph, dead-code census, artefact provenance survey, memory-claim verification, known-defect register, real-data measurements | — |
+| **−1** | **Secure the work at risk** | Off-disk copy of everything that exists in only one place: 139 unpushed commits, unmerged branches, uncommitted working trees, two stash-tags, and the gitignored hand-labelled artefacts no code can regenerate | — |
+| **0** | Deep empirical audit | Findings corpus: definition inventory, duplication map, layering graph, dead-code census, artefact provenance survey, memory-claim verification, known-defect register, real-data measurements | −1 |
 | **1** | Foundation | Registry + typed identity, constants, config, session model, IO, QC | 0 |
 | **2** | Enforcement | AST gates, import contracts, pre-commit, CI | 1 |
 | **3** | Analysis layer | Alignment, normalization, statistics, behaviour, spikes — ported behind the equivalence gate | 1, 2 |
@@ -234,9 +235,16 @@ Too large for one spec. Six sub-projects, each with its own spec → plan → bu
 | **5** | AI layer | Generated `CLAUDE.md`, skills, hooks, curated memory | 1–4 |
 | **6** | Migration & decommission | Cutover, freeze of the old repo, artefact preservation, cross-spec consistency pass | all |
 
-Build order is 0 → 6 in sequence, with one deliberate deviation: **enforcement (2) precedes the
+Build order is −1 → 6 in sequence, with one deliberate deviation: **enforcement (2) precedes the
 analysis port (3).** Gates written after the code they govern get bent to fit it. Written first,
 they define what "landing" means, and every ported module clears a bar that already exists.
+
+**Sub-project −1 was added on 2026-08-06**, after the scoping recon measured the exposure: 139
+commits exist only on this disk (`origin/main` last updated 2026-07-10), there are zero stashes, the
+SSH agent is not running so no push can be attempted, and every hand-labelled artefact — the
+4,725-unit TF labelling, 202 state-tag files, the blinded session-sorter output, the pupil labels —
+is gitignored. Auditing a repo whose only copy is local is defensible. Freezing or replacing one is
+not. This sub-project is a precondition, not a phase.
 
 ---
 
