@@ -57,7 +57,7 @@ demonstrated by an executing check, not by argument.
 | S1 | Every constant, palette, window and threshold has exactly one definition | CI gate fails on any shadow definition or inline magic number in the enforced set |
 | S2 | Subject/session identity is typed; filenames are parsed in exactly one place | CI gate bans filename parsing outside the registry builder and bans `str`/`int` session ids in public signatures |
 | S3 | Layer boundaries hold (`ingest → qc/tracking → analysis → figures`, no upward imports) | Import-contract check in CI |
-| S4 | Each ported analysis module reproduces the old repo's numbers on real data, or differs in a declared, justified way | Per-module equivalence test against a pinned oracle, plus the known-defect register (§6) |
+| S4 | Every numerical difference from the old repo is attributed; none is unexplained | Per-component difference report (ADR-009) with each delta tagged `defect-fixed` / `known-defect` / `design-change`; any `unexplained` blocks |
 | S5 | Every figure and results artefact is traceable to the exact code, parameters and inputs that produced it | Provenance sidecar written by the plotting/caching layer; check that fails on an artefact without one |
 | S6 | The AI layer's factual claims cannot go stale | Generator script + CI check that regeneration produces no diff |
 | S7 | Carried-over memory is true of the new repo | Every migrated note passed the verification gate; failures archived with a RETRACTED marker |
@@ -81,6 +81,10 @@ Each record states the decision, the alternatives considered, why this one won, 
 us to. These are immutable: to change one, add a superseding record.
 
 ### ADR-001 — Clean-room foundation, analysis ported behind an equivalence gate
+
+> ⚠️ **The gate clause of this record is superseded by ADR-009 (2026-08-06).** The clean-room
+> foundation decision stands unchanged; the definition of the gate does not. Read ADR-009 for the
+> operative rule.
 
 **Decision.** Write the foundation layer (registry, identity, constants, config, session model, IO,
 QC) from scratch against a written spec. Port each analysis module across a gate: it lands only if
@@ -264,6 +268,50 @@ filesystem's.
 **Commits us to.** Configuring a data root explicitly on every machine, rather than relying on paths
 that happen to resolve.
 
+### ADR-009 — Explained-difference gate (supersedes the gate clause of ADR-001)
+
+**Decision.** A ported component does **not** have to reproduce the old repo's numbers. It must
+**explain every difference**. Each component reports its delta against the old output and attributes
+each one to exactly one of:
+
+| Attribution | Meaning |
+|---|---|
+| `defect-fixed` | The old number was wrong; the register (§6) says so, or this port proves it |
+| `known-defect` | A register entry already predicted this difference, in this direction |
+| `design-change` | An intentional, specified change (different normalization, different window) |
+| `unexplained` | **Blocks the component. The only failing verdict.** |
+
+Reproduction is not the target and bit-identity is not a virtue. An *unexplained* difference is.
+
+**Alternatives.** (a) ADR-001 as written — reproduction is the default, difference the declared
+exception. (b) A pure fresh-build with no comparison at all: run everything new, treat old outputs
+as history.
+
+**Why.** (a) has the gate pointing the wrong way. The audit found that a substantial number of the
+old repo's outputs are simply wrong — every named QC profile silently no-ops, the TF sampling period
+is 5× too coarse, 15,802 session-id rows are corrupted across six live caches, and ten scripts have
+been writing into a deleted directory. Making reproduction the default would spend the port's effort
+proving we can regenerate defects, and would create pressure to preserve them.
+
+(b) fixes that but discards the one thing comparison is genuinely good for: catching the regression
+you did **not** intend. If every difference is expected, an accidental bug is indistinguishable from
+progress — and in this codebase the characteristic failure is a *plausible wrong number*, not a
+crash. The audit's own examples make the point: four disagreeing firing-rate floors and two
+`CHANGE_SIZES` with different membership would each pass any test that did not already know the
+right answer.
+
+The explained-difference rule takes the useful half of each. The new repo is free to be correct
+rather than compatible, while every movement still has to be accounted for by a human who
+understands the science.
+
+**Commits us to.** A per-component difference report as part of the ADR-007 packet — meaning the
+"how we know it's right" section carries both the executed output *and* the attributed delta. It
+also means the old repo must remain readable (not merely archived) for the duration of the port,
+and that the known-defect register is consulted per component rather than once.
+
+**Note on scope.** This changes what "landing" means for every ported component, but does not change
+ADR-001's clean-room foundation decision, which stands.
+
 ---
 
 ## 6. The known-defect register
@@ -280,10 +328,13 @@ Examples already known at design time:
 - results since retracted (the transient/sustained state result, a raw-Hz artifact null after
   FR-normalization) or refuted (the "sustained StimSens = expert signature" claim).
 
-Therefore the audit must produce a **known-defect register**: for every analysis module, a verdict
-of either *must reproduce the old number* or *must differ, in this specific direction, for this
-reason*. Any module whose status cannot be determined is quarantined and specified explicitly rather
-than ported on assumption.
+Therefore the audit must produce a **known-defect register**: for every analysis module, the defects
+known to affect it and the direction each one moves its outputs. Under ADR-009 the register is not a
+list of pass/fail verdicts but the **evidence base for attribution** — when a ported component's
+output differs, the register is what lets that difference be tagged `known-defect` rather than
+`unexplained`. A module whose defect status cannot be determined is **quarantined**: it is specified
+explicitly rather than ported on assumption, because every one of its deltas would otherwise be
+unexplained by definition.
 
 This register is a first-class deliverable of sub-project 0, and a precondition for sub-project 3.
 

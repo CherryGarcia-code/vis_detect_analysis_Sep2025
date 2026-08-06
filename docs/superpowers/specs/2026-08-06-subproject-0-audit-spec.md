@@ -126,9 +126,14 @@ Abbreviated; each is a checkable deliverable, not a topic to explore.
 - Per-cache staleness: mtime vs last-commit of the writing script *and* the library modules it
   imports; validated by a schema/value check (the `predicted_session_groups.csv` `chron` column is
   the worked example — it holds values current code cannot produce).
-- **Regenerability test: for ~20 tracked `FIGURES` artefacts, locate the producing script, re-run
-  with the current manifest, and diff.** Report the pass rate and the fraction whose producing
-  script cannot be identified at all.
+- **Traceability census (no re-running).** For every tracked `FIGURES` artefact, determine whether
+  its producing script can be identified at all, and by what means (import of `config.FIGURE_DIR`,
+  a matching source-string literal, a sidecar, or not at all). Report the fraction that are
+  untraceable. Recon baseline: 43 of 183 figure-writing scripts use `config.FIGURE_DIR`; a non-session
+  figure stem matches a source literal only 14% of the time.
+  **This measures the provenance gap — it is evidence for the provenance layer (S5), not a target.**
+  Per ADR-009 the old figures are explicitly *not* a reproduction target: comparison happens in the
+  new repo, per component, where each difference is attributed rather than eliminated.
 - Collision counts for every date-keyed index over pkls/caches, per subject, against the real
   285-file pkl tree; which twin currently wins, and whether it is deterministic.
 - `SESSION_FILTER` divergence: for each of the 28 scripts reading a manifest directly, its session
@@ -173,25 +178,30 @@ Abbreviated; each is a checkable deliverable, not a topic to explore.
 
 **D8 — Known-defect register** *(the deliverable that gates sub-project 3)*
 
-For every analysis module, a verdict: **must reproduce** the old number, or **must differ**, in a
-stated direction, for a stated reason. Modules whose status cannot be determined are **quarantined**
-and specified explicitly rather than ported on assumption.
+Per ADR-009 this is **not** a list of pass/fail verdicts. It is the **evidence base for
+attribution**: when a ported component's output differs from the old repo's, the register is what
+allows that delta to be tagged `known-defect` instead of `unexplained`. For each defect it must
+record which modules and artefacts it touches, and **in which direction** it moves their outputs —
+a direction-less entry cannot attribute anything.
+
+A module whose defect status cannot be determined is **quarantined** and specified explicitly, since
+every delta it produced would be unexplained by definition.
 
 Seed entries, already evidenced:
 
-| Defect | Status |
+| Defect | Expected direction of effect |
 |---|---|
-| `load_qc_profile` returns `{}`; strict/lenient runs identical | must differ |
-| `TF_SAMPLE_PERIOD = 0.25` (5× too coarse) | must differ |
-| `parse_session_date(int(x))` mis-sorts 6-digit and day-1–9 tokens | must differ |
-| 15,802 corrupted session-id rows in 6 live caches | must differ |
-| Stale `tf_responsive` registries behind the VMS>DMS headline | must differ |
-| Lick-channel under-detection, 33 sessions | must differ |
-| TF-pulse PETH circularity and pre-fix caches | must differ |
-| Trial/event alignment defect (QC1, in repair) | must differ |
-| Retracted transient/sustained state result | must differ |
-| Refuted "sustained StimSens = expert signature" | must differ |
-| `ref`-trial change-presented ambiguity | **quarantined** pending D1 |
+| `load_qc_profile` returns `{}`; strict/lenient runs identical | Unit counts change wherever a named profile was claimed |
+| `TF_SAMPLE_PERIOD = 0.25` (5× too coarse) | TF evidence binning 5× finer; kernel/latency estimates shift |
+| `parse_session_date(int(x))` mis-sorts 6-digit and day-1–9 tokens | Session ORDER changes → every learning-trajectory slope |
+| 15,802 corrupted session-id rows in 6 live caches | Joins recover previously-dropped sessions → n increases |
+| Stale `tf_responsive` registries behind the VMS>DMS headline | Responsive-unit sets change post-lick-fix |
+| Lick-channel under-detection, 33 sessions | Lick rates rise in affected sessions; across-session trends flatten |
+| TF-pulse PETH circularity and pre-fix caches | Sign-aligned averages lose the manufactured effect |
+| Trial/event alignment defect (QC1, in repair) | Trial↔event pairing changes on affected pkls |
+| Retracted transient/sustained state result | Effect should vanish after FR-normalization |
+| Refuted "sustained StimSens = expert signature" | Should collapse to state occupancy |
+| `ref`-trial change-presented ambiguity | **quarantined** pending D1 — direction unknown until settled |
 | `CHANGE_SIZES` membership divergence (catch included/excluded) | **quarantined** pending D1 |
 
 ## 4. Deliverables
@@ -218,16 +228,19 @@ The audit is complete when:
 - **A2** The known-defect register covers every analysis module that sub-project 3 will port. No
   module is unclassified.
 - **A3** Every "must differ" entry states the direction of the difference and the reason.
-- **A4** The regenerability test has been run on ≥20 tracked figures with a reported pass rate.
+- **A4** The traceability census covers every tracked figure, with a reported untraceable fraction.
 - **A5** The corpus is curated to fit one working session; raw output is referenced, not inlined.
 - **A6** Every number in the executive summary traces to a row in `measurements.csv`.
 
 ## 6. Explicit non-goals
 
-- Fixing anything. The audit measures; sub-projects 1–6 fix. The one exception under consideration
-  is `check_refactor_guardrails.py`'s `SKIP_DIRS` — a one-line change that converts an unusable gate
-  into the measurement instrument D2 and D5 both need. **Decision deferred to review.**
+- Fixing anything, with **one approved exception**: `check_refactor_guardrails.py`'s `SKIP_DIRS`
+  gains `.claude/` (decided 2026-08-06). A one-line change to a QC script — not analysis code — that
+  converts an unusable gate reporting ~84% phantom violations into the measurement instrument D2 and
+  D5 both need. Everything else the audit finds is recorded, not repaired.
 - Re-deriving scientific conclusions.
+- **Reproducing old outputs.** Per ADR-009 the old repo is not a reproduction target; comparison
+  happens per component in the new repo, where differences are attributed rather than eliminated.
 - Auditing code already on the drop-list. Dead code is enumerated and dropped, not analysed.
 - Auditing `archive/`, `_DeepUnitMatch_repo/`, `_preserved_from_worktrees_20260628/`,
   `refactor_baseline/`, or `.venv/`.
@@ -242,9 +255,24 @@ or replacing one is not.
 The hand-labelled artefacts were copied to `e:\python_analysis\_handlabel_backup_20260806` on
 2026-08-06 — same disk, so this mitigates accidental deletion only, not disk failure.
 
-## 8. Open questions for review
+## 8. Resolved questions (2026-08-06)
 
-1. Should the `SKIP_DIRS` one-line fix be made during the audit (§6)?
-2. Does the regenerability test target 20 figures, or a stratified sample across all 23 topics?
-3. Is BG_012 in audit scope, given its protocol variants are parked?
-4. Should D7 block on the SSH key, or proceed and re-verify later?
+1. **`SKIP_DIRS` one-line fix during the audit?** → **Yes.** Recorded as the sole fixing exception
+   in §6.
+2. **Regenerability test — 20 figures or stratified?** → **Neither.** The test was rejected on the
+   grounds that it treats the old repo's figures as the target, when the point of building fresh is
+   that some outputs *should* change. Replaced by a traceability census (D4, no re-running), with
+   per-component comparison moved into the new repo under ADR-009.
+3. **BG_012 in scope?** → **Full scope.** Its 9 colliding date-keys and 49-rows-for-40-dates manifest
+   are the hardest available test of the ADR-004 identity model.
+4. **Does D7 block on the SSH key?** → **Moot.** Resolved 2026-08-06: all 12 branches and both
+   stash-tags are on origin, and the sibling `Apr2023` repo is clear. D7's remaining work is the
+   gitignored-artefact inventory, which needs no network.
+
+### Still open
+
+- The four irreplaceable hand-made files (~27 KB: `state_labels/state_episodes.csv` 217 hand-drawn
+  episodes, `session_sorting/manual_session_labels.csv` 133 blinded sorts, `state_labels/rules.md` +
+  `state_rule.pkl`, and the pupil sidecars) are still gitignored and exist only on one disk.
+  `data/cache/state_tags/` (29.4 MB) is **model output, not hand-labelled**, and is regenerable.
+  TF labelling excluded by the user as not important.
