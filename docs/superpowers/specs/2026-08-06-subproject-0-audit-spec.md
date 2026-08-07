@@ -126,11 +126,12 @@ Abbreviated; each is a checkable deliverable, not a topic to explore.
 - Per-cache staleness: mtime vs last-commit of the writing script *and* the library modules it
   imports; validated by a schema/value check (the `predicted_session_groups.csv` `chron` column is
   the worked example — it holds values current code cannot produce).
-- **Traceability census (no re-running).** For every tracked `FIGURES` artefact, determine whether
-  its producing script can be identified at all, and by what means (import of `config.FIGURE_DIR`,
-  a matching source-string literal, a sidecar, or not at all). Report the fraction that are
-  untraceable. Recon baseline: 43 of 183 figure-writing scripts use `config.FIGURE_DIR`; a non-session
-  figure stem matches a source literal only 14% of the time.
+- **Traceability census (no re-running), stratified sample** (amended 2026-08-07, panel O4): ~100
+  figures sampled across all 23 topics rather than all 3,056 — same headline fraction with a CI at
+  a fraction of the cost. Determine whether each figure's producing script can be identified, and
+  by what means (import of `config.FIGURE_DIR`, a matching source-string literal, a sidecar, or
+  not at all). Recon baseline: 43 of 183 figure-writing scripts use `config.FIGURE_DIR`; a
+  non-session figure stem matches a source literal only 14% of the time.
   **This measures the provenance gap — it is evidence for the provenance layer (S5), not a target.**
   Per ADR-009 the old figures are explicitly *not* a reproduction target: comparison happens in the
   new repo, per component, where each difference is attributed rather than eliminated.
@@ -164,6 +165,17 @@ Abbreviated; each is a checkable deliverable, not a topic to explore.
 - Pairwise trigger-overlap between the 7 skills; which pairs can both fire and what decides.
 - Every model id, tool name and agent type named in prose across `.claude/`.
 - Count instruction files claiming canonical authority (found: 4) and which any tool actually loads.
+
+**D9 — Storage-format spike** *(added 2026-08-07, ADR-015; time-boxed one working day)*
+
+Convert three real sessions spanning the range (a small BG_049, a large BG_046, and a BG_012
+colliding-date twin) to NWB via NeuroConv. Measure: compressed size vs pkl; cold-read latency for
+the three access patterns the analysis layer actually uses (all trials for one unit; all units in
+one window; the trials table alone); round-trip equality of spike times and trials; where the
+per-frame stimulus log lands (session-continuous frame table vs ragged per-trial arrays — the one
+genuine schema-design decision). Also measure whether re-ingest with `keep_all_good=True` recovers
+all KS-good units from Kilosort output without re-reading raw `.ap.bin` (decides whether ADR-018's
+non-destructive store is cheap or a project). Results → `measurements.csv`; ADR-015 cites numbers.
 
 **D7 — Work at risk**
 - Refresh `origin` (requires the SSH key) and re-verify every "unpushed" conclusion; the recon's
@@ -218,6 +230,11 @@ Committed under `docs/audit/`:
    check that would settle each.
 6. `drop-list.md` — code, docs and artefacts that should be dropped rather than analysed, with the
    evidence for calling each dead.
+7. `branch-disposition.md` *(added 2026-08-07, ADR-020)* — one row per live old-repo branch and per
+   untracked working-tree file: merge before freeze / port on first use / abandon with reason. The
+   QC1 alignment repair is decided explicitly. Precondition for the sub-project 6 freeze.
+8. `cold-list.md` seed *(ADR-020)* — every analysis module not pulled by a live line of inquiry,
+   listed for lazy porting on first use.
 
 ## 5. Acceptance criteria
 

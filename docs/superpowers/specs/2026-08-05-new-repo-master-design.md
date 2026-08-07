@@ -254,6 +254,9 @@ including for machinery whose correctness is obvious to the author.
 
 ### ADR-008 — New repo is a sibling directory and contains no junctions
 
+> ⚠️ The "off-disk safety is the remote's job" clause is **superseded by ADR-022** (2026-08-07).
+> The sibling-location and no-junctions decisions stand.
+
 **Decision.** The new repo lives at `E:\python_analysis\git_repos\visdetect` — a sibling of
 `vis_detect_analysis_Sep2025`, never nested inside it. It contains **no NTFS junctions or symlinks**
 to data. Large inputs (`data/pkls`, `data/unit_match`, `data/anatomy`, existing `FIGURES/`) are
@@ -327,6 +330,10 @@ and that the known-defect register is consulted per component rather than once.
 ADR-001's clean-room foundation decision, which stands.
 
 ### ADR-010 — A paved road for new analyses
+
+> ⚠️ **Extended 2026-08-07**: the contract is split into two tiers (explore/claim) and the
+> near-duplicate AST gate is demoted to a periodic report — see **ADR-020**. The statistical rows
+> (pre-specification, pseudoreplication, nulls) are fully specified in **ADR-021**.
 
 **Decision.** New analyses are not written from a blank file. Each is created by a scaffold command
 from a template, and must satisfy a written **analysis contract**, enforced by the gates of
@@ -432,6 +439,10 @@ ADR-012 … ADR-014 address that half.
 
 ### ADR-012 — Confirmatory cohort: mechanism built, activation deferred
 
+> ⚠️ **Amended 2026-08-07 (ADR-020)**: the dormant loader-refusal guard is replaced by a
+> session-access log; the `cohort` field and the deferral stand. ADR-021's design-sensitivity
+> module supplies the quantitative revisit trigger.
+
 **Status: accepted, activation deferred (decided 2026-08-07).**
 
 **Decision.** The registry (ADR-004) carries a `cohort` field per session — `discovery` or
@@ -466,6 +477,11 @@ project should know which of those protections applied to it, and the ledger is 
 out.
 
 ### ADR-013 — A results ledger
+
+> ⚠️ **Extended 2026-08-07**: required fields added by **ADR-018** (QC profile, stability control,
+> cell-type provenance), **ADR-019** (prespec_commit, experimental_unit, figure_panels) and
+> **ADR-021** (per_subject, scope, `inconclusive` status, enumerated Verification, bounded
+> backfill).
 
 **Decision.** One versioned, in-repo ledger holds every claim the project makes. Each row records:
 
@@ -503,6 +519,10 @@ unknowable.
 
 ### ADR-014 — Null controls and synthetic recovery are gates, not habits
 
+> ⚠️ **Scope refined 2026-08-07 (ADR-021)**: nulls apply to ledger-entering inferential outputs
+> (descriptive artefacts declare themselves); recovery is narrowed to estimators with free
+> parameters/latent structure, once per family, and gains a model-recovery requirement.
+
 **Decision.** Two requirements, enforced by the sub-project 2 gates:
 
 1. **Every analysis ships a null control** — label shuffle, circular shift, or the appropriate
@@ -532,6 +552,328 @@ bug at the moment the estimator was written rather than after it produced a find
 **Commits us to.** Writing a null per analysis and maintaining synthetic generators — the largest
 ongoing cost of any ADR here, and the one most directly aimed at the project's stated goal of
 findings that can be trusted.
+
+---
+
+### Preamble to ADR-015 … ADR-022 — the panel round
+
+Adopted 2026-08-07, after a six-lens expert review of ADR-001…014 (data standards, statistical
+rigor, reproducibility engineering, ephys QC, publication readiness, adversarial critic) and the
+project owner's answers to its eight questions. Full evidence and rationale:
+`2026-08-07-master-design-panel-review.md` (+ raw panel output alongside). These records carry the
+decisions; the review document carries the arguments. Where an earlier ADR is extended or partly
+superseded, it bears a banner pointing here.
+
+### ADR-015 — The data layer: a self-describing, schema-versioned canonical store
+
+**Decision.** The design finally specifies its data layer (it silently inherited pickle/CSV/`.npy`):
+
+- **Session store: NWB (HDF5) per session, written via NeuroConv, behind a `SessionStore`
+  boundary** (`load_session(SessionKey) → Session`) so the backend is swappable and the analysis
+  layer never touches the format. Final confirmation comes from a **one-day measured storage spike
+  in the audit** (3 real sessions incl. a BG_012 colliding twin: size, read latency on the three
+  real access patterns, round-trip equality → `measurements.csv`). Declared fallback if the
+  per-frame stimulus log proves awkward: NWB for units/trials/events + a referenced Parquet
+  sidecar, same boundary.
+- **Derived tables are Parquet; CSV is export-only** (no code re-reads a CSV under the cache root —
+  gated). This kills the leading-zero session-id bug at the format level. Derived arrays carry
+  named dimensions, bin centres and unit ids (no bare `.npy`).
+- **Every artefact carries `schema_version`**; the loader refuses unknown versions; schema changes
+  ship with explicit, tested migrations and a decision-log entry. The "`None` = both 'absent' and
+  'unverified'" pattern is banned.
+- **Identity is stamped inside the artefact** (opaque `session_uid` + subject + schema version) at
+  ingest; the registry indexes stamped ids; a path-vs-stamp disagreement is a hard error. Twins
+  (`_b`/`_c`/`_v2`) become data facts, not naming conventions.
+- **One canonical per-session Units table**: spike times plus every per-unit attribute (anatomy,
+  waveform, tracking ids, optotag verdict, cell-type label) as columns with `*_version`/`*_source`
+  attributes. A typed `UnitID` (and `ChronicUnitID` carrying tracker + version) joins ADR-004's
+  API; bare `(session, cluster)` tuples are banned from public signatures. The
+  `(session_id, cluster_id)` string-join architecture — the surface the 15,802-row defect ran on —
+  is retired.
+- **The MATLAB NI-extraction is dispositioned**: preferred, read the raw SpikeGLX nidq channels
+  directly in Python (permanently retiring the lick-defect class); otherwise the `.mat` is declared
+  an external upstream artefact with recorded producer, version and content hash.
+- Old pkls remain readable at the ingest boundary until migrated; after digest-verified round-trip
+  they are deleted (sub-project 6) — running both stores indefinitely on one disk is the expensive
+  default, not the safe one.
+
+**Recorded rejections** (so they are not relitigated): DataJoint / DataJoint Elements / Spyglass
+(NWB+MySQL+computed-table rewrite of the very layer ADR-001 ports — pure overhead for one person on
+Windows; the two good ideas, NWB store and dependency-driven invalidation, are adopted separately);
+NWB-Zarr (immature for this shape); a bespoke parallel schema document (one schema, owned upstream).
+
+**Commits us to.** NeuroConv/pynwb as load-bearing dependencies; the migration of 285 sessions;
+DANDI-eligibility as a by-product (deposit scope per the owner: processed NWB, not raw).
+
+### ADR-016 — Environments are pinned and randomness is provenance
+
+**Decision.**
+- **Lockfiles, not version lists**: `uv.lock` for the analysis stack (one universal file covering
+  `win_amd64` + `linux_x86_64`), `pixi.lock` for the heavy KS4/CUDA/UnitMatch layer. Python floor
+  ≥3.12 (3.10 EOLs Oct 2026), confirmed by a trial lock (the `pyddm==0.9.0` pin is the likely
+  blocker and is checked first). S5's "environment" means *lockfile hash + platform tag*, plus an
+  **external-tools table** (Kilosort4 commit, UnitMatch/DANT/Bombcell versions, TPrime build,
+  SpikeGLX version, MATLAB release) — the tools that actually determine spike times.
+- **RNG policy**: an AST gate bans `np.random.seed` and bare `np.random.*`; every stochastic
+  function takes `rng: np.random.Generator`; entry points draw fresh 128-bit entropy per run,
+  **recorded in the provenance sidecar**; `rng.spawn()` for workers. A seed *registry* is
+  explicitly rejected — registering magic numbers recreates the shadow-constant pathology and
+  correlates "independent" nulls; what is registered is entropy per run, in the log.
+- **Thread policy**: workers run under `threadpool_limits(1)`; the sidecar records BLAS
+  name/version/threads.
+- **`numerical-noise` becomes the fifth ADR-009 attribution**, with a measured per-analysis-class
+  tolerance floor (≥5 repeat runs across platforms/thread settings; the observed spread is the
+  floor). Bit-identity is abandoned as a target — unattainable under DYNAMIC_ARCH BLAS and wrong to
+  chase. This resolves §10's former Open Question 4.
+- Cheap coherence gates: `uv lock --check` in CI; a ledger-integrity check that every row's
+  recorded lockfile hash resolves to a blob reachable from its commit.
+- Containers (Apptainer) are **deferred with recorded reasons**; the lockfile is their prerequisite
+  anyway.
+
+### ADR-017 — Content-addressed inputs and caches; the time base is typed
+
+**Decision.**
+- **Registry rows carry content digests** (sha256 + size + mtime) of every upstream input and every
+  produced artefact. Registry refresh diffs digests and emits a `changed-inputs` report that must
+  be acknowledged in the decision log before downstream artefacts are considered valid. (This is
+  the mechanism that would have caught the lick-channel re-extraction: content changed at unchanged
+  paths, invisible to any path-based snapshot.) A committed manifest-of-hashes (`registry/
+  session-manifest.tsv`, with a `regenerable` column) is the data-versioning mechanism; DVC /
+  DataLad / git-annex are rejected at this scale with recorded reasons (revisit at publication —
+  then DataLad).
+- **Caches are content-addressed**: artefact key = hash(analysis id ‖ code version ‖ resolved
+  constants ‖ input digests ‖ params ‖ lockfile hash). The loader refuses a key mismatch;
+  `allow_stale=` is explicit and ledger-recorded. Staleness becomes an identity check, not an mtime
+  heuristic; the `tf_responsive`-registries defect class becomes unrepresentable. ADR-014's
+  null-currency check collapses into the same key comparison — one mechanism, not two.
+- **Time-base provenance is mandatory.** The session artefact carries a `time_base` block (which
+  spike-times file, TPrime build, reference stream, sync residual statistics). Ingest **fails
+  closed** instead of silently falling back to uncorrected times; `time_base="uncorrected"`
+  requires an explicit flag, and the loader refuses such a session unless the calling analysis
+  declares that intent — the same guard pattern as ADR-012's cohort field.
+
+### ADR-018 — QC is non-destructive, named, and versioned; groups are strata, not verdicts
+
+**Decision.**
+- **Ingest stops applying QC destructively.** The store keeps **all Kilosort-good units** plus a
+  per-unit metric panel; every QC criterion is applied at analysis time as a **view**. (Today's
+  pkls store spikes only for `good_and_stable` units, making every future analysis a subset of one
+  unnamed 2025 decision — which quietly falsifies ADR-011 for the most consequential decision in
+  the pipeline.)
+- **The metric panel is computed once at ingest** using field-standard definitions
+  (SpikeInterface / Bombcell, stored as the tools' own output tables with versions — no wrapper
+  API), with the Khilkevich sliding-window stability statistic retained as a named metric.
+- **Named, hashed, versioned QC profiles** (~4: `sorting_quality`, `striatal_default`,
+  `striatal_strict`, `tracking_eligible`), each split into a `quality` block and an `eligibility`
+  block. The four disagreeing firing-rate floors were different *questions*, not four copies of one
+  number — the defect was namelessness, and the enforceable invariant is *named and recorded*, not
+  *unique*. Inline thresholds are gated; sidecar + ledger record profile id + hash; profile changes
+  are decision-log entries; promotion to `confirmed` requires a second-profile rerun.
+- **Metrics are tri-state** (pass / fail / unknown) and **unknown fails closed** — `fillna(0)`
+  passing a contamination gate is the `load_qc_profile() → {}` failure class again.
+- **Registered named variants** for constants (e.g. `CHANGE_SIZE_POOLS['tracking_qc_v1']`): the
+  canonical module owns every value; a deliberate divergence carries a name, an owner and a reason.
+  A gate that cannot express a correct exception gets routed around.
+- **Session-level covariates live in the registry**: days-from-implant, yield, AP RMS, median
+  amplitude, narrow-waveform fraction, drift estimate, channel-map hash — plus the behavioural
+  state columns (occupancies, session group manual+predicted, coverage flags). Both time axes are
+  carried: `days_from_implant` (technical drift) and the training-session index (the science
+  variable) — collinear within subject, partially decorrelated across subjects.
+- **Strata, not verdicts** (project owner, 2026-08-07): only data-integrity QC (sync, clock drift,
+  minimum trials) may remove a session globally. Group labels, state tags and eligibility rules are
+  *selectors*: every session keeps all its labels; each analysis declares its stratum; the
+  declaration is recorded in the sidecar and the ledger's scope field. A Disengaged-dominated
+  session is excluded from a Balanced-vs-Balanced contrast and is exactly the inclusion set for
+  disengaged-across-learning. The same principle governs units (a stricter profile hides, never
+  deletes) and time base (uncorrected is refused-unless-declared, not erased).
+- **Chronic-stability control is a contract row** for every across-session claim: a declared
+  control from a named menu (days-from-implant covariate / composition matching / tracked-subset
+  replication / within-window comparison), with a ledger field where `none` is legal but visible.
+  Measured motivation: broad/SPN 89→15 % at the KS4 detection level with amplitude halving, while
+  the behavioural gate excluded 5 of 6 SPN-rich June sessions — learning stage and recording epoch
+  are collinear by construction.
+- **"Tracked unit" becomes a registry table** keyed (subject, track_id, tracker, tracker_version,
+  params_hash) with per-link scores, ISI-fingerprint checks, consensus flag, and a named
+  per-subject-calibrated track-QC profile (within-day split-half sorts; across-shank negatives if
+  multi-shank). Hand verdicts move to the decision log.
+- **Cell-type label provenance is a required ledger field**: `celltype_label_source`
+  ({optotag_collision_confirmed, optotag_candidate, waveform_gmm, multimodal_classifier,
+  unlabelled}) + confidence. A claim naming D1/D2 cites collision-confirmed units or says
+  "putative" with the source named (3 collision-confirmed units exist, all D1, zero D2).
+- Five ephys entries join the known-defect register with directions (per the panel review),
+  including BG_031's Laser-event extraction gap (35/43 sessions) — a data-completeness defect that
+  looks like a biological result.
+
+### ADR-019 — The publication layer
+
+**Decision.**
+- **A realized `n_table` is a mandatory sidecar block** (n subjects/sessions/units/trials, per
+  condition, per panel, plus the declared clustering variable) — gate-enforced like provenance
+  itself. Journals demand exact n per group per panel; adding this later means re-running
+  everything.
+- **The registry gains `subjects` and `acquisition` tables**: species, strain, genotype, **sex**
+  (the cohort is mixed-sex — recorded per subject, reported as n-per-sex; sex is not modellable as
+  a covariate at k ≤ 5), DOB, project-licence (PPL) number, surgery date, implant coordinates,
+  hemisphere; per-session probe serial, IMRO map, rig, sorter + params, training stage.
+- **Manuscript panels are typed artefacts** (`F3b`, `ED2a`) bound by a manifest to component +
+  commit + registry snapshot + environment lock + n_table + supporting ledger rows; one-command
+  `repro <panel>`; a CI smoke job regenerates two panels so the path cannot rot. **No figure
+  produced by the old repo may enter the manuscript** — old figures are archive.
+- **Every figure emits `source_data.csv`** (the plotted values, tidy) — near-free at write time;
+  satisfies source-data requests; lets ADR-009 diff numbers instead of pixels.
+- **Sub-project 5 produces a human layer too**: README/docs generated from the same source as
+  CLAUDE.md, plus three hand-written pages (30-minute walkthrough; task/vocabulary glossary incl.
+  the `fa` ≠ SDT-false-alarm trap; data-provenance map). The ADR-007 packet corpus is kept
+  browsable — it *is* the onboarding manual and the Methods first draft.
+- **Release hygiene**: CITATION.cff (+ ORCID); an explicit **data** licence decision at deposit
+  time (MIT covers code only; DANDI needs CC0/CC-BY); `paper-freeze/<name>` tags with Zenodo DOIs
+  at submission and each revision; generated ARRIVE-E10 + Reporting Summary drafts from registry +
+  decision log + ledger (blank fields become explicit N/A disclosures; the blinded session sorter —
+  including its built-in repeat-based intra-rater reliability check — is reported as the genuine
+  blinding procedure it is).
+- **The NWB export contract is tested from day one**: CI writes one synthetic session through the
+  artefact writer and runs `nwbinspector --config dandi`, asserting zero CRITICAL findings.
+- **Ledger columns added**: `prespec_commit`, `experimental_unit` (mouse/session/unit),
+  `figure_panels` (a retraction immediately names the panels it invalidates).
+
+### ADR-020 — Process reality: tiers, skeleton, budget, sunset
+
+**Decision.**
+- **Two-tier analysis contract.** Tier 1 (*explore*) costs only what the scaffold gives free:
+  registry session sets, canonical constants, artefact API, layer declaration, index entry.
+  Tier 2 (*claim*) fires **at promotion** — the moment output is cited in a ledger row, figure or
+  results doc — and adds the null, recovery, pseudoreplication method, reuse statement, test and
+  packet. Enforced by `ledger add` refusing a row whose Tier-2 artefacts are missing or stale.
+  Scratch/notebook paths are exempt from *gates*, never from *provenance*: their artefacts are
+  stamped `provenance_tier: scratch` and are mechanically ineligible for ledger rows or panels.
+  (Measured basis: full-contract overhead ≈ 8–25 h vs 3–6 h to write an exploratory analysis;
+  ~80 % of exploratory analyses die without a claim; and the gate now fires exactly at ADR-014's
+  "moment of excitement".)
+- **Milestone 0.5 — walking skeleton** (time-boxed 3–5 days, before the Stage-2 spec session): one
+  real day-1–9 session plus one BG_012 colliding twin, end-to-end through registry → typed key →
+  constants → load → PSTH → figure with sidecar → ledger row → one gate. Specs 1–6 must cite its
+  measured ergonomics. If typed-ID or sidecar ergonomics fail here, amending ADR-004/S5 early is
+  the mechanism working, not failing.
+- **Gate tiers, stated per gate**: (1) pre-commit — source-only, seconds; (2) CI — source-only,
+  minutes, GitHub-hosted win+linux, running against a **synthetic golden mini-session** (the repo
+  is public, so no real unpublished data is committed); (3) verification runs — data-dependent,
+  local/Slurm, pre-milestone or pre-ledger, advisory-with-report. Full-data runs produce a
+  **commit-pinned receipt** (`.ci/receipts/fulldata-<sha>.json`) without which the merge fails.
+  **No self-hosted runner on the data box.**
+- **Packets re-scoped**: bundled by module group / gate family (~15–25 total); four of six sections
+  machine-generated (provenance, blast radius, executed output or CI-receipt reference, ADR-009
+  delta table); the human writes "what it is" and the decision. A **seventh, adversarial section**
+  — "strongest objection found, and its resolution", produced by an independent pass — so the
+  reviewer arbitrates a disagreement rather than assenting to a proposal.
+- **The near-duplicate AST check is demoted** to a monthly/pre-milestone triage report (top-N
+  candidate pairs, each triaged merge/justify/ignore-with-reason). The must-import registry and the
+  same-name-different-behaviour ban stay hard — they are the zero-false-positive checks, and the
+  latter is the genuinely corrupting class.
+- **One sanctioned, logged override**: `# gate-override: <rule-id> reason="…"`, honoured by the
+  gate, appended to a git-tracked log, counted and reviewed per milestone; `--no-verify` denied at
+  the harness level. Every gate failure names the rule, the ADR, the historical defect it prevents,
+  and the override syntax.
+- **Time-box and stop-loss**: a stated budget per sub-project, a named stop-loss date, and the
+  pre-agreed fallback — collapse to walking-skeleton scope (registry + constants + provenance + one
+  gate family) with everything else ported lazily. Live science continues in the old repo until
+  freeze; the freeze is preceded by a **per-branch disposition table** (sub-project 0 deliverable:
+  merge / port / abandon-with-reason for every branch and untracked file, the QC1 repair decided
+  explicitly); no new old-repo branches after the freeze date.
+- **Port sunset = lazy porting** (owner's answer, 2026-08-07 — no figure list exists yet and
+  forcing one would narrow an exploratory project): every old module starts on `cold-list.md` and
+  is ported **on first use** through the ADR-009 gate. "Done" = foundation + gates complete; the
+  cold-list may be nonempty forever; >~12 modules pulled across before the foundation stabilises is
+  an alarm, not a plan.
+- **Dependency fix**: the minimal artefact/provenance API moves into sub-project 1 (sub-project 2's
+  gates need it; only the plot system and palettes remain in 4).
+- **ADR-012's dormant loader-refusal guard is replaced by a session-access log** (every run records
+  which sessions it touched, alongside the sidecar). The `cohort` field stays. The access log is
+  what makes a future confirmatory split defensible — a candidate held-out set provably appears in
+  zero prior analyses.
+- **Old FIGURES/cache disposition**: the old tree becomes a read-only archive root referenced by
+  the configured data root; tracked deliverables migrate; untracked figures are deleted only after
+  submission.
+- **ADR-005 refinement**: generated content lives in `CLAUDE.generated.md` (separate from prose);
+  the CI failure names the one-command fix; the *prose* half gets the dead-path check (the old
+  CLAUDE.md's 18 %-dead problem was prose, which a generator does not solve).
+
+### ADR-021 — Statistical inference, specified (extends ADR-010 / 013 / 014)
+
+**Decision.**
+- **The hierarchy is named**: trial < unit < session < subject. Session-level random intercept is
+  the default random effect; **subject is never a random effect at k ≤ 5** (fixed effect or
+  stratification — a 3-level variance component at k=3 converges to ~0 and returns pooled inference
+  wearing a rigorous hat). The mixedlm and a cluster-robust OLS are fitted as a pair with the
+  convergence flag recorded; the hierarchical bootstrap is the sanctioned nonparametric
+  alternative. Bootstrap resampling units are declared; bootstrapping over subjects at k ≤ 5 is
+  banned.
+- **Ledger requirements**: `per_subject` estimate array (sex-annotated), `n_subjects_replicating`,
+  and `scope_of_inference` from a controlled vocabulary; a claim's wording must be derivable from
+  its scope. **A claim that reverses sign in any contributing subject is capped at `exploratory`
+  with a required `needs_more_data` note** (owner's rule, 2026-08-07).
+- **Status vocabulary gains `inconclusive`**; any claimed null carries a TOST/equivalence test
+  against the pre-registered minimum interesting effect, with the bound and CI stored. A negative
+  that excludes effects larger than the MIE is a null; one that does not is inconclusive and is
+  worded as underpowered.
+- **Recovery is split**: (a) parameter recovery for estimators with free parameters or latent
+  structure — simulated-vs-recovered scatter per parameter, at realistic trial counts and stimulus
+  statistics, once per estimator *family*; standard library statistics are excluded; the
+  kernel-width estimator additionally sweeps ground-truth firing rate and must be FR-invariant;
+  (b) **model recovery** (confusion matrix across candidate models) wherever a claim rests on model
+  comparison — drift-vs-threshold, HMM state count, retained dimensionality.
+- **The MIE defaults to the estimator's measured resolution floor** from the recovery run (smallest
+  effect recovered with 80 % sign-consistency and CI excluding zero); a smaller MIE requires a
+  written override.
+- **Nulls are specified and scoped**: required only for analyses producing an inferential statistic
+  that enters the ledger (descriptive artefacts declare `descriptive`, recorded and ineligible as
+  claim evidence). The surrogate must respect the claim's dependency level; flatness is
+  quantitative; no permutation p below 1/(n_perm+1). CI runs synthetic-null smoke tests only; real
+  nulls live as keyed artefacts (ADR-017).
+- **A bounded specification curve is the promotion price**: `confirmed` claims only. Each analysis
+  pre-declares its 3–6 analytic degrees of freedom as keyword arguments defaulting to registry
+  constants (the inline-literal gate already forces this shape); at promotion the declared factorial
+  runs with joint inference under a permutation null; refit-heavy axes get a coarse 3-point sweep.
+  The session-ordering axes are the project's worked example, with the canonical axis fixed by S1's
+  three-role decomposition (§4a of the panel review).
+- **`prespec_sha` with a mechanical ancestry check**: the pre-specification commit must precede the
+  analysis commit; failing or absent → capped at `exploratory`.
+- **A `stability` field**: the effect re-estimated on interleaved halves (never chronological —
+  chronological splits are confounded with the learning axis).
+- **`visdetect.stats.effects`** joins the must-import registry: one canonical effect size per test
+  class, computed at the inference level; ΔAIC/ΔBIC banned as effect sizes.
+- **`visdetect.verify` lands in sub-project 2, not 5**: the harden-result battery reimplemented as
+  library functions returning structured records; the ledger's Verification field is generated from
+  those records as enumerated booleans; the prose skill becomes a thin pointer.
+- **A sanctioned constants override** (`with constants.override(min_fr=0.5): …`) importable only
+  from the sweep harness and tests, with active overrides written into the sidecar — resolving the
+  otherwise head-on collision between S1 (one definition) and sensitivity analysis (many values).
+- **Ledger backfill is bounded**: forward-only, plus claims in the paper outline and every
+  retraction/refutation (~4 rows — the most valuable in the ledger).
+- **A design-sensitivity module** resamples the existing subjects to report detectable effect size
+  as a function of subject count — the quantitative basis for ADR-012's revisit trigger and for
+  "how many more mice".
+
+### ADR-022 — Backup is a policy, not an event (supersedes ADR-008's off-disk clause)
+
+**Decision.** ADR-008's "off-disk safety is the remote's job" is true for code and false for
+everything else — the git remote holds none of the pkls, caches, registry or hand-made files.
+Policy: (i) the irreplaceable hand-made files enter git via `git add -f` **now** (217 hand-drawn
+state episodes; the 132 blinded session sorts; the sorting rules + fitted rule; pupil sidecars
+committed on their own branch); (ii) registry + decision log + hash manifest sync daily to
+institutional storage via `rclone --checksum` (an I/O-only, off-hours carve-out from the
+no-compute-over-Samba rule, recorded as such); (iii) derived caches and figures sync weekly;
+(iv) a **quarterly restore test** pulls a random artefact and verifies it against the manifest.
+New success criterion S9: the restore test passes.
+
+---
+
+### Success-criteria addendum (2026-08-07)
+
+- **S5 (amended)**: the sidecar additionally carries the RNG record (ADR-016), the external-tools
+  table (ADR-016), and the realized `n_table` (ADR-019); scratch-tier artefacts are stamped and
+  ledger-ineligible (ADR-020).
+- **S9 (new)**: the quarterly restore test passes — every non-git artefact class has a verified
+  off-disk copy (ADR-022).
 
 ---
 
@@ -568,13 +910,14 @@ Too large for one spec. Six sub-projects, each with its own spec → plan → bu
 | # | Sub-project | Produces | Depends on |
 |---|---|---|---|
 | **−1** | **Secure the work at risk** | Off-disk copy of everything that exists in only one place: 139 unpushed commits, unmerged branches, uncommitted working trees, two stash-tags, and the gitignored hand-labelled artefacts no code can regenerate | — |
-| **0** | Deep empirical audit | Findings corpus: definition inventory, duplication map, layering graph, dead-code census, artefact provenance survey, memory-claim verification, known-defect register, real-data measurements | −1 |
-| **1** | Foundation | Registry + typed identity, constants, config, session model, IO, QC | 0 |
-| **2** | Enforcement | AST gates, import contracts, pre-commit, CI | 1 |
-| **3** | Analysis layer | Alignment, normalization, statistics, behaviour, spikes — ported behind the equivalence gate | 1, 2 |
-| **4** | Figures & artefacts | Plot system, palettes, cache and provenance layout | 3 |
-| **5** | AI layer | Generated `CLAUDE.md`, skills, hooks, curated memory | 1–4 |
-| **6** | Migration & decommission | Cutover, freeze of the old repo, artefact preservation, cross-spec consistency pass | all |
+| **0** | Deep empirical audit | Findings corpus: definition inventory, duplication map, layering graph, dead-code census, artefact provenance survey, memory-claim verification, known-defect register, real-data measurements, storage-format spike, **per-branch disposition table** | −1 |
+| **0.5** | **Walking skeleton** (ADR-020) | One real day-1–9 session + one BG_012 twin end-to-end: registry → typed key → constants → load → PSTH → provenanced figure → ledger row → one gate. Time-boxed 3–5 days; specs 1–6 cite its measured ergonomics | 0 |
+| **1** | Foundation | Registry + typed identity, constants, config, session model (`SessionStore`, ADR-015), IO, QC metric panel, **minimal artefact/provenance API** (moved from 4 per ADR-020) | 0.5 |
+| **2** | Enforcement | AST gates, import contracts, pre-commit, CI tiers + synthetic mini-session, `visdetect.verify` (ADR-021) | 1 |
+| **3** | Analysis layer | **A standing rule, not a phase** (ADR-020): modules cold-listed, ported on first use behind the explained-difference gate | 1, 2 |
+| **4** | Figures & artefacts | Plot system, palettes, panel manifest + `repro` (ADR-019) | 1, 2 |
+| **5** | AI layer **+ human layer** | Generated `CLAUDE.generated.md`, skills, hooks, curated memory; README/docs + walkthrough/glossary/provenance pages (ADR-019) | 1–4 |
+| **6** | Migration & decommission | Cutover, freeze of the old repo (per disposition table), artefact preservation, pkl deletion after digest-verified round-trip, cross-spec consistency pass | all |
 
 Build order is −1 → 6 in sequence, with one deliberate deviation: **enforcement (2) precedes the
 analysis port (3).** Gates written after the code they govern get bent to fit it. Written first,
@@ -619,7 +962,8 @@ be cited by a later session. This document exists to be the durable carrier of t
 | Two repos live simultaneously; work fragments | Old repo frozen at a tagged commit at the start of sub-project 3; no new science in it after that point |
 | Migration loses artefacts (`data/`, `FIGURES/` are gitignored; junction hazard on worktrees) | Artefact preservation is an explicit deliverable of sub-project 6, executed before any deletion; junction-aware deletion guard carried over from the current repo's hooks |
 | Audit corpus too large to use | Curated structured findings mandated by the sub-project 0 spec; raw output kept separately and referenced |
-| Gates too strict, exploratory work becomes painful | Gates apply to committed library and script code; notebook/scratch paths are exempt by policy, declared in the sub-project 2 spec |
+| Gates too strict, exploratory work becomes painful | Two-tier contract (ADR-020): full gates fire at promotion-to-claim, not file creation; scratch is exempt from gates but never from provenance, and is ledger-ineligible |
+| Rebuild consumes months and the paper goes unwritten | Time-box + named stop-loss + pre-agreed fallback to walking-skeleton scope with lazy porting (ADR-020); science continues in the old repo until a dispositioned freeze |
 
 ---
 
