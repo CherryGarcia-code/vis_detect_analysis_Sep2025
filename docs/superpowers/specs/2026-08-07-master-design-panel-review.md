@@ -344,11 +344,28 @@ order below reflects retrofit cost (what becomes impossible or very expensive if
    power.
 6. **Deposit scope: processed NWB** (what DANDI is built for). Raw SpikeGLX stays on institutional
    storage. Not urgent; consistent with Cluster A.
-7. **Session-ordering axis: canonical + robustness** (explained and decided): the canonical
-   learning axis is the exogenous training-time index (per the project's own S1 finding that
-   d′-based staging is gate+boundary+outcome → circular). Alternative orderings (calendar date,
-   cumulative trials, d′ stage, blinded-sorter group) are spec-curve robustness axes on `confirmed`
-   claims, not competing defaults. Recorded as an ADR-011 decision when the log exists.
+7. **Session-ordering axis — refined 2026-08-07 after project-owner correction.** Raw chronology
+   is NOT a measure of learning: engagement is non-monotone (a mouse that performed well can be
+   wholly disengaged the next day despite having learned the task), which is precisely why the
+   project built its two state instruments — the trial-level state labeler (state_tags: Impulsive/
+   StimSens/Disengaged/Abort, LOSO κ=0.731, ~170 sessions tagged across 4+ subjects) and the
+   blinded whole-session sorter (132 hand-sorted sessions across 3 mice into Balanced/
+   Impulsive-dominated/Disengaged-dominated/Deteriorating, with a fitted rule reproducing the
+   groups from occupancy features). The adopted formulation is S1's three-role decomposition,
+   which the new repo inherits as-is:
+   - **Axis** = exogenous training time — the only non-circular independent variable, never
+     interpreted alone as "learning";
+   - **Comparability** = the state machinery: trial-level state conditioning, session-group
+     stratification, and the coverage-based eligibility rule applied uniformly at every stage;
+   - **Covariate** = state occupancy (`DV ~ training_time + occupancy + (1|session)`), never the
+     axis — occupancy is derived from behavioural fractions and would re-import the d′ circularity
+     one layer down.
+   Standing caveat carried into the design: state-conditioned comparisons are clean for neural,
+   timing and RT DVs, and near-circular for the behavioural quantities the states are defined
+   from (f_inapplick / f_hit_hard / f_miss_easy). Consequences for the clusters: state_tags,
+   session groups and the eligibility rule become first-class registry/decision-log citizens
+   (Cluster D), the 132 manual sorts are in the irreplaceable hand-made set (Cluster H), and the
+   spec-curve robustness axes for `confirmed` claims include the alternative orderings.
 8. **Subject-reversal rule: capped at `exploratory`** with a required `needs_more_data` note. A
    claim that reverses sign in any contributing subject cannot be promoted to `confirmed` until new
    subjects resolve it.
