@@ -345,6 +345,9 @@ sub-project 2:
 | **No near-duplicate of existing library code** | Gate: AST-normalised structural similarity across the repo; above threshold it fails and names the existing function |
 | **Same name, different behaviour** | Gate: **hard fail — a separate and more severe category than duplication** |
 | **A reuse statement** — what was searched for, what was found, why it is insufficient | ADR-007 packet section (judgment) |
+| **Pre-specification**: the prediction, what would falsify it, and the smallest effect size worth caring about | Spec template; committed to git *before* the analysis runs — timestamped pre-registration at no extra cost |
+| **Pseudoreplication declaration**: the clustering variable for every cross-unit test | Gate: a mixed-effects or cluster-robust method is required wherever n_units ≫ n_sessions ≫ n_subjects |
+| **A null control** and, for any new estimator, **synthetic recovery** | ADR-014 |
 
 **On reuse specifically.** "Search before writing" is already the first workflow rule in the current
 repo's `CLAUDE.md`, and the audit measured exactly what prose achieved: `make_figure` defined 13
@@ -411,6 +414,124 @@ figures in the same paper can silently disagree on n.
 
 **Commits us to.** A decision-log format, and the discipline of writing a reason whenever a session
 is excluded — including when the reason is "obviously bad recording".
+
+---
+
+### Preamble to ADR-012 … ADR-014 — the other half of correctness
+
+ADR-001 … ADR-011 guard against **engineering** error: a wrong constant, a broken join, a stale
+cache, a duplicated helper. They are necessary and they are not sufficient.
+
+The two failures this project has actually suffered were not engineering failures. The
+transient/sustained state result was **retracted** — a raw-Hz artifact that went null once firing
+rates were normalised. "Sustained StimSens = expert signature" was **refuted** — present in Naive,
+and it collapsed to state occupancy. Both were produced by correct code. Both were analysis-choice
+artifacts, and no gate written so far would have caught either.
+
+ADR-012 … ADR-014 address that half.
+
+### ADR-012 — Confirmatory cohort: mechanism built, activation deferred
+
+**Status: accepted, activation deferred (decided 2026-08-07).**
+
+**Decision.** The registry (ADR-004) carries a `cohort` field per session — `discovery` or
+`confirmatory` — and the loader is capable of refusing to serve confirmatory sessions unless the
+calling analysis declares confirmatory intent. **The mechanism is built now; no data is reserved
+now.** As of 2026-08-07 every session is `discovery`.
+
+Within-analysis holdout (cross-validation, train/test splits, held-out folds) is used wherever an
+analysis supports it — and is already mandatory for decoders.
+
+**Revisit trigger.** When the additional experiments currently in progress land and subject count
+and quality support it, reconsider promoting a subject or a session block to `confirmatory`. That
+decision is recorded as a superseding ADR, not made silently.
+
+**Why deferred rather than adopted.** Reserving a whole subject or an arbitrary block of sessions is
+too expensive at this timepoint. There are realistically two to three clean DMS subjects; locking
+one away costs more statistical power than the confirmatory guarantee currently buys, and the data
+are about to improve. This is a power judgement about a specific dataset at a specific moment, not a
+rejection of the principle.
+
+**Why build the mechanism anyway.** It is cheap now and impossible to retrofit honestly later — once
+data has been looked at, a "held-out" set is held out in name only. Building the field and the
+loader guard now means activation later is a one-line change plus an ADR, rather than a redesign.
+
+⚠️ **What this leaves open, stated plainly.** Within-analysis cross-validation protects against
+*overfitting inside one analysis*. It does **not** protect against the garden of forking paths
+*across* analyses, because an analysis can be re-run with different choices and re-cross-validated
+each time. That risk is real and remains open. It is mitigated — not eliminated — by ADR-013's
+ledger (which makes the number of analyses run visible and honest) and by ADR-010's pre-specification
+requirement (which timestamps the prediction before the result). Anyone reading a result from this
+project should know which of those protections applied to it, and the ledger is where they will find
+out.
+
+### ADR-013 — A results ledger
+
+**Decision.** One versioned, in-repo ledger holds every claim the project makes. Each row records:
+
+| Field | Purpose |
+|---|---|
+| Question ID | Links to the spec that pre-specified it |
+| Claim | One sentence, in plain language |
+| Analysis | The component and commit that produced it |
+| **Effect size + CI** | Required. A p-value alone is not a result |
+| Verification | Which battery was applied (FR-normalisation, circularity, pseudoreplication, per-region breakdown, leakage controls) |
+| Cohort | `discovery` / `confirmatory` (see ADR-012) |
+| **Status** | `exploratory` / `confirmed` / `retracted` / `refuted` |
+| Superseded by | Where a later result overturned it |
+
+**Alternatives.** (a) Status quo — results in `docs/science/`, retractions in memory notes.
+(b) A lab notebook. (c) Nothing; rely on the papers.
+
+**Why.** (a) is what exists, and it has already drifted: the audit must check whether each
+`docs/science/*-results.md` still agrees with the memory note for the same question, precisely
+because retractions were recorded in one place and results in another. A reader of the repo cannot
+currently tell which claims still stand.
+
+The status field is the point. A retraction is not an embarrassment to be buried in a note — it is a
+result, and a project that records them visibly is more trustworthy than one that appears never to
+have been wrong.
+
+Requiring effect size and CI in the same row as the claim also does real work at this project's n:
+with thousands of units, p < 0.001 is available for effects far too small to matter.
+
+Finally, the ledger makes **analysis multiplicity visible**. Knowing that a headline came from the
+third of forty tests on the same dataset is essential to interpreting it, and today that number is
+unknowable.
+
+**Commits us to.** Writing a ledger row for every claim, including the ones that did not work out.
+
+### ADR-014 — Null controls and synthetic recovery are gates, not habits
+
+**Decision.** Two requirements, enforced by the sub-project 2 gates:
+
+1. **Every analysis ships a null control** — label shuffle, circular shift, or the appropriate
+   surrogate for its design — and its recorded output must be flat. Where the null is cheap it runs
+   in CI; where it is expensive, the gate requires that the null exists, that its stored result is
+   current with respect to the analysis code, and that it is flat.
+2. **Every new estimator demonstrates parameter recovery on synthetic data with known ground truth
+   before it is applied to real data.** `visdetect/utils/synthetic.py` becomes load-bearing rather
+   than incidental.
+
+**Alternatives.** (a) The current arrangement: a strong written rule in project memory
+(`feedback_circular_analysis_null_controls`) and reviewer diligence. (b) Null controls only.
+(c) Post-hoc verification once a result looks interesting.
+
+**Why.** (a) is a good rule that is already written down — and the TF-pulse PETH circularity bug
+still shipped, producing a sign-alignment artifact that survived until someone thought to check. A
+rule that depends on remembering to apply it fails exactly when the result is exciting, which is
+when it matters. This is the same argument as ADR-003, applied to statistics rather than syntax.
+
+(c) inverts the incentive: verification arrives after you are attached to the answer.
+
+Synthetic recovery earns its place separately. A null control tells you an effect is not noise; it
+does **not** tell you the estimator measures the quantity you think it measures. Recovery on
+ground-truth data is the only cheap way to establish that, and it would have caught the circularity
+bug at the moment the estimator was written rather than after it produced a finding.
+
+**Commits us to.** Writing a null per analysis and maintaining synthetic generators — the largest
+ongoing cost of any ADR here, and the one most directly aimed at the project's stated goal of
+findings that can be trusted.
 
 ---
 
