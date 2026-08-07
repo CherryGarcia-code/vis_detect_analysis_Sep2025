@@ -24,18 +24,38 @@ Composed primitives
   ``visdetect.core.session.load_session`` — subject-aware behavioural PKL load
   (by ``--subject``, not the frozen ``config.SUBJECT`` env).
 
-The tagger is always full-frame in Plan 2a. The eye-zoom / ROI view is deferred
-to Plan 2b: the only zoom crop available here is the BG_046-specific absolute-
-pixel fallback in ``eye_zoom_crop`` (``tag.eye_roi`` is always ``None`` in 2a),
-which lands on the snout on subjects whose camera sits closer to the face.
+Plan 2b adds per-session ROI capture on this same pass: ``e``/``m`` drag the
+eye/mouth ROI (stored full-frame in the ``video_labels`` sidecar), a live green
+pupil ellipse (``detect_pupil_in_frame`` restricted to the eye ROI) is overlaid
+via the ``on_refresh`` seam so it survives the scrubber's internal redraws, and
+``f`` toggles a CLAMPED eye-zoom derived from the eye ROI (``eye_zoom_crop`` ->
+``video_labels.clamp_crop``; a ``None`` clamp means the box misses the frame, so
+the view stays full-frame rather than indexing an empty array). ROIs seed from
+the subject's most recent prior session (honouring the ``applied`` frame-size
+guard) and carry provenance (``inherited:<sess>`` until re-drawn -> ``drawn``).
 
 Keybindings (see docs/superpowers/specs/2026-07-23-camera-tagger-ux-design.md)
 ------------------------------------------------------------------------------
   arrows / shift / ctrl   step +/-1 / +/-10 / +/-100 frames (built into scrubber)
-  space                   play/pause forward
-  [ / ]                   slower / faster playback
+  space                   play/pause forward (SEQUENTIAL decode; speed skips frames)
+  [ / ]   (or -/+)        slower / faster playback (speed>1 advances >1 frame/tick)
+  , / .                   lower / raise the pupil dark-pixel percentile (bigger blob)
   j / k                   next / prev target onset (baseline trial OR change queue)
   c                       toggle baseline <-> change target mode
+  e / m                   drag the eye / mouth ROI (full-frame view only); each is
+                          drawn as a persistent rectangle (eye=cyan, mouth=orange)
+  f                       toggle full-frame <-> clamped eye-zoom
+  p                       CORRECT the pupil: drag the true ellipse. PRIMARY
+                          labelling action (Pilot FIX B) — the dark-blob detector
+                          is unreliable on this close-camera rig, so drawing the
+                          truth is the norm, not confirming a proposal. Works even
+                          when the detector proposed NOTHING: the correction is
+                          recorded with proposed=None (the detector-miss case).
+  u                       confirm the proposed ellipse is correct (secondary;
+                          never fabricates a confirmation when there is no
+                          proposal — it flashes WHY, distinguishing "no eye ROI"
+                          from "detector found no pupil here", and no-ops)
+  x                       blink / occluded: no valid pupil this frame (secondary)
   home / end              first / last target
   d                       delete this target's anchor (current mode's type)
   enter                   save anchor and KEEP the window open (design-primary;
@@ -51,6 +71,7 @@ import json
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -79,6 +100,7 @@ from visdetect.analysis.tagging import (  # noqa: E402
     seed_from_archive,
     nidaq_to_frame_oriented,
     provisional_change_clock,
+    eye_zoom_crop,
 )
 from visdetect.core.video_sync import (  # noqa: E402
     find_camera_files,
@@ -87,11 +109,13 @@ from visdetect.core.video_sync import (  # noqa: E402
     compute_predicted_frame_idx,
     fit_multianchor_clock,
     save_anchor,
+    detect_pupil_in_frame,
     _build_anchor_entry,
     _build_change_anchor_entry,
     _build_v3_anchor_file,
     _merge_anchor_into_file,
 )
+from visdetect.analysis import video_labels as vl  # noqa: E402
 
 # --- Matplotlib backend selection (MUST stay after the visdetect imports) ----
 # visdetect.core.qc / suite.plotting / tf_pulse call matplotlib.use("Agg") at
@@ -104,6 +128,7 @@ import matplotlib  # noqa: E402
 if os.environ.get("MPLBACKEND", "").lower() != "agg":
     matplotlib.use("TkAgg", force=True)
 import matplotlib.pyplot as plt  # noqa: E402  (after backend selection)
+from matplotlib.patches import Ellipse, Rectangle  # noqa: E402  (pupil + ROI overlays)
 
 # The shared scrubber sits in this same directory; make it importable whether
 # run as a script or loaded via importlib.spec_from_file_location. Imported
@@ -118,6 +143,12 @@ logger = logging.getLogger("tag_session")
 # UI seed for the very first change-jump when no anchor exists yet, NOT a
 # scientific constant — replaced the instant the user places one anchor.
 DEFAULT_COARSE_OFFSET_S = 15.0
+
+# Pilot5 FIX 3: how long the transient "saved <verdict> @ f<idx>" HUD flash stays
+# on screen after a label is written. The HUD only re-renders on a refresh event
+# (key/nav/label), so the flash naturally clears on the next interaction once it
+# has expired; this bound just stops a stale confirmation lingering indefinitely.
+_FLASH_SECONDS = 4.0
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +180,56 @@ def _read_coarse_offset(session: str, sync_dir: str) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
+# Playback pacing + capture advance (pure, module-level so the pace-measurement
+# probe can drive the REAL logic without reconstructing main()'s closures).
+# ---------------------------------------------------------------------------
+
+
+def _playback_target_frame(start_frame, start_time, now, fps, speed, n_frames):
+    """Frame index that SHOULD be displayed *now* for wall-clock-paced playback.
+
+    Playback is time-driven, not frame-driven: the frame is chosen from elapsed
+    wall time since the pace reference (``start_frame`` shown at ``start_time``),
+    so a slow display simply DROPS intermediate frames instead of falling behind.
+    At ``speed`` s of video per s of wall clock::
+
+        target = start_frame + round((now - start_time) * fps * speed)
+
+    Clamped to the last frame. This is the sole pacing rule; the ratio of
+    video-seconds to wall-seconds equals ``speed`` by construction (until the
+    clamp at end-of-video).
+    """
+    target = int(start_frame) + int(round((now - start_time) * fps * speed))
+    if target < 0:
+        return 0
+    return min(target, int(n_frames) - 1)
+
+
+def _advance_capture(cap, next_fi, target, max_grab_skip):
+    """Position *cap* to decode frame *target*, reusing decoder state where cheap.
+
+    A small FORWARD gap is closed with decode-light ``grab()``s (skip intermediate
+    frames without a BGR convert/copy); a backward / large / unknown gap re-seeks
+    with ``set(CAP_PROP_POS_FRAMES)``. ``next_fi`` is the index *cap* would return
+    next (``None`` = position unknown -> force a seek). Returns
+    ``(ok, bgr_frame, new_next_fi)`` where ``new_next_fi = target + 1``.
+
+    This is the sequential fast path shared by the live reader and the pace probe,
+    so both exercise the identical grab/seek logic (never a per-frame seek).
+    """
+    target = int(target)
+    if next_fi != target:
+        gap = (target - next_fi) if next_fi is not None else None
+        if gap is not None and 0 < gap <= max_grab_skip:
+            for _ in range(gap):          # skip intermediate frames cheaply
+                cap.grab()
+        else:                             # backward / large / unknown -> seek
+            cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+    ok, frame = cap.read()
+    return ok, frame, target + 1
+
+
+# ---------------------------------------------------------------------------
 # Session state
 # ---------------------------------------------------------------------------
 
@@ -162,12 +243,40 @@ class TagSessionState:
     queue_pos: int = 0                     # current change-queue index
     queue: list = field(default_factory=list)  # List[ChangeTarget]
     anchors: Optional[dict] = None         # live v3 anchor file (seeded)
-    eye_roi: Optional[tuple] = None        # None in Plan 2a (ROI/zoom capture = 2b)
+    eye_roi: Optional[tuple] = None        # full-frame (y0,y1,x0,x1) eye box or None
     speed: float = 1.0                     # playback speed multiplier
     playing: bool = False
     timer: object = None                   # matplotlib canvas timer
     fig: object = None                     # the scrubber's Figure
     scrub_state: Optional[dict] = None     # the scrubber's own state dict
+    mouth_roi: Optional[tuple] = None      # full-frame (y0,y1,x0,x1) or None
+    sidecar: Optional[dict] = None         # video_labels sidecar (schema v1)
+    zoomed: bool = False                   # f-toggle: eye-zoom vs full frame
+    arming: Optional[str] = None           # active drag intent: "eye"|"mouth"|"correct"
+    last_proposed: Optional[dict] = None   # last detect_pupil ellipse on the shown frame
+    overlay: object = None                 # matplotlib Ellipse artist on ax_frame
+    eye_rect: object = None                # matplotlib Rectangle artist: eye ROI
+    mouth_rect: object = None              # matplotlib Rectangle artist: mouth ROI
+    label_ell: object = None               # matplotlib Ellipse: STORED correction
+    label_badge: object = None             # matplotlib Text: this-frame label badge
+    flash_msg: str = ""                    # transient "saved ..." HUD confirmation
+    flash_t: float = 0.0                   # perf_counter when flash_msg was set
+    dark_percentile: float = 8.0           # live detect_pupil dark-pixel percentile
+    play_next_fi: Optional[int] = None     # frame index play_cap will read NEXT
+                                           # (None = position unknown -> force seek)
+    # --- Wall-clock playback pacing (FIX 1: time-driven, drops frames) ---------
+    play_start_time: Optional[float] = None   # perf_counter at the pace reference
+    play_start_frame: Optional[int] = None    # frame index shown at the reference
+    last_played_fi: Optional[int] = None      # last frame the tick itself set (used
+                                              # to detect user navigation mid-play)
+    disp_count: int = 0                    # display refreshes in the current window
+    disp_t0: Optional[float] = None        # start of the display-rate window
+    disp_fps: float = 0.0                  # achieved display refresh rate (HUD)
+    # --- HUD sync-quality cache (FIX 2: skip the LOO-CV fit per played frame) --
+    sync_cache_str: Optional[str] = None   # cached "cv_rmse: ..." line
+    sync_cache_sig: object = None          # anchor-set signature the cache is for
+    pred_cache_key: object = None          # (anchor_sig, mode, target-pos) of pred
+    pred_cache_val: Optional[int] = None   # cached predicted frame for the target
 
 
 def main(argv=None) -> int:
@@ -255,7 +364,36 @@ def main(argv=None) -> int:
         logger.error("Could not determine frame dimensions for %s.", video_path)
         return 2
 
-    tag = TagSessionState(queue=queue, anchors=seed)
+    # --- Per-frame label + ROI sidecar (Plan 2b). Decoupled from the anchor JSON.
+    sidecar = vl.load_sidecar(session, subject)
+    if sidecar is None:
+        sidecar = vl.new_sidecar(subj_display, session, (frame_h, frame_w))
+        seeded = vl.seed_rois_from_previous(session, subject, (frame_h, frame_w))
+        if seeded is not None and seeded["applied"]:
+            for name, r in seeded["rois"].items():
+                sidecar["rois"][name] = r
+            logger.info("Seeded %d ROI(s) from prior session %s (inherited).",
+                        len(seeded["rois"]), seeded["source_session"])
+        elif seeded is not None:
+            logger.warning(
+                "Prior session %s frame_size %s != current %s; ROIs offered but "
+                "NOT applied (draw fresh with e/m).",
+                seeded["source_session"], seeded["frame_size"], [frame_h, frame_w])
+        vl.save_sidecar(sidecar, session, subject)
+
+    tag = TagSessionState(queue=queue, anchors=seed, sidecar=sidecar)
+
+    # Adopt any seeded/loaded ROIs into live state (full-frame pixel boxes).
+    _eye = sidecar["rois"].get("eye")
+    tag.eye_roi = tuple(_eye["box"]) if _eye else None
+    _mouth = sidecar["rois"].get("mouth")
+    tag.mouth_roi = tuple(_mouth["box"]) if _mouth else None
+
+    # Seed the live pupil dark-pixel percentile from the sidecar (a threshold the
+    # human tuned on a prior pass) if present, else the detector default. Pilot
+    # FIX 2: an under-inclusive threshold shrinks the proposed ellipse and biases
+    # pupil diameter DOWNWARD, so this value is recorded per session.
+    tag.dark_percentile = vl.get_pupil_dark_percentile(sidecar)
 
     # ---------------------------------------------------------------------
     # Provisional clock models
@@ -283,18 +421,275 @@ def main(argv=None) -> int:
 
     # ---------------------------------------------------------------------
     # Frame reader for the playback timer (the scrubber owns its own cap and
-    # exposes no per-tick redraw hook, so playback needs its own capture). The
-    # tagger is full-frame in Plan 2a (cfg.crop is always None), so this mirrors
-    # _tagger_ui._read_frame's full-frame path.
+    # exposes no per-tick redraw hook, so playback needs its own capture).
+    #
+    # Pilot FIX 1: playback used to random-SEEK every frame
+    # (set(CAP_PROP_POS_FRAMES, fi); read()). On this 22 GB H.264 file each seek
+    # re-decodes from the nearest keyframe, so a tick cost FAR more than the timer
+    # interval — playback crawled and the speed keys had no visible effect (the
+    # interval never dominated). We now read SEQUENTIALLY: cv2 keeps decoder state
+    # between successive read()s, so the common "advance by 1" case reuses it and
+    # is many times cheaper. We re-seek ONLY on a discontinuity, tracked via
+    # tag.play_next_fi (the index play_cap will return NEXT). For speed>1 we skip
+    # the intermediate frames with the decode-light grab() (no BGR convert / copy)
+    # and only decode the one we display. play_cap is the SOLE writer of
+    # play_next_fi, so the tracked position never drifts from reality.
     # ---------------------------------------------------------------------
     play_cap = cv2.VideoCapture(video_path)
+    # Forward gaps up to this advance via grab() (decode-light); larger -> seek.
+    # Time-driven playback drops frames to hold pace, so at higher speeds a tick's
+    # gap grows; keep it comfortably above the per-tick gap at the top speed so
+    # normal playback never falls back to an expensive keyframe re-seek.
+    _MAX_GRAB_SKIP = 60
 
-    def _read_play_frame(fi: int) -> np.ndarray:
-        play_cap.set(cv2.CAP_PROP_POS_FRAMES, int(fi))
-        ok, frame = play_cap.read()
+    def _read_seq_full(fi: int) -> Optional[np.ndarray]:
+        """Full-frame grayscale for frame *fi*, read SEQUENTIALLY where possible.
+
+        Delegates the grab/seek advance to the shared, probe-tested
+        ``_advance_capture`` (re-seeks only on a discontinuity; a small forward gap
+        is closed with cheap grab()s). Updates tag.play_next_fi to the frame
+        play_cap will read next. Returns ``None`` on a failed/absent read (callers
+        substitute a placeholder).
+        """
+        ok, frame, tag.play_next_fi = _advance_capture(
+            play_cap, tag.play_next_fi, fi, _MAX_GRAB_SKIP)
         if not ok or frame is None:
-            return np.zeros((frame_h, frame_w), dtype=np.uint8)
+            return None
         return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    def _apply_crop(gray: Optional[np.ndarray]) -> np.ndarray:
+        """Apply the LIVE cfg.crop to a full-frame array so the displayed image and
+        the axes extent (also derived from cfg.crop) always agree.
+
+        Pilot FIX 4: the playback path used to blit a FULL-frame array into a
+        crop-sized extent when zoomed, stretching/misaligning it. Cropping here —
+        exactly as _tagger_ui._read_frame does — keeps the two in lockstep in both
+        views. None -> a correctly-shaped black placeholder for the current view.
+        """
+        if gray is None:
+            if cfg.crop is not None:
+                y0, y1, x0, x1 = cfg.crop
+                return np.zeros((max(1, y1 - y0), max(1, x1 - x0)), dtype=np.uint8)
+            return np.zeros((frame_h, frame_w), dtype=np.uint8)
+        if cfg.crop is not None:
+            y0, y1, x0, x1 = cfg.crop
+            return gray[y0:y1, x0:x1]
+        return gray
+
+    # ---------------------------------------------------------------------
+    # Pupil detection + proposed-ellipse overlay (Plan 2b). Detection runs on
+    # the full-frame grayscale reader restricted to the eye ROI, so the cached
+    # ellipse is in full-frame pixel coords; the frame axes live in full-frame
+    # coords in BOTH views (the scrubber re-derives the imshow extent from
+    # cfg.crop on every refresh), so _update_overlay places the ellipse at its
+    # true cx/cy with no crop-origin fudge and keeps it visible while zoomed.
+    # Detection is skipped during playback streaming for responsiveness.
+    # ---------------------------------------------------------------------
+    def _run_detect(fi: int):
+        """Detect the pupil in the eye ROI on frame *fi*; cache the proposal.
+
+        Uses the LIVE tag.dark_percentile (pilot FIX 2): a higher percentile
+        admits more dark pixels -> a larger blob, so the human can widen an
+        under-inclusive proposal with `,`/`.` and the label records the exact
+        threshold it was judged against.
+
+        Pilot FIX A: the area/circularity bounds are SCALED to the eye ROI the
+        human drew (vl.pupil_area_bounds + the relaxed vl.DEFAULT_PUPIL_*), NOT
+        the shared detector's absolute BG_046 corneal-calibration pixels (max
+        8000 px^2). On a close-camera rig the true pupil EXCEEDS 8000 px^2, so
+        the absolute cap rejected the correct contour and a tiny speck won. The
+        effective bounds are recorded in the sidecar (in-memory here; persisted
+        on the next save) so sub-project C reproduces what was judged against.
+        The shared ``detect_pupil_in_frame`` is UNCHANGED -- only its per-call
+        arguments differ, leaving corneal auto-calibration's defaults intact.
+        """
+        if tag.eye_roi is None:
+            tag.last_proposed = None
+            return
+        gray = _read_seq_full(fi)                         # full-frame grayscale
+        if gray is None:
+            tag.last_proposed = None
+            return
+        min_area, max_area = vl.pupil_area_bounds(tag.eye_roi)
+        det = detect_pupil_in_frame(
+            gray, search_roi=tag.eye_roi,
+            min_area=min_area, max_area=max_area,
+            min_circularity=vl.DEFAULT_PUPIL_MIN_CIRCULARITY,
+            dark_percentile=tag.dark_percentile)
+        tag.last_proposed = vl.ellipse_from_detection(det)  # {cx,cy,major,minor,angle}|None
+        # Record the EXACT bounds this proposal was judged against (Pilot FIX A).
+        # In-memory only here (detection runs every frame); it rides along on the
+        # next atomic save_sidecar (label / ROI draw / percentile nudge / quit).
+        if tag.sidecar is not None:
+            vl.set_pupil_detect_bounds(
+                tag.sidecar, min_area, max_area,
+                vl.DEFAULT_PUPIL_MIN_CIRCULARITY,
+                vl.DEFAULT_PUPIL_MIN_AREA_FRAC, vl.DEFAULT_PUPIL_MAX_AREA_FRAC)
+
+    def _update_overlay():
+        """Draw/refresh the proposed-ellipse patch on the scrubber's frame axis.
+
+        The cached ellipse is in FULL-FRAME pixel coords, and the frame axes now
+        ALWAYS live in full-frame data coords (the scrubber re-derives the imshow
+        extent + limits from cfg.crop on every refresh), so the ellipse is placed
+        at its true full-frame cx/cy in BOTH views — no crop-origin fudge. It
+        stays VISIBLE while zoomed, which is the whole point of the zoom: the user
+        judges (and, via `p`, corrects) the pupil close-up from this same overlay.
+        """
+        fig = tag.fig
+        if fig is None or not fig.axes:
+            return
+        ax = fig.axes[0]
+        ell = tag.last_proposed
+        show = ell is not None
+        if tag.overlay is None:
+            tag.overlay = Ellipse((0.0, 0.0), 1.0, 1.0, angle=0.0, fill=False,
+                                  edgecolor="#00ff00", linewidth=1.5)
+            ax.add_patch(tag.overlay)
+        if show:
+            tag.overlay.set_center((float(ell["cx"]), float(ell["cy"])))
+            tag.overlay.width = ell["major"]
+            tag.overlay.height = ell["minor"]
+            tag.overlay.angle = ell["angle"]
+        tag.overlay.set_visible(show)
+
+    def _update_rois():
+        """Draw/refresh a persistent rectangle for each ROI on the frame axis.
+
+        Pilot FIX 3: the ROI drags WORK (the sidecar stores the boxes) but nothing
+        was ever drawn, so the mouth ROI looked like a no-op and the eye ROI only
+        *seemed* to register because the pupil ellipse appears inside it. The frame
+        axes live in FULL-FRAME data coords in BOTH views (the scrubber re-derives
+        the extent from cfg.crop every redraw), so each box draws at its stored
+        coords directly — NO crop-origin math. Colours are distinct from the green
+        pupil ellipse: eye=cyan, mouth=orange. An unset ROI is hidden; in the
+        eye-zoom the mouth rectangle simply falls outside the axis limits.
+        """
+        fig = tag.fig
+        if fig is None or not fig.axes:
+            return
+        ax = fig.axes[0]
+        if tag.eye_rect is None:
+            tag.eye_rect = Rectangle((0.0, 0.0), 0.0, 0.0, fill=False,
+                                     edgecolor="#00bfff", linewidth=1.5)
+            ax.add_patch(tag.eye_rect)
+        if tag.mouth_rect is None:
+            tag.mouth_rect = Rectangle((0.0, 0.0), 0.0, 0.0, fill=False,
+                                       edgecolor="#ff8c00", linewidth=1.5)
+            ax.add_patch(tag.mouth_rect)
+        for box, rect in ((tag.eye_roi, tag.eye_rect),
+                          (tag.mouth_roi, tag.mouth_rect)):
+            if box is None:
+                rect.set_visible(False)
+                continue
+            y0, y1, x0, x1 = box
+            rect.set_xy((float(x0), float(y0)))         # full-frame data coords
+            rect.set_width(float(x1 - x0))
+            rect.set_height(float(y1 - y0))
+            rect.set_visible(True)
+
+    def _frame_label(fi: int) -> Optional[dict]:
+        """The stored sidecar label entry for frame *fi*, or None if unlabelled.
+
+        Frames are frame_idx-keyed upserts, so at most one entry matches (Pilot5
+        FIX 2/3: drives both the on-frame stored-label artist and the HUD's
+        this-frame line so the user can SEE what is recorded)."""
+        if tag.sidecar is None:
+            return None
+        for fr in tag.sidecar.get("frames", []):
+            if int(fr.get("frame_idx", -1)) == int(fi):
+                return fr
+        return None
+
+    def _flash(msg: str) -> None:
+        """Arm the transient HUD save-confirmation (Pilot5 FIX 3)."""
+        tag.flash_msg = str(msg)
+        tag.flash_t = time.perf_counter()
+
+    def _update_stored_label(fi: int):
+        """Draw the user's STORED label for the current frame (Pilot5 FIX 2).
+
+        The whole point of the tool is comparing the detector's PROPOSAL (green
+        ellipse) against the human's truth, but before this nothing the user
+        recorded was ever drawn back — a correction read as "nothing happened"
+        because the green proposal (unchanged by a correction) stayed put. Now:
+
+          * ``corrected`` -> the stored ``corrected_ellipse`` in YELLOW (#ffd400),
+            visually distinct from and directly comparable to the green proposal.
+          * ``confirmed``  -> a green "confirmed" badge (the green proposal, which
+            _update_overlay still draws, IS the confirmed geometry).
+          * ``blink``      -> a red "blink" badge flagging the frame.
+          * unlabelled     -> both artists hidden.
+
+        The frame axes live in FULL-FRAME data coords in BOTH the full and zoom
+        views (run_scrubber re-derives the imshow extent from cfg.crop every
+        redraw), so the ellipse is drawn at its stored cx/cy DIRECTLY — no
+        crop-origin offset math (an origin add-back cannot undo the coordinate
+        stretch a frozen extent would impose). Called from the same on_refresh
+        path as the proposal + ROI overlays so it survives the scrubber's
+        internal arrow-step / jump redraws, and it UPDATES in place when a frame
+        is re-labelled (upsert), so a redrawn correction shows its new geometry.
+        The badge rides in axes-fraction coords so it stays legible in the corner
+        regardless of zoom."""
+        fig = tag.fig
+        if fig is None or not fig.axes:
+            return
+        ax = fig.axes[0]
+        if tag.label_ell is None:
+            tag.label_ell = Ellipse((0.0, 0.0), 1.0, 1.0, angle=0.0, fill=False,
+                                    edgecolor="#ffd400", linewidth=2.2)
+            ax.add_patch(tag.label_ell)
+        if tag.label_badge is None:
+            tag.label_badge = ax.text(
+                0.015, 0.985, "", transform=ax.transAxes, fontsize=11,
+                family="monospace", fontweight="bold",
+                verticalalignment="top", horizontalalignment="left",
+                color="#ffffff",
+                bbox=dict(boxstyle="round,pad=0.25", facecolor="#000000",
+                          alpha=0.55, edgecolor="none"))
+        entry = _frame_label(fi)
+        if entry is None:
+            tag.label_ell.set_visible(False)
+            tag.label_badge.set_visible(False)
+            return
+        verdict = entry.get("verdict")
+        if verdict == vl.VERDICT_CORRECTED:
+            ell = entry.get("corrected_ellipse")
+            if ell is not None:
+                tag.label_ell.set_center((float(ell["cx"]), float(ell["cy"])))
+                tag.label_ell.width = float(ell["major"])
+                tag.label_ell.height = float(ell["minor"])
+                tag.label_ell.angle = float(ell["angle"])
+                tag.label_ell.set_visible(True)
+                tag.label_badge.set_text(f"corrected  maj {float(ell['major']):.0f}")
+            else:
+                tag.label_ell.set_visible(False)
+                tag.label_badge.set_text("corrected")
+            tag.label_badge.set_color("#ffd400")
+            tag.label_badge.set_visible(True)
+        elif verdict == vl.VERDICT_CONFIRMED:
+            tag.label_ell.set_visible(False)
+            tag.label_badge.set_text("confirmed")
+            tag.label_badge.set_color("#39ff14")
+            tag.label_badge.set_visible(True)
+        elif verdict == vl.VERDICT_BLINK:
+            tag.label_ell.set_visible(False)
+            tag.label_badge.set_text("blink")
+            tag.label_badge.set_color("#ff5555")
+            tag.label_badge.set_visible(True)
+        else:
+            tag.label_ell.set_visible(False)
+            tag.label_badge.set_visible(False)
+
+    def _on_frame_shown(fi: int, fig) -> None:
+        """cfg.on_refresh hook: re-detect + redraw the overlay AND ROI rectangles
+        AND the stored per-frame label on every manual frame change (arrow step /
+        jump / mode toggle / ROI draw / zoom toggle / label save)."""
+        tag.fig = fig
+        _run_detect(fi)
+        _update_overlay()
+        _update_rois()
+        _update_stored_label(fi)
 
     def _draw_current(fi: int):
         fig = tag.fig
@@ -305,15 +700,56 @@ def main(argv=None) -> int:
             hud = fig.axes[1].texts[0]
         except (IndexError, AttributeError):
             return
-        im.set_data(_read_play_frame(fi))
+        # Pilot FIX 4: crop the played frame to match the LIVE cfg.crop (and thus
+        # the axes extent set by the scrubber's _refresh), so a zoomed playback is
+        # never stretched/misaligned. _apply_crop mirrors _tagger_ui._read_frame.
+        im.set_data(_apply_crop(_read_seq_full(fi)))
         hud.set_text(_hud_fn(fi))
+        # Playback streams frames without per-frame detection; hide any stale
+        # pupil ellipse AND stored-label artist (both are per-frame; a corrected
+        # ellipse / badge from the play-start frame would otherwise linger over
+        # unrelated frames). They reappear on the next manual step via
+        # _on_frame_shown. The ROI rectangles are static session-level overlays
+        # and correctly stay visible while playing.
+        if tag.overlay is not None:
+            tag.overlay.set_visible(False)
+        if tag.label_ell is not None:
+            tag.label_ell.set_visible(False)
+        if tag.label_badge is not None:
+            tag.label_badge.set_visible(False)
         fig.canvas.draw_idle()
 
     # ---------------------------------------------------------------------
-    # Playback timer
+    # Playback timer (FIX 1: TIME-DRIVEN, not frame-driven).
+    #
+    # A video player holds wall-clock pace by SHOWING THE FRAME DUE NOW and
+    # dropping the ones it had no time to draw — it never tries to draw every
+    # frame. We do the same: each tick asks _playback_target_frame() which frame
+    # the elapsed wall time calls for (start_frame + elapsed*fps*speed) and jumps
+    # there, skipping the intermediates via grab() in _read_seq_full. So 1x plays
+    # at TRUE real time (~fps of VIDEO time) even if the display only manages
+    # ~15-30 redraws/s; 2x plays twice real time; 0.5x half. Micro-optimising the
+    # draw (FIX 2) cannot GUARANTEE real time on every backend — this can, because
+    # the ratio of video-seconds to wall-seconds equals `speed` by construction.
+    #
+    # The timer interval is a small, speed-independent cadence (pacing is done by
+    # the wall-clock formula, not the interval). When no new frame is due yet
+    # (e.g. 0.5x, or the display briefly outrunning video time) the tick is a
+    # cheap no-op, so a fast cadence just maximises the achievable display rate.
     # ---------------------------------------------------------------------
-    def _play_interval_ms() -> int:
-        return max(10, int(round(1000.0 / (fps * tag.speed))))
+    _TICK_INTERVAL_MS = 5
+
+    def _anchor_pace(now=None):
+        """(Re)set the wall-clock pace reference to the current frame + now.
+
+        Called on play/resume, on a speed change, and whenever the user navigates
+        mid-playback, so pace never "catches up" in a burst and always continues
+        from where the frame actually is.
+        """
+        cur = tag.scrub_state["frame_idx"]
+        tag.play_start_frame = cur
+        tag.play_start_time = time.perf_counter() if now is None else now
+        tag.last_played_fi = cur
 
     def _stop_play():
         tag.playing = False
@@ -327,30 +763,67 @@ def main(argv=None) -> int:
         if fig is None or not plt.fignum_exists(getattr(fig, "number", -1)):
             _stop_play()
             return
-        fi = min(n_frames - 1, tag.scrub_state["frame_idx"] + 1)
-        tag.scrub_state["frame_idx"] = fi
-        _draw_current(fi)
-        if fi >= n_frames - 1:
+        now = time.perf_counter()
+        cur = tag.scrub_state["frame_idx"]
+        # User navigated (arrow / jump / mode toggle) since the last tick? Re-anchor
+        # the pace reference to the new position rather than yanking playback back
+        # to the old trajectory.
+        if tag.last_played_fi is None or cur != tag.last_played_fi:
+            _anchor_pace(now)
+        target = _playback_target_frame(
+            tag.play_start_frame, tag.play_start_time, now, fps, tag.speed, n_frames)
+        if target <= cur:                     # no new frame due yet -> cheap no-op
+            if cur >= n_frames - 1:
+                _stop_play()
+            return
+        tag.scrub_state["frame_idx"] = target
+        _draw_current(target)                 # drops cur+1..target-1 via grab()
+        tag.last_played_fi = target
+        # Rolling achieved display-rate estimate (HUD truth: shows the user that
+        # frames are being DROPPED to hold pace, not that playback is choppy).
+        tag.disp_count += 1
+        if tag.disp_t0 is None:
+            tag.disp_t0 = now
+        elif now - tag.disp_t0 >= 0.5:
+            tag.disp_fps = tag.disp_count / (now - tag.disp_t0)
+            tag.disp_count = 0
+            tag.disp_t0 = now
+        if target >= n_frames - 1:
             _stop_play()
 
     def _toggle_play(event) -> bool:
         if tag.timer is None:
-            tag.timer = event.canvas.new_timer(interval=_play_interval_ms())
+            tag.timer = event.canvas.new_timer(interval=_TICK_INTERVAL_MS)
             tag.timer.add_callback(_tick)
         if tag.playing:
             _stop_play()
         else:
             tag.playing = True
+            _anchor_pace()                    # resume from HERE (no catch-up burst)
+            tag.disp_count = 0
+            tag.disp_t0 = None
             tag.timer.stop()
-            tag.timer.interval = _play_interval_ms()
+            tag.timer.interval = _TICK_INTERVAL_MS
             tag.timer.start()
         return True
 
     def _apply_speed():
-        if tag.playing and tag.timer is not None:
-            tag.timer.stop()
-            tag.timer.interval = _play_interval_ms()
-            tag.timer.start()
+        # Re-anchor at the current frame so the NEW speed applies from here forward
+        # (time-driven) instead of rescaling the whole elapsed interval and jumping.
+        # The tick cadence is speed-independent, so the timer keeps running as-is.
+        if tag.playing:
+            _anchor_pace()
+
+    def _persist_dark_percentile():
+        """Record the live pupil dark-pixel percentile in the sidecar (atomic).
+
+        Pilot FIX 2: the threshold the human tuned the proposal against must be
+        reproducible for sub-project C, so it is written on every nudge. The
+        subsequent scrubber _refresh re-runs detection at the NEW value (via
+        _on_frame_shown -> _run_detect), so the ellipse updates immediately.
+        """
+        vl.set_pupil_dark_percentile(tag.sidecar, tag.dark_percentile)
+        vl.save_sidecar(tag.sidecar, session, subject)
 
     # ---------------------------------------------------------------------
     # Target navigation
@@ -370,6 +843,11 @@ def main(argv=None) -> int:
     def _toggle_mode(state) -> bool:
         tag.mode = "change" if tag.mode == "baseline" else "baseline"
         _reseed_target(state)
+        # Switching INTO change mode when the session has no big-change targets
+        # leaves j/k/home/end/d inert. The HUD "(no big-change targets)" line is
+        # easy to miss, so flash the reason + how to get back.
+        if tag.mode == "change" and not tag.queue:
+            _flash("no change targets this session - [c] for baseline")
         return True
 
     def _step_target(state, delta: int) -> bool:
@@ -379,6 +857,9 @@ def main(argv=None) -> int:
         elif tag.queue:
             tag.queue_pos = int(
                 np.clip(tag.queue_pos + delta, 0, len(tag.queue) - 1))
+        else:
+            # change mode + empty queue: j/k had nothing to step -> explain it.
+            _flash("no change targets - [c] for baseline")
         _reseed_target(state)
         return True
 
@@ -387,6 +868,9 @@ def main(argv=None) -> int:
             tag.baseline_pos = 0 if first else len(baseline_on) - 1
         elif tag.queue:
             tag.queue_pos = 0 if first else len(tag.queue) - 1
+        else:
+            # change mode + empty queue: home/end had nothing to jump to.
+            _flash("no change targets - [c] for baseline")
         _reseed_target(state)
         return True
 
@@ -433,10 +917,16 @@ def main(argv=None) -> int:
         return True
 
     def _delete_current() -> bool:
+        # `d` could silently do nothing three ways (no anchors at all, no target
+        # selected, or no anchor on THIS target). Each now flashes its reason, and
+        # a successful delete flashes a confirmation (it previously only logged, so
+        # the GUI gave no sign the anchor was gone).
         if tag.anchors is None:
+            _flash("no anchors yet - nothing to delete")
             return True
         key = _current_key()
         if key is None:
+            _flash("no change target selected - [c] for baseline")
             return True
         kept = [a for a in tag.anchors["anchors"]
                 if (int(a["trial_index"]), a.get("event_type", "baseline_on")) != key]
@@ -447,6 +937,9 @@ def main(argv=None) -> int:
             tag.anchors = merged
             logger.info("Deleted %s anchor for trial %s (%d remain).",
                         key[1], key[0], len(kept))
+            _flash(f"deleted {tag.mode} anchor (trial {key[0]})")
+        else:
+            _flash(f"no {tag.mode} anchor here to delete")
         return True
 
     # ---------------------------------------------------------------------
@@ -454,48 +947,208 @@ def main(argv=None) -> int:
     # ---------------------------------------------------------------------
     def _hud_fn(fi: int) -> str:
         video_s = float(ts_ms[fi] / 1000.0)
+
+        # Anchor-set signature: the expensive HUD terms (the LOO-CV sync fit AND
+        # the change-mode predicted frame, which itself calls fit_multianchor_clock
+        # via provisional_change_clock) depend ONLY on this set, never on fi, so
+        # they are constant across a whole playback run. Cache them keyed on the
+        # signature and reuse while playing (FIX 2: the fits are far too costly to
+        # run on every dropped/played frame). Idle refreshes still recompute, so
+        # what the HUD shows when the user is stepping is unchanged.
+        entries = tag.anchors["anchors"] if tag.anchors else []
+        # Anchor entries key the clicked frame as "video_frame_idx" (see
+        # video_sync._build_anchor_entry); .get keeps the signature crash-proof for
+        # any seeded/legacy entry that might omit it.
+        sig = tuple((int(a["trial_index"]), a.get("event_type", "baseline_on"),
+                     a.get("video_frame_idx")) for a in entries)
+
         if tag.mode == "change":
             if tag.queue:
                 tgt = tag.queue[tag.queue_pos]
                 mode_line = (f"{subj_display}  {session}   MODE: CHANGE "
                              f"(size{tgt.change_size:g}, {tgt.outcome})")
                 pos, ntot, trial_no = tag.queue_pos + 1, len(tag.queue), tgt.trial_index
-                pred = _change_frame(tag.queue_pos)
             else:
                 mode_line = (f"{subj_display}  {session}   "
                              f"MODE: CHANGE (no big-change targets)")
-                pos, ntot, trial_no, pred = 0, 0, -1, fi
+                pos, ntot, trial_no = 0, 0, -1
         else:
             mode_line = f"{subj_display}  {session}   MODE: BASELINE"
             pos, ntot, trial_no = tag.baseline_pos + 1, len(baseline_on), tag.baseline_pos
-            pred = compute_predicted_frame_idx(
-                float(baseline_on[tag.baseline_pos]),
-                -_baseline_implied_offset(), ts_ms)
+
+        # Predicted frame for the current target (cached; see above). The no-queue
+        # change case has no target -> pred tracks fi (delta 0) and is never cached.
+        if tag.mode == "change" and not tag.queue:
+            pred = fi
+        else:
+            sel = tag.queue_pos if tag.mode == "change" else tag.baseline_pos
+            pred_key = (sig, tag.mode, sel)
+            if (not tag.playing) or pred_key != tag.pred_cache_key \
+                    or tag.pred_cache_val is None:
+                if tag.mode == "change":
+                    pred = _change_frame(tag.queue_pos)
+                else:
+                    pred = compute_predicted_frame_idx(
+                        float(baseline_on[tag.baseline_pos]),
+                        -_baseline_implied_offset(), ts_ms)
+                tag.pred_cache_key = pred_key
+                tag.pred_cache_val = pred
+            else:
+                pred = tag.pred_cache_val
         delta = fi - pred
 
-        entries = tag.anchors["anchors"] if tag.anchors else []
         n_chg = sum(1 for a in entries
                     if a.get("event_type", "baseline_on") == "change_on")
         n_base = len(entries) - n_chg
-        if len(entries) >= 3:
-            try:
-                sync = fit_multianchor_clock(entries, len(baseline_on))
-                qc = f"cv_rmse: {sync.cv_rmse_ms:.1f} ms  {sync.quality}"
-            except ValueError:
-                qc = "cv_rmse: fit failed (degenerate anchors)"
+        if (not tag.playing) or sig != tag.sync_cache_sig or tag.sync_cache_str is None:
+            if len(entries) >= 3:
+                try:
+                    sync = fit_multianchor_clock(entries, len(baseline_on))
+                    qc = f"cv_rmse: {sync.cv_rmse_ms:.1f} ms  {sync.quality}"
+                except ValueError:
+                    qc = "cv_rmse: fit failed (degenerate anchors)"
+            else:
+                qc = "cv_rmse: need >=3 anchors"
+            tag.sync_cache_str = qc
+            tag.sync_cache_sig = sig
         else:
-            qc = "cv_rmse: need >=3 anchors"
+            qc = tag.sync_cache_str
 
-        legend = ("[space]play  [-/+]spd {:g}x  [j/k]jump  "
-                  "[c]base<->chg  [enter]save  [d]del  [q]quit"
-                  ).format(tag.speed)
+        mouth_state = "set" if tag.mouth_roi is not None else "none"
+        view = "ZOOM" if tag.zoomed else "full"
+        # A MISSING eye ROI silently disables `f` zoom AND the green proposal, so
+        # the HUD must announce it at a glance (the pilot never noticed the ROI was
+        # absent — it just looked like features had broken). An explicit MISSING
+        # banner + the remedy key, not a quiet "eye[none]" the eye skims past.
+        if tag.eye_roi is not None:
+            roi_line = (f"ROI: eye[set] mouth[{mouth_state}]   view: {view}"
+                        f"   pupil%: {tag.dark_percentile:g}")
+        else:
+            roi_line = (f"eye ROI: MISSING - press [e]   |   mouth[{mouth_state}]"
+                        f"   view: {view}   pupil%: {tag.dark_percentile:g}")
+
+        # Per-frame label tally for the session (Plan 2b, Task 6). Counts come
+        # straight from the sidecar's frame-keyed upserts, so re-labelled frames
+        # are counted once (never double-counted).
+        _frames = tag.sidecar["frames"] if tag.sidecar else []
+        n_conf = sum(1 for f in _frames if f["verdict"] == vl.VERDICT_CONFIRMED)
+        n_corr = sum(1 for f in _frames if f["verdict"] == vl.VERDICT_CORRECTED)
+        n_blink = sum(1 for f in _frames if f["verdict"] == vl.VERDICT_BLINK)
+
+        # This-frame label state (Pilot5 FIX 3): an unambiguous TEXT confirmation
+        # of what is recorded for the shown frame, independent of the drawn
+        # artists — so the user knows their correction landed even if they doubt
+        # the drawing.
+        _entry = _frame_label(fi)
+        if _entry is None:
+            this_state = "unlabelled"
+        elif _entry.get("verdict") == vl.VERDICT_CORRECTED:
+            _ce = _entry.get("corrected_ellipse") or {}
+            _maj = _ce.get("major")
+            this_state = (f"corrected (maj {float(_maj):.0f})"
+                          if _maj is not None else "corrected")
+        elif _entry.get("verdict") == vl.VERDICT_CONFIRMED:
+            this_state = "confirmed"
+        elif _entry.get("verdict") == vl.VERDICT_BLINK:
+            this_state = "blink"
+        else:
+            this_state = str(_entry.get("verdict"))
+        label_line = (f"labels: {n_conf} ok / {n_corr} fix / {n_blink} blink"
+                      f"   |   this frame: {this_state}")
+        # Transient save confirmation, shown only while fresh (Pilot5 FIX 3).
+        if tag.flash_msg and (time.perf_counter() - tag.flash_t) < _FLASH_SECONDS:
+            label_line += f"   <<{tag.flash_msg}>>"
+
+        # Speed reads truthfully: the requested multiplier AND, while playing, the
+        # achieved display refresh rate (FIX 1 drops frames to hold pace, so a low
+        # disp rate means "showing fewer, correctly-spaced frames", not "choppy /
+        # slow"). Idle shows just the requested speed (unchanged from before).
+        spd = f"{tag.speed:g}x"
+        if tag.playing and tag.disp_fps > 0:
+            spd += f" (~{tag.disp_fps:.0f}fps disp)"
+
+        # Correction-first (Pilot FIX B): the detector is unreliable on this
+        # close-camera rig, so DRAGGING the true pupil (p) is the PRIMARY
+        # labelling action; confirm (u) and blink (x) are secondary. The keys
+        # themselves are unchanged -- only the emphasis/order is.
+        legend = ("LABEL: [p]DRAG pupil (PRIMARY)  [u]confirm  [x]blink   |   "
+                  "[space]play  [-/+]spd {}  [,/.]pupil%  [j/k]jump  "
+                  "[c]base<->chg  [e/m]roi  [f]zoom  [enter]save  [d]del  [q]quit"
+                  ).format(spd)
         return "\n".join([
             mode_line,
             (f"trial {pos}/{ntot} (idx {trial_no})   frame {fi} ({video_s:.2f}s)"
              f"   Delta {delta:+d} vs pred"),
             f"anchors: {len(entries)} ({n_base} base / {n_chg} chg)     {qc}",
+            roi_line,
+            label_line,
             legend,
         ])
+
+    # ---------------------------------------------------------------------
+    # ROI capture + eye-zoom (Plan 2b)
+    # ---------------------------------------------------------------------
+    def _toggle_zoom() -> bool:
+        # `f` derives its zoom from the eye ROI; with no ROI there is nothing to
+        # zoom to, so it did NOTHING and the pilot read that as "f is broken".
+        # Never no-op silently: SAY why (no ROI) and HOW to fix it ([e]).
+        if tag.eye_roi is None:
+            logger.warning("No eye ROI yet; draw one with 'e' before zooming.")
+            _flash("no eye ROI - press [e] to draw one")
+            return True
+        if not tag.zoomed:
+            raw = eye_zoom_crop(tag.eye_roi)              # UNCLAMPED (y0,y1,x0,x1)
+            crop = vl.clamp_crop(raw, frame_h, frame_w)  # None if it misses the frame
+            if crop is None:                             # no valid crop -> stay full-frame
+                # DISTINCT cause from "no ROI": an ROI exists but its padded box
+                # lands wholly off-frame, so the message + remedy differ.
+                logger.warning("Eye ROI does not intersect the frame; staying on "
+                               "the full view (no zoom).")
+                _flash("eye ROI misses the frame - redraw with [e]")
+                return True                              # do NOT toggle into a broken zoom
+            tag.zoomed = True
+            cfg.crop = crop                              # guaranteed non-empty crop
+        else:
+            tag.zoomed = False
+            cfg.crop = None                              # back to full frame
+        return True
+
+    def _on_roi_drawn(box, state) -> None:
+        """cfg.on_selector: a completed drag sets the armed ROI (eye/mouth) or,
+        in Task 6, a pupil correction. Boxes are full-frame (y0,y1,x0,x1)."""
+        if tag.arming == "eye":
+            tag.eye_roi = tuple(box)
+            vl.set_roi(tag.sidecar, "eye", box, source="drawn")
+            vl.save_sidecar(tag.sidecar, session, subject)
+            _run_detect(state["frame_idx"])              # immediate live feedback
+            _update_overlay()
+        elif tag.arming == "mouth":
+            tag.mouth_roi = tuple(box)
+            vl.set_roi(tag.sidecar, "mouth", box, source="drawn")
+            vl.save_sidecar(tag.sidecar, session, subject)
+        elif tag.arming == "correct":
+            # The proposal was wrong: store BOTH the detector's proposal (may be
+            # None -- the "miss" failure mode) AND the human's inscribed ellipse,
+            # so proposed-vs-corrected is directly comparable (that is how the
+            # eyelid-occlusion diameter bias is quantified downstream). Upsert on
+            # frame_idx; persist atomically.
+            corrected = vl.ellipse_from_box(box)
+            vl.upsert_frame_label(tag.sidecar, state["frame_idx"],
+                                  vl.VERDICT_CORRECTED,
+                                  proposed_ellipse=tag.last_proposed,   # may be None
+                                  corrected_ellipse=corrected)
+            vl.save_sidecar(tag.sidecar, session, subject)
+            logger.info("corrected frame %d", state["frame_idx"])
+            _flash(f"saved corrected @ f{state['frame_idx']} "
+                   f"maj={float(corrected['major']):.0f}")
+        tag.arming = None
+
+    def _on_selector_cancel(state) -> None:
+        """cfg.on_selector_cancel: a drag was armed (e/m/p) then CANCELLED (empty
+        drag, or q/esc while armed) instead of completed. Drop the arming intent
+        so a stale 'eye'/'mouth'/'correct' cannot mis-route the next completed
+        drag. (A completed drag clears tag.arming itself in _on_roi_drawn.)"""
+        tag.arming = None
 
     # ---------------------------------------------------------------------
     # Key dispatch
@@ -519,6 +1172,20 @@ def main(argv=None) -> int:
             tag.speed = min(8.0, tag.speed * 2.0)
             _apply_speed()
             return True
+        # Pupil dark-pixel percentile tuning (pilot FIX 2). Chosen keys ','/'.'
+        # (with '<'/'>' shift-aliases) collide with NO existing binding and no
+        # live matplotlib default. A HIGHER percentile admits more dark pixels ->
+        # a LARGER proposed blob (the pilot's ellipse was too small). Clamp
+        # 1.0-40.0, step 1.0. Returning True makes the scrubber _refresh, which
+        # re-detects at the new value and redraws the ellipse.
+        if key in (",", "<"):
+            tag.dark_percentile = max(1.0, round(tag.dark_percentile - 1.0, 3))
+            _persist_dark_percentile()
+            return True
+        if key in (".", ">"):
+            tag.dark_percentile = min(40.0, round(tag.dark_percentile + 1.0, 3))
+            _persist_dark_percentile()
+            return True
         if key == "c":
             return _toggle_mode(state)
         if key == "j":
@@ -536,6 +1203,87 @@ def main(argv=None) -> int:
             # scrubber now routes enter through this hook before its default
             # save-and-close); 's' is a documented alias (keymap.save is cleared).
             return _save_keepopen(state)
+        # ROI capture (Plan 2b). ROIs are only drawable in the full-frame view,
+        # where imshow data coords equal full-frame pixels.
+        if key == "e":
+            if tag.zoomed:
+                logger.warning("Return to full frame (press f) before drawing an ROI.")
+                _flash("exit zoom [f] before drawing an ROI")
+                return True
+            tag.arming = "eye"
+            state["arm_selector"]()
+            return True
+        if key == "m":
+            if tag.zoomed:
+                logger.warning("Return to full frame (press f) before drawing an ROI.")
+                _flash("exit zoom [f] before drawing an ROI")
+                return True
+            tag.arming = "mouth"
+            state["arm_selector"]()
+            return True
+        if key == "f":
+            return _toggle_zoom()
+        # Per-frame pupil labels (Plan 2b, Task 6). All three upsert on frame_idx
+        # (re-labelling a frame REPLACES its entry) and persist atomically after
+        # every label via save_sidecar (temp + os.replace), so a crash never
+        # costs more than the un-saved current keystroke.
+        if key == "u":  # proposed ellipse is CORRECT
+            # A confirmation must reference a real proposal: if the detector
+            # returned nothing, do NOT invent a null-proposal "confirmation" --
+            # say WHY and no-op instead. The two causes need different remedies:
+            # no eye ROI at all (draw one) vs. an ROI whose detector found no
+            # pupil on THIS frame (draw the truth with [p]).
+            if tag.last_proposed is None:
+                if tag.eye_roi is None:
+                    logger.warning("No proposed ellipse to confirm: no eye ROI. "
+                                   "Press 'e' to draw one.")
+                    _flash("can't confirm: no eye ROI - press [e]")
+                else:
+                    logger.warning("No proposed ellipse to confirm: detector found "
+                                   "no pupil on this frame. Use 'p' to draw the truth.")
+                    _flash("can't confirm: no pupil found here - use [p]")
+                return True
+            vl.upsert_frame_label(tag.sidecar, state["frame_idx"],
+                                  vl.VERDICT_CONFIRMED,
+                                  proposed_ellipse=tag.last_proposed)
+            vl.save_sidecar(tag.sidecar, session, subject)
+            logger.info("confirmed frame %d", state["frame_idx"])
+            _flash(f"saved confirmed @ f{state['frame_idx']}")
+            return True
+        if key == "p":  # proposal is WRONG -> drag the true pupil
+            # Reuse the SAME correction-drag path Task 5 wired: arm the shared
+            # selector and let _on_roi_drawn's "correct" branch record it. The
+            # seam returns FULL-FRAME coords in EITHER view because the frame
+            # axes THEMSELVES live in full-frame data coords (run_scrubber
+            # re-derives the imshow extent from image_extent_for_crop on every
+            # redraw) -- NO crop-origin add-back is applied anywhere. Do not
+            # "restore" one: an origin offset cannot undo the coordinate stretch
+            # a frozen extent imposes, which is what corrupted zoomed
+            # corrections before 1d8866b. So correcting while zoomed is fully
+            # supported and is the expected workflow (judge the pupil close-up).
+            #
+            # `p` KEEPS WORKING with no proposal (a correction with proposed=None
+            # is the valid detector-miss record sub-project C needs), but we WARN
+            # so the user knows this label will lack the proposal-vs-correction
+            # comparison. Distinguish the two reasons the proposal is absent.
+            if tag.last_proposed is None:
+                if tag.eye_roi is None:
+                    _flash("no eye ROI - correction has no proposal to compare ([e])")
+                else:
+                    _flash("no pupil proposal here - recording a detector miss")
+            tag.arming = "correct"
+            state["arm_selector"]()
+            return True
+        if key == "x":  # blink / occluded -> no valid pupil this frame
+            # Store the proposal if one exists (it is then a detector false
+            # positive); a blink never carries a corrected ellipse.
+            vl.upsert_frame_label(tag.sidecar, state["frame_idx"],
+                                  vl.VERDICT_BLINK,
+                                  proposed_ellipse=tag.last_proposed)
+            vl.save_sidecar(tag.sidecar, session, subject)
+            logger.info("blink frame %d", state["frame_idx"])
+            _flash(f"saved blink @ f{state['frame_idx']}")
+            return True
         # Self-diagnosing: log (cheap, debug-level, not to the HUD) any key we do
         # not handle so a future dead-key report (like the bracket keys above) is
         # immediately diagnosable from the log instead of a silent no-op.
@@ -543,10 +1291,11 @@ def main(argv=None) -> int:
         return False
 
     # ---------------------------------------------------------------------
-    # Compose the scrubber. Always FULL FRAME (crop=None): the eye-zoom fallback
-    # is BG_046-specific absolute pixels and lands on the snout on subjects whose
-    # camera sits closer to the face, so zoom/ROI is deferred to Plan 2b (see the
-    # module docstring + the UX design doc). Full frame worked well in the pilot.
+    # Compose the scrubber. Starts FULL FRAME (crop=None); Plan 2b's `f` toggle
+    # mutates cfg.crop live to a CLAMPED eye-zoom derived from the user's eye ROI
+    # (never the BG_046-specific absolute-pixel fallback, which lands on the snout
+    # on closer-camera subjects). ROI drag + pupil overlay ride the on_selector /
+    # on_refresh seams (see the module docstring + the UX design doc).
     # ---------------------------------------------------------------------
     start_frame = compute_predicted_frame_idx(
         float(baseline_on[0]), -_baseline_implied_offset(), ts_ms)
@@ -560,6 +1309,9 @@ def main(argv=None) -> int:
         hud_fn=_hud_fn,
         on_key_extra=_on_key_extra,
         on_save=_do_save,        # enter falls back here only if the hook declines
+        on_selector=_on_roi_drawn,   # Task 5: eye/mouth ROI drag
+        on_refresh=_on_frame_shown,  # Task 5: re-detect + redraw pupil overlay
+        on_selector_cancel=_on_selector_cancel,  # drop arming intent on cancel
     )
 
     logger.info("Tagging %s / %s: %d baseline trials, %d change targets, %d frames.",
@@ -568,6 +1320,11 @@ def main(argv=None) -> int:
         run_scrubber(cfg)
     finally:
         play_cap.release()
+        # Belt-and-suspenders flush: every label already saved atomically on
+        # keystroke, but re-persist the final sidecar state on quit so a session's
+        # labels are durable even if some future path mutates without saving.
+        if tag.sidecar is not None:
+            vl.save_sidecar(tag.sidecar, session, subject)
 
     anchor_path = os.path.join(sync_dir, f"{session}_anchor.json")
     if os.path.exists(anchor_path):
