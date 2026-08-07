@@ -366,6 +366,17 @@ order below reflects retrofit cost (what becomes impossible or very expensive if
    session groups and the eligibility rule become first-class registry/decision-log citizens
    (Cluster D), the 132 manual sorts are in the irreplaceable hand-made set (Cluster H), and the
    spec-curve robustness axes for `confirmed` claims include the alternative orderings.
+
+   **Clarified 2026-08-07 (project-owner): groups are STRATA, not verdicts.** Sessions failing a
+   group's criteria are NOT discarded. QC profiles and session groups share a mechanism (named,
+   versioned, hashed, provenance-recorded) but have opposite semantics: a QC *verdict* (data
+   integrity: sync, clock drift, minimum trials) is the only thing permitted to remove a session
+   globally; a group *label* only decides which comparisons a session belongs in. Every session
+   keeps all its labels — a Disengaged-dominated session is excluded from a Balanced-vs-Balanced
+   learning contrast and is exactly the inclusion set for a disengaged-vs-disengaged-across-
+   learning contrast (itself a live scientific question). Registry stores labels/occupancies/
+   coverage as columns; each analysis declares its stratum selection; the declaration is recorded
+   in the sidecar and the ledger's scope field, so claims state which stratum they hold in.
 8. **Subject-reversal rule: capped at `exploratory`** with a required `needs_more_data` note. A
    claim that reverses sign in any contributing subject cannot be promoted to `confirmed` until new
    subjects resolve it.
