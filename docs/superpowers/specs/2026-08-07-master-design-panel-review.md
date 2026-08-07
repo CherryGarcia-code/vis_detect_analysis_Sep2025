@@ -319,6 +319,57 @@ order below reflects retrofit cost (what becomes impossible or very expensive if
 
 ---
 
+## 4a. Project-owner answers (recorded 2026-08-07)
+
+1. **Figure list — deliberately not fixed.** The project is still exploratory; more data is being
+   collected and the most interesting questions are not yet settled. Consequence adopted: the port
+   sunset criterion is redesigned around **lazy porting** (see §5a) instead of a named figure set.
+   Nothing about the science is narrowed.
+2. **Repo visibility — public, MIT** (verified live on GitHub 2026-08-07; copyright line uses the
+   pseudonym). The new repo inherits this. Consequence: the Tier-1 CI "golden mini-session" must
+   NOT be a slice of real unpublished data on a public repo — it is built from the synthetic
+   generator instead (realistic shape, no real spikes), which ADR-014 already makes load-bearing.
+   Real-data tests stay in the local receipt tier.
+3. **Cohort is mixed-sex.** `sex` becomes a required per-subject registry field; every
+   `per_subject` ledger array is sex-annotated; claims at small k report n per sex rather than
+   modelling sex as a covariate (unestimable at k ≤ 5).
+4. **Data licence/ethics — distinct from Q2, see explanation.** Code licence (MIT) covers code
+   only. Actions deferred but named: record the project-licence (PPL) number in the registry
+   `subjects` table; confirm institutional permission for public deposit of processed recordings;
+   choose CC0 vs CC-BY at deposit time.
+5. **Implant dates recorded for all subjects.** The owner's distinction is adopted verbatim: the
+   registry carries BOTH `days_from_implant` (technical-drift covariate) and the training-session
+   axis (the science variable). They are collinear within subject but partially decorrelate across
+   subjects via different implant-to-training lags — which is what gives the stability control its
+   power.
+6. **Deposit scope: processed NWB** (what DANDI is built for). Raw SpikeGLX stays on institutional
+   storage. Not urgent; consistent with Cluster A.
+7. **Session-ordering axis: canonical + robustness** (explained and decided): the canonical
+   learning axis is the exogenous training-time index (per the project's own S1 finding that
+   d′-based staging is gate+boundary+outcome → circular). Alternative orderings (calendar date,
+   cumulative trials, d′ stage, blinded-sorter group) are spec-curve robustness axes on `confirmed`
+   claims, not competing defaults. Recorded as an ADR-011 decision when the log exists.
+8. **Subject-reversal rule: capped at `exploratory`** with a required `needs_more_data` note. A
+   claim that reverses sign in any contributing subject cannot be promoted to `confirmed` until new
+   subjects resolve it.
+
+## 5a. Sunset criterion, redesigned after answer 1
+
+The critic's original stopping rule ("port is done when the paper's named figure set regenerates")
+assumed a figure list exists. It does not, and forcing one now would be premature narrowing. The
+replacement, which is bounded without naming figures:
+
+- **Nothing is ported proactively.** Every old-repo analysis module starts on `cold-list.md`.
+- A module is ported **on first use** — the first time a live analysis needs it — through the
+  normal ADR-009 explained-difference gate.
+- **"The port is done" = the foundation + gates are complete and the cold-list is allowed to be
+  nonempty forever.** Sub-project 3 stops being a phase and becomes a standing rule.
+- The v1 port budget (~≤12 modules) becomes a *soft alarm*: if more than ~12 modules get pulled
+  across before the foundation stabilises, that is a signal the walking skeleton missed something.
+
+This is strictly better for an exploratory-stage project: zero wasted porting of modules whose
+questions die, and the paper's figure list emerges from the ledger instead of being guessed.
+
 ## 5. Proposed acceptance path
 
 If you accept the recommendations wholesale: A→H become ADR-015 … ADR-020 plus amendments to
