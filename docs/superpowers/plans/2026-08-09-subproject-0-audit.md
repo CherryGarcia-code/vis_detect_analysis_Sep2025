@@ -188,7 +188,9 @@ git commit -m "feat(audit): measurement recorder + session-token classifier (Tas
 
 **Interfaces:**
 - Consumes: `record` from Task 1.
-- Produces: measurement ids `d5.guardrail.before`, `d5.guardrail.after`, `d5.syspath.real`.
+- Produces: measurement ids `d5.guardrail.before`, `d5.guardrail.after`. (Sys-path
+  classification lives in Task 5 as `d2.syspath.*` — pre-flight fix: a stale id promise here
+  would send a literal-minded implementer hunting for it.)
 
 - [ ] **Step 1: Record the BEFORE count**
 
@@ -306,24 +308,44 @@ canon = module_constants(REPO / "src/visdetect/analysis/constants.py")
 cfg = module_constants(REPO / "src/visdetect/analysis/config.py")
 cfg_src = (REPO / "src/visdetect/analysis/config.py").read_text(encoding="utf-8")
 
-all_defs = {}          # name -> list of (path, value_src)
+# PRE-FLIGHT FIX (blocker): importer detection MUST be AST-based. The line-regex
+# `import...NAME` misses multi-line parenthesized imports (13 in-scope files,
+# incl. config.py's own 40-name re-export block and video_sync.py:69) and was
+# measured to misclassify 48 of 82 constants as zero-importer.
+all_defs = {}          # name -> list of (path, lineno, value_src)
 importers = {}         # canonical name -> set of files importing it
 for f in py_files():
-    consts = module_constants(f)
-    for name, v in consts.items():
-        all_defs.setdefault(name, []).append((f, v))
     src = f.read_text(encoding="utf-8", errors="replace")
-    for name in canon:
-        if re.search(rf"\bimport\b[^\n]*\b{name}\b", src) or \
-           re.search(rf"\b(constants|config)\.{name}\b", src):
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        continue
+    for node in tree.body:
+        targets, val = [], None
+        if isinstance(node, ast.Assign):
+            targets = [t for t in node.targets if isinstance(t, ast.Name)]
+            val = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            targets, val = [node.target], node.value
+        for t in targets:
+            if t.id.isupper() and val is not None:
+                all_defs.setdefault(t.id, []).append((f, node.lineno, ast.unparse(val)))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and \
+           node.module.rsplit(".", 1)[-1] in ("constants", "config"):
+            for alias in node.names:
+                if alias.name in canon:
+                    importers.setdefault(alias.name, set()).add(f)
+    for name in canon:   # attribute-style usage: constants.NAME / config.NAME
+        if re.search(rf"\b(constants|config)\.{name}\b", src):
             importers.setdefault(name, set()).add(f)
 
 rows = []
 for name, val in sorted(canon.items()):
     defs = all_defs.get(name, [])
-    shadow = [(p, v) for p, v in defs
+    shadow = [(p, ln, v) for p, ln, v in defs
               if "src\\visdetect\\analysis\\constants.py" not in str(p)]
-    agree = all(v == val for _, v in shadow) if shadow else True
+    agree = all(v == val for *_x, v in shadow) if shadow else True
     rows.append({
         "name": name, "defined_in": "constants.py",
         "reexported_by_config": name in cfg or f" {name}" in cfg_src,
@@ -331,18 +353,35 @@ for name, val in sorted(canon.items()):
         "n_retype_sites": len(shadow), "retypes_agree": agree,
         "bucket": "canonical"})
 
-# divergent multi-file names (not in canon)
+# multi-file names (not in canon): three buckets per spec — (a) divergent
+# parameter, (b) path alias, (c) genuinely local (multi-file but values agree)
 for name, defs in sorted(all_defs.items()):
-    if name in canon or len({str(p) for p, _ in defs}) < 2:
+    if name in canon or len({str(p) for p, _l, _v in defs}) < 2:
         continue
-    values = {v for _, v in defs}
-    if len(values) < 2:
-        continue
+    sites = ";".join(sorted({f"{p.relative_to(REPO)}:{ln}" for p, ln, _v in defs})[:6])
+    values = {v for *_x, v in defs}
     is_path = any(k in name for k in ("DIR", "PATH", "ROOT", "FILE", "OUT"))
-    rows.append({"name": name, "defined_in": ";".join(sorted({str(p.relative_to(REPO)) for p, _ in defs})[:6]),
+    bucket = ("path-alias" if is_path
+              else "divergent-parameter" if len(values) > 1
+              else "genuinely-local")
+    rows.append({"name": name, "defined_in": sites,
                  "reexported_by_config": False, "n_importers": 0,
-                 "n_retype_sites": len(defs), "retypes_agree": False,
-                 "bucket": "path-alias" if is_path else "divergent-parameter"})
+                 "n_retype_sites": len(defs), "retypes_agree": len(values) == 1,
+                 "bucket": bucket})
+
+# D1 TF-period consumer census (spec: every TF_SAMPLE_PERIOD consumer AND every
+# bare dt=0.05 / DT_GEN / DT=0.02 site; lowercase sites are invisible to the
+# uppercase census above)
+tf_rows = []
+for f in py_files():
+    for i, line in enumerate(f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        if re.search(r"\bTF_SAMPLE_PERIOD\b", line):
+            tf_rows.append([str(f.relative_to(REPO)), i, "TF_SAMPLE_PERIOD", line.strip()[:80]])
+        if re.search(r"\bdt\s*[=:]\s*0\.05\b|\bDT_GEN\s*=\s*0\.05\b|\bDT\s*=\s*0\.02\b", line):
+            tf_rows.append([str(f.relative_to(REPO)), i, "bare-dt", line.strip()[:80]])
+with (REPO / "data/cache/audit/tf_dt_sites.csv").open("w", newline="", encoding="utf-8") as fh:
+    w2 = csv.writer(fh, lineterminator="\n")
+    w2.writerow(["file", "line", "kind", "source"]); w2.writerows(tf_rows)
 
 out = REPO / "data/cache/audit/constants_census.csv"
 with out.open("w", newline="", encoding="utf-8") as f:
@@ -369,6 +408,15 @@ record("d1.constants.shadow_disagree", "D1", "canonical constants with DISAGREEI
        disagreeing, "count", cmd, "d1_constants_census.py")
 record("d1.constants.divergent_params", "D1", "non-canonical divergent parameter names (bucket a)",
        div_param, "count", cmd, "d1_constants_census.py")
+record("d1.tfperiod.consumer_sites", "D1",
+       "TF_SAMPLE_PERIOD consumers + bare dt=0.05/DT_GEN/DT=0.02 sites",
+       len(tf_rows), "sites", cmd, "d1_constants_census.py",
+       "data/cache/audit/tf_dt_sites.csv")
+record("d1.tfperiod.figure_attribution", "D1",
+       "which published figures/caches were produced under each dt", "not-measured",
+       "n/a", cmd, "d1_constants_census.py",
+       notes="requires per-figure provenance that does not exist (the D4 census "
+             "measures exactly that gap); direction carried in the register")
 print(f"canon={len(canon)} dead={dead} not_reexported={not_reexported} "
       f"disagree={disagreeing} divergent_params={div_param}")
 ```
@@ -453,24 +501,61 @@ record("d1.frfloor.spread", "D1", "unit-count spread across live selection paths
        f"{n_good_and_stable}/{n_getgood_1hz}/{n_getgood_01hz}", "units", CMD, S,
        notes="one session, three floors, three different populations")
 
+# --- (2b) PRE-FLIGHT FIX: the spec's headline blast-radius number — unit counts
+# under each named profile's INTENDED thresholds (read from the YAML directly)
+# vs the DEFAULTED gate that the load_qc_profile() -> {} defect actually applies.
+# Metrics are built explicitly here so no unverified qc-module builder is assumed.
+import yaml
+import pandas as pd
+mets = []
+for c in sess.clusters:
+    spk = np.asarray(c.spike_times, float)
+    dur = float(spk[-1] - spk[0]) if len(spk) > 1 else 1.0
+    isi = np.diff(spk) if len(spk) > 1 else np.array([np.inf])
+    mets.append({"cluster_id": c.cluster_id, "n_spikes": len(spk),
+                 "mean_rate_hz": len(spk) / max(dur, 1e-9),
+                 "isi_viol_frac": float(np.mean(isi < 0.002))})
+mdf = pd.DataFrame(mets)
+profiles_yaml = yaml.safe_load((REPO / "config/qc_profiles.yml").read_text(encoding="utf-8"))
+for pname, prof in profiles_yaml.items():
+    keep = ((mdf["mean_rate_hz"] >= prof.get("min_mean_rate_hz", 0.0)) &
+            (mdf["isi_viol_frac"] <= prof.get("max_isi_viol_frac", 1.0)) &
+            (mdf["n_spikes"] >= prof.get("min_total_spikes", 0)))
+    record(f"d1.qcprofile.diff.{pname}", "D1",
+           f"units passing the YAML-INTENDED '{pname}' thresholds (session 01072025)",
+           int(keep.sum()), "units", CMD, S, "config/qc_profiles.yml",
+           notes="compare across profiles: under the live {} defect all named "
+                 "profiles collapse to the function defaults, so these intended "
+                 "counts differ from what any --profile run actually used")
+
 # --- (3) ref trials across 5 sessions ---
+# PRE-FLIGHT FIX (blocker): Trial has NO attribute RT/rt. Reaction times live in
+# Trial.reactiontimes: Dict[str, float], keyed by the RAW capitalized outcome
+# token ("Ref"/"FA"; "RT" for Hit) — see session.py:22-35 and align.py:115-127.
 REF_SESSIONS = ["01072025", "23062025", "08072025", "15072025", "30062025"]
 del sess; gc.collect()
-tot_ref, ref_with_change, rts = 0, 0, []
+tot_ref, ref_with_change, rts, rt_keys_seen = 0, 0, [], set()
 for sname in REF_SESSIONS:
     try:
         s = load_session(sname)
     except Exception as e:
         print(f"skip {sname}: {e}"); continue
+    n_ref_s, n_ct_s = 0, 0
     for t in s.trials:
-        if str(getattr(t, "outcome", getattr(t, "trialoutcome", ""))).lower() == "ref":
-            tot_ref += 1
+        raw = str(getattr(t, "trialoutcome", getattr(t, "outcome", "")))
+        if raw.lower() == "ref":
+            tot_ref += 1; n_ref_s += 1
             ct = getattr(t, "change_time", None)
-            rt = getattr(t, "RT", getattr(t, "rt", None))
+            rtd = getattr(t, "reactiontimes", None) or {}
+            rt_keys_seen |= set(rtd.keys())
+            rt = rtd.get(raw, rtd.get(raw.capitalize(), rtd.get("RT")))
             if ct is not None and not (isinstance(ct, float) and np.isnan(ct)):
-                ref_with_change += 1
+                ref_with_change += 1; n_ct_s += 1
                 if rt is not None and not (isinstance(rt, float) and np.isnan(rt)):
                     rts.append(float(rt))
+    record(f"d1.ref.per_session.{sname}", "D1",
+           f"ref trials / with change_time (session {sname})",
+           f"{n_ref_s}/{n_ct_s}", "trials", CMD, S)
     del s; gc.collect()
 record("d1.ref.total", "D1", "ref trials across 5 sessions", tot_ref, "trials", CMD, S)
 record("d1.ref.with_change_time", "D1", "ref trials with a valid change_time",
@@ -478,10 +563,16 @@ record("d1.ref.with_change_time", "D1", "ref trials with a valid change_time",
        notes="if ~=total, the change WAS presented on ref trials -> "
              "CHANGE_PRESENTED_OUTCOMES incl. Ref is factually right and "
              "EVENT_VALID_OUTCOMES excluding ref is a scientific choice, not a fact")
+record("d1.ref.rt_dict_keys", "D1", "reactiontimes dict keys observed on ref trials",
+       ";".join(sorted(rt_keys_seen)) or "none", "keys", CMD, S)
 if rts:
     record("d1.ref.rt_median_ms", "D1", "median RT on ref trials (from change)",
            round(1000 * float(np.median(rts))), "ms", CMD, S,
            notes="small positive RT = lick AFTER change onset = reflex")
+else:
+    record("d1.ref.rt_median_ms", "D1", "median RT on ref trials", "not-measured",
+           "ms", CMD, S, notes="no RT found under observed reactiontimes keys - "
+           "report the rt_dict_keys row and settle via ni_events lick times")
 
 # --- (4) TF sample period from the stimulus log ---
 s = load_session("01072025")
@@ -655,12 +746,26 @@ print("done")
 cd /e/python_analysis/git_repos/vis_detect_analysis_Sep2025
 py -m pip wheel . --no-deps -w data/cache/audit/wheel 2>&1 | tail -2
 py -m venv data/cache/audit/cleanvenv
-data/cache/audit/cleanvenv/Scripts/python -m pip install data/cache/audit/wheel/*.whl -q
-data/cache/audit/cleanvenv/Scripts/python -c "import visdetect.viz" ; echo "viz-exit=$?"
+# PRE-FLIGHT FIX: --no-deps (10 install_requires would hit the network and a pip
+# failure would fake the finding), then a POSITIVE CONTROL before the probe:
+data/cache/audit/cleanvenv/Scripts/python -m pip install --no-deps data/cache/audit/wheel/*.whl -q
+data/cache/audit/cleanvenv/Scripts/python -c "import visdetect" ; echo "control-exit=$?"
+for m in core analysis suite anatomy utils viz integrations; do
+  data/cache/audit/cleanvenv/Scripts/python -c "import importlib; importlib.import_module('visdetect.$m')" 2> data/cache/audit/imp_$m.err
+  echo "$m-exit=$? :: $(head -1 data/cache/audit/imp_$m.err | tail -c 100)"
+done
 ```
-Expected: `viz-exit=1` (ModuleNotFoundError — `viz`/`integrations` lack `__init__.py`, dropped by
-`find_packages`). Record via one-liner: id `d2.packaging.viz_missing`, value = the exit code, note
-"50 importers break on any non-editable install".
+Expected: `control-exit=0` is NOT required (deps absent under --no-deps). The decisive signal
+is the ERROR MESSAGE class per module: `viz`/`integrations` must fail with
+**`No module named 'visdetect.viz'`** (the package is absent from the wheel — the defect),
+while other modules fail, if at all, naming a *third-party* dep (`numpy`/`scipy` — mere
+--no-deps absence, not the defect). Record `d2.packaging.viz_missing` and `d2.packaging.integrations_missing` with both exit
+codes and the error class in notes ("50 importers break on any non-editable install"). Also
+record two explicit rows: `d2.sideeffects.import = not-measured` (module-level `matplotlib.use`
+×4 + `makedirs` at suite/config.py:19 — recon-evidenced, full enumeration deferred) and add a
+parents[N] census to the script: grep `parents\[\d\]` over `src/` with file:line into
+`data/cache/audit/parents_sites.csv` and record `d2.parents.sites` (the class that produced the
+live `parents[1]` qc bug).
 
 - [ ] **Step 4: Write `02-layering.md`** citing the ids; then commit:
 
@@ -710,7 +815,7 @@ record("d3.dateparser.trio", "D3", "strptime('%d%m%Y') on 01072025/1072025/10720
 
 sites = []
 for p in (REPO / "scripts").rglob("*.py"):
-    if "__pycache__" in p.parts or str(p).find("audit") >= 0:
+    if "__pycache__" in p.parts or "audit" in p.parts:   # component test, not substring
         continue
     for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
         if re.search(r"strptime\([^)]*%d%m%Y", line):
@@ -734,8 +839,13 @@ record("d3.zfill.manifest_dtype", "D3", "session_name dtypes returned by load_st
        str(kinds), "dtypes", CMD, S,
        notes="if all str+8digit, downstream zfill sites are redundant-but-harmless")
 
-# (3) partial_spearman spread: three variants, one real input
-from scipy.stats import spearmanr
+# (3) partial_spearman spread — PRE-FLIGHT FIX (blocker): replicate the THREE
+# estimator families that actually exist in the codebase, verbatim. All
+# residual-based copies rank FIRST and residualize RANKS on RANKS; the third
+# family is the closed-form pairwise-rho formula. The original plan draft
+# residualized raw values (an estimator used NOWHERE in the repo) and included
+# a variant mathematically identical to another.
+from scipy.stats import spearmanr, rankdata
 rng_src = REPO / "data/cache/session_sorting/session_group_features.csv"
 rows = list(csv.DictReader(rng_src.open(encoding="utf-8")))
 x = np.array([float(r["occ_StimSens"]) for r in rows])
@@ -748,16 +858,26 @@ def _resid(a, c):
     return a - A @ np.linalg.lstsq(A, a, rcond=None)[0]
 
 
-ex, ey = _resid(x, z), _resid(y, z)
-v_spear = spearmanr(ex, ey).statistic                       # variant A (2 copies)
-v_spear_rank = spearmanr(np.argsort(np.argsort(ex)),
-                         np.argsort(np.argsort(ey))).statistic  # rank-then-corr
-v_pearson = float(np.corrcoef(ex, ey)[0, 1])                # variant C (learning_continuum)
+rx, ry, rz = rankdata(x), rankdata(y), rankdata(z)
+ex, ey = _resid(rx, rz), _resid(ry, rz)
+# family A: rank -> residualize -> spearmanr   (theta_prototype.py:106-115,
+#           theta_count_matched.py:147, within_session_dynamics.py:65-71)
+v_a = spearmanr(ex, ey).statistic
+# family B: rank -> residualize -> np.corrcoef (learning_continuum.py:94-104,
+#           learning_transient_sustained.py:95, latency_outcome_coupling.py:254)
+v_b = float(np.corrcoef(ex, ey)[0, 1])
+# family C: closed-form from pairwise Spearman rhos (explore4_partial_rt.py:49-57)
+rxy = spearmanr(x, y).statistic
+rxz = spearmanr(x, z).statistic
+ryz = spearmanr(y, z).statistic
+v_c = (rxy - rxz * ryz) / np.sqrt((1 - rxz**2) * (1 - ryz**2))
 record("d3.pspearman.spread", "D3",
-       "partial_spearman three-variant spread on one shared real input (n=%d)" % len(x),
-       f"spearmanr={v_spear:.3f} | rank-corr={v_spear_rank:.3f} | corrcoef={v_pearson:.3f}",
-       "rho", CMD, S, "learning_continuum.py:104 vs theta_prototype.py:106",
-       notes="corrcoef-on-residuals is a DIFFERENT estimator; spread quantified")
+       "partial_spearman THREE-FAMILY spread on one shared real input (n=%d)" % len(x),
+       f"rank+spearmanr={v_a:.3f} | rank+corrcoef={v_b:.3f} | pairwise-rho={v_c:.3f}",
+       "rho", CMD, S,
+       "theta_prototype.py:106 vs learning_continuum.py:104 vs explore4_partial_rt.py:49",
+       notes="all three replicated verbatim from their source files; any spread "
+             ">0.02 upgrades the register entry to materially-different-in-practice")
 
 # (4) vd_tf_bg046 writers: are the repo-tree figures older than the code?
 writers = subprocess.run(["git", "grep", "-lE", "vd_tf_bg046/(FIGURES|data)", "--", "scripts/"],
@@ -770,6 +890,39 @@ for w_ in writers:
 record("d3.vdtf.writers", "D3", "scripts writing into the deleted vd_tf_bg046 tree",
        len(writers), "files", CMD, S, ";".join(stale[:10]),
        notes="reruns succeed and write nowhere visible")
+
+# (5) PRE-FLIGHT ADDITION: per-script classification census (spec: classify the
+# ~130 scripts writing neither figure nor CSV; entry-point convention)
+cls_rows = []
+for p in (REPO / "scripts").rglob("*.py"):
+    if "__pycache__" in p.parts or "audit" in p.parts:
+        continue
+    src2 = p.read_text(encoding="utf-8", errors="replace")
+    cls_rows.append([str(p.relative_to(REPO)),
+                     bool(re.search(r'__name__\s*==\s*["\']__main__', src2)),
+                     "argparse" in src2,
+                     bool(re.search(r"savefig|save_figure", src2)),
+                     ".to_csv(" in src2 or "np.save" in src2 or "json.dump" in src2])
+with (REPO / "data/cache/audit/script_classification.csv").open("w", newline="",
+                                                                encoding="utf-8") as fh:
+    w3 = csv.writer(fh, lineterminator="\n")
+    w3.writerow(["file", "has_main", "has_argparse", "writes_figure", "writes_data"])
+    w3.writerows(cls_rows)
+no_output = sum(1 for r in cls_rows if not r[3] and not r[4])
+record("d3.scripts.no_output", "D3",
+       "scripts writing neither figure nor data artefact (shared-module / job-body / dead)",
+       no_output, "files", CMD, S, "data/cache/audit/script_classification.csv",
+       notes="Task 15 triages this CSV into shared-module vs dead for the drop-list")
+
+# (6) lick-channel overlap: the 33-session re-extraction batch list is not
+# materialized anywhere in the repo, and deriving it needs NI-file inspection on
+# the X: mount, which the audit forbids. Recorded honestly:
+record("d3.lick.overlap", "D3",
+       "which unguarded lick-channel scripts touch the 33 re-extracted sessions",
+       "not-measured", "n/a", CMD, S,
+       notes="batch list requires X:-side NI-file audit (forbidden); direction "
+             "carried in the register: lick rates in affected sessions are "
+             "under-detected 10-40x, so cross-session lick trends are suspect")
 print("done")
 ```
 
@@ -837,9 +990,20 @@ for root in ROOTS:
         domains = toks.map(classify_token).value_counts().to_dict()
         n_bad = sum(v for k, v in domains.items()
                     if k in ("7digit-stripped", "float-string", "00-padded"))
-        # join-loss vs manifest (BG_046-keyed files only; others report n/a)
-        canon_toks = toks.map(lambda x: canonical(x))
-        lost = int((~canon_toks.isin(manifest_keys)).sum()) if "BG_046" in str(f) or root == "data" else -1
+        # join-loss vs the BG_046 manifest — PRE-FLIGHT FIX: only for files that
+        # are actually BG_046-scoped (joining BG_031 caches to the BG_046
+        # manifest is not a join the codebase performs and fakes total loss).
+        # Subject prefixes are stripped before canonicalisation.
+        name_l = f.name.lower()
+        other_subject = any(s in name_l for s in
+                            ("bg_012", "bg_031", "bg_038", "bg_039", "bg_040",
+                             "bg_041", "bg_049"))
+        stripped = toks.map(lambda x: re.sub(r"^BG_\d{3}_", "", str(x)))
+        canon_toks = stripped.map(lambda x: canonical(x))
+        if other_subject:
+            lost = -1
+        else:
+            lost = int((~canon_toks.isin(manifest_keys)).sum())
         out_rows.append([str(f.relative_to(REPO)), len(toks), str(domains),
                          lost >= 0, max(lost, 0)])
         if n_bad:
@@ -941,22 +1105,53 @@ record("d4.filter.divergence", "D4",
        len(raw - filt), "sessions", CMD, S,
        notes="28 scripts read the CSV directly (recon); each sees this many extra sessions")
 
-# (3) twin collisions against the real pkl tree
-from visdetect.analysis.config import parse_session_date  # only to DEMONSTRATE, never to key
+# (3) twin collisions against the real pkl tree.
+# PRE-FLIGHT FIX (blocker): every pkl on disk is SUBJECT-PREFIXED
+# (BG_046_01072025.pkl, BG_012_01112023_prot4_lickEndsTrial.pkl), so naive
+# stem slicing produces garbage keys. Extract the date as the first standalone
+# 6-8 digit token, and record WHICH TWIN WINS per the resolver semantics
+# (suite/loader.py:120-135: plain form wins; unique suffix falls back;
+# genuinely ambiguous -> None).
+import re as _re
 coll = {}
 for subj_dir in sorted((REPO / "data/pkls").iterdir()):
     if not subj_dir.is_dir():
         continue
     seen = {}
     for p in subj_dir.glob("*.pkl"):
-        stem = p.stem.split("_")[0] if p.stem[0].isdigit() else p.stem
-        key = stem[-8:] if len(stem) >= 8 else stem
-        seen.setdefault(key[-8:], []).append(p.name)
-    coll[subj_dir.name] = {k: v for k, v in seen.items() if len(v) > 1}
+        m = _re.search(r"(?<!\d)\d{6,8}(?!\d)", p.stem)
+        if not m:
+            continue
+        seen.setdefault(m.group(0), []).append(p.name)
+    coll[subj_dir.name] = {k: sorted(v) for k, v in seen.items() if len(v) > 1}
 total = sum(len(v) for v in coll.values())
 record("d4.twins.colliding_date_keys", "D4", "date keys with >1 pkl (twins) across subjects",
        total, "keys", CMD, S,
        notes="; ".join(f"{s}:{len(v)}" for s, v in coll.items() if v))
+winners = []
+for subj, keys in coll.items():
+    for k, files in keys.items():
+        plain = [f for f in files if _re.fullmatch(rf"{subj}_{k}\.pkl", f)]
+        winners.append(f"{subj}/{k}->" + (plain[0] if plain else "AMBIGUOUS(None)"))
+record("d4.twins.winners", "D4",
+       "which twin the resolver serves per colliding key (deterministic by code path)",
+       " | ".join(winners[:12]) + (f" (+{len(winners)-12} more)" if len(winners) > 12 else ""),
+       "verdicts", CMD, S, "src/visdetect/suite/loader.py:120-135",
+       notes="plain form wins; no plain form and >1 suffix -> resolver returns None")
+
+# (4) PRE-FLIGHT ADDITION: the spec's named staleness value-check — the chron
+# column of predicted_session_groups.csv holds tuples current code cannot produce
+psg = REPO / "data/cache/session_sorting/predicted_session_groups.csv"
+import pandas as _pd
+chron = _pd.read_csv(psg, dtype=str)["chron"]
+bad = chron[chron.str.contains(r"\(\s*\d{1,4},\s*(1[3-9]|[2-9]\d),", regex=True, na=False)]
+record("d4.stale.chron_impossible", "D4",
+       "predicted_session_groups.csv chron tuples with month>12 (impossible dates)",
+       len(bad), "rows", CMD, S, str(psg.relative_to(REPO)),
+       notes="frozen output of the pre-fix parser; proves the staleness class "
+             "beyond the mtime heuristic. Per-script SESSION_FILTER diffs are an "
+             "upper-bound proxy (some direct readers apply own filters) - stated "
+             "as such in 04-artefacts.md")
 print("done")
 ```
 
@@ -998,10 +1193,20 @@ from audit._audit_lib import REPO, record
 CMD = "py scripts/audit/d4_traceability_census.py"; S = "d4_traceability_census.py"
 random.seed(20260809)   # fixed: sample is reproducible
 
+# PRE-FLIGHT FIX (A4): git-TRACKED figures are deliverables and must ALL be in
+# the census, in addition to the stratified random sample — otherwise acceptance
+# criterion A4 ("covers every tracked figure") is not dischargeable.
+tracked = set(subprocess.run(["git", "ls-files", "FIGURES"], capture_output=True,
+                             text=True, cwd=REPO).stdout.split("\n"))
+tracked = {t for t in tracked if t.lower().endswith((".png", ".pdf", ".svg"))}
+
 rows = []
 for topic in sorted(p for p in (REPO / "FIGURES").iterdir() if p.is_dir()):
     figs = [f for f in topic.rglob("*") if f.suffix.lower() in (".png", ".pdf", ".svg")]
-    for fig in random.sample(figs, min(5, len(figs))):
+    sample = set(random.sample(figs, min(5, len(figs))))
+    sample |= {topic.parent.parent / t for t in tracked
+               if t.startswith(f"FIGURES/{topic.name}/")}
+    for fig in sorted(sample):
         stem = fig.stem
         method, producer = "untraceable", ""
         hits = subprocess.run(["git", "grep", "-l", stem, "--", "scripts/", "src/"],
@@ -1027,12 +1232,16 @@ with (REPO / "data/cache/audit/traceability_sample.csv").open("w", newline="",
     w.writerow(["figure", "topic", "method", "producer"]); w.writerows(rows)
 n = len(rows)
 untraceable = sum(1 for r in rows if r[2] == "untraceable")
-record("d4.trace.sample", "D4", "figures in stratified traceability sample", n,
+record("d4.trace.sample", "D4", "figures in census (stratified sample + ALL git-tracked)", n,
        "figures", CMD, S, "data/cache/audit/traceability_sample.csv")
-record("d4.trace.untraceable_frac", "D4", "fraction of sampled figures with NO identifiable producer",
+record("d4.trace.tracked_covered", "D4", "git-tracked deliverable figures included (A4)",
+       len(tracked), "figures", CMD, S,
+       notes="A4 requires every TRACKED figure covered; the stratified sample "
+             "extends coverage to the untracked bulk")
+record("d4.trace.untraceable_frac", "D4", "fraction of censused figures with NO identifiable producer",
        round(untraceable / n, 2), "fraction", CMD, S,
        notes="evidence for the S5 provenance layer, not a target (spec D4)")
-print(f"sample={n} untraceable={untraceable}")
+print(f"sample={n} tracked={len(tracked)} untraceable={untraceable}")
 ```
 
 - [ ] **Step 2: Run; finish `04-artefacts.md`** (integrity + staleness + census + the
@@ -1097,11 +1306,20 @@ record("d5.tests.untested_modules", "D5", "library modules with ZERO test covera
 print(f"tests={len(rows)} real-data={sum(1 for r in rows if r[1])} untested={len(untested)}")
 ```
 
-- [ ] **Step 2: Run offline partition once for runtime** —
-`py -m pytest tests -q --ignore=tests/audit -m "not slow" --co -q | tail -3` (collection only —
-full runs of the real-data tier are out of audit scope; record collection count). Write
-`05-tests-tooling.md`: partition table, untested-module list, the Task-2 guardrail numbers, and
-the de-facto-gate statement (recon: zero CI/linters/pre-commit; sole hook = delete guard).
+- [ ] **Step 2: Measure the offline partition's RUNTIME** (pre-flight fix: the spec asks for
+runtime, and `--co` measures nothing). Run the offline tests — the files with
+`needs_real_data=False` in `test_partition.csv` — under timing:
+
+```bash
+OFFLINE=$(py -c "import csv; print(' '.join(r['test_file'] for r in csv.DictReader(open('data/cache/audit/test_partition.csv')) if r['needs_real_data']=='False'))")
+start=$SECONDS; py -m pytest $OFFLINE -q -m "not slow" | tail -2; echo "offline_runtime_s=$((SECONDS-start))"
+```
+
+Record `d5.tests.offline_runtime_s` with the wall time and pass/fail tail, and
+`d5.tests.realdata_runtime_s = not-measured` (running the real-data tier is out of audit scope;
+its file list and reason are in the partition CSV). Write `05-tests-tooling.md`: partition
+table, untested-module list, the Task-2 guardrail numbers, and the de-facto-gate statement
+(recon: zero CI/linters/pre-commit; sole hook = delete guard).
 
 - [ ] **Step 3: Commit**
 
@@ -1193,10 +1411,26 @@ record("d6.deadpaths", "D6", "doc references to non-existent paths",
 
 models = []
 for f in (REPO / ".claude").rglob("*.md"):
+    if "worktrees" in f.parts:   # PRE-FLIGHT FIX: 1,150 of 1,159 md files under
+        continue                 # .claude are duplicate worktree checkouts
     for m in re.findall(r"claude-[a-z0-9\-\.\[\]]+|[Oo]pus[- ][\d.]+", f.read_text(encoding="utf-8", errors="replace")):
         models.append(f"{f.relative_to(REPO)}:{m}")
-record("d6.modelids", "D6", "model ids hardcoded in .claude prose",
+record("d6.modelids", "D6", "model ids hardcoded in primary .claude prose (worktrees excluded)",
        len(models), "mentions", CMD, S, notes=";".join(sorted(set(models))[:10]))
+
+# canonical-authority claimants (spec: count files claiming to be THE instruction file)
+auth = []
+for f in [REPO / "CLAUDE.md"] + list((REPO / "docs/AI_interaction").glob("*.md")):
+    if f.exists() and re.search(r"canonical|authoritative|single source of truth",
+                                f.read_text(encoding="utf-8", errors="replace"), re.I):
+        auth.append(str(f.relative_to(REPO)))
+record("d6.authority.claimants", "D6", "instruction files claiming canonical authority",
+       len(auth), "files", CMD, S, ";".join(auth),
+       notes="only CLAUDE.md is actually loaded by the harness")
+record("d6.dup_pair_agreement", "D6", "line-level agreement diff of duplicated doc pairs",
+       "not-measured", "n/a", CMD, S,
+       notes="recon measured overlap %s and the one known divergence (GOTCHAS session-id "
+             "row); full pairwise diff deferred - the new repo deletes the copies (ADR-005)")
 print("done")
 ```
 
@@ -1342,8 +1576,12 @@ git commit -m "feat(audit): sibling-repo duplication + stale results-doc survey 
 
 ```bash
 py -m venv data/cache/audit/nwbvenv
-data/cache/audit/nwbvenv/Scripts/python -m pip install -q pynwb neuroconv "numpy<3" pandas
+data/cache/audit/nwbvenv/Scripts/python -m pip install -q pynwb "numpy<3" pandas scipy
 data/cache/audit/nwbvenv/Scripts/python -c "import pynwb; print(pynwb.__version__)"
+```
+(Pre-flight fix: `scipy` is required because `import visdetect` executes `core/io.py`'s
+module-level `import scipy.io`; `neuroconv` is dropped — the spike uses pynwb directly and the
+1-day box should not pay for an unused install.)
 ```
 
 - [ ] **Step 2: Write the conversion script.** Minimal direct pynwb (not full NeuroConv
@@ -1367,11 +1605,14 @@ from visdetect.core.session import load_session as load_pkl
 
 from pynwb import NWBFile, NWBHDF5IO
 from pynwb.file import Subject
+from hdmf.backends.hdf5.h5_utils import H5DataIO
 
-TARGETS = [  # (subject, pkl path picked at run time by glob)
+# PRE-FLIGHT FIX (blocker): all pkls are subject-prefixed (BG_046_01092025.pkl);
+# bare-date paths do not exist. Resolve every target by glob.
+TARGETS = [
     ("BG_049", sorted((REPO / "data/pkls/BG_049").glob("*.pkl"))[0]),
-    ("BG_046", REPO / "data/pkls/BG_046/01092025.pkl"),
-    ("BG_012", next((REPO / "data/pkls/BG_012").glob("*_b.pkl"),
+    ("BG_046", next((REPO / "data/pkls/BG_046").glob("*01092025.pkl"))),
+    ("BG_012", next(iter(sorted((REPO / "data/pkls/BG_012").glob("*_b.pkl"))),
                     sorted((REPO / "data/pkls/BG_012").glob("*.pkl"))[0])),
 ]
 CMD = "nwbvenv python scripts/audit/d9_nwb_spike.py"; S = "d9_nwb_spike.py"
@@ -1386,56 +1627,77 @@ for subj, pkl in TARGETS:
                   session_id=pkl.stem, subject=Subject(subject_id=subj, species="Mus musculus"))
     nwb.add_trial_column("change_size", "TF change ratio")
     nwb.add_trial_column("outcome", "behavioural label")
+    trial_meta = []
     for i, t in enumerate(sess.trials):
-        ct = getattr(t, "change_time", None) or 0.0
+        cs = float(getattr(t, "change_size", 0) or 0)
+        oc = str(getattr(t, "trialoutcome", getattr(t, "outcome", "")))
+        trial_meta.append((cs, oc))
         nwb.add_trial(start_time=float(i), stop_time=float(i) + 1.0,
-                      change_size=float(getattr(t, "change_size", 0) or 0),
-                      outcome=str(getattr(t, "outcome", getattr(t, "trialoutcome", ""))))
+                      change_size=cs, outcome=oc)
     for c in sess.clusters:
-        nwb.add_unit(spike_times=np.asarray(c.spike_times, float))
+        # PRE-FLIGHT FIX: the spec asks for COMPRESSED size — gzip via H5DataIO
+        nwb.add_unit(spike_times=H5DataIO(np.asarray(c.spike_times, float),
+                                          compression="gzip"))
     out = REPO / "data/cache/audit" / f"{subj}_{pkl.stem}.nwb"
     with NWBHDF5IO(str(out), "w") as io:
         io.write(nwb)
     write_s = time.perf_counter() - t0 - load_pkl_s
 
-    # read patterns
+    # read patterns — all three the spec names
     t0 = time.perf_counter()
     with NWBHDF5IO(str(out), "r") as io:
         f = io.read()
-        _trials = f.trials.to_dataframe()          # pattern: trials table alone
+        _trials = f.trials.to_dataframe()          # pattern 1: trials table alone
     read_trials_s = time.perf_counter() - t0
     t0 = time.perf_counter()
     with NWBHDF5IO(str(out), "r") as io:
         f = io.read()
-        _one_unit = f.units["spike_times"][0]      # pattern: one unit's spikes
+        _one_unit = f.units["spike_times"][0]      # pattern 2: one unit's spikes
     read_unit_s = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    with NWBHDF5IO(str(out), "r") as io:           # pattern 3: all units, one window
+        f = io.read()
+        n_units = len(f.units)
+        _win = [np.asarray(f.units["spike_times"][i]) for i in range(n_units)]
+        _win = [w[(w >= 100.0) & (w < 160.0)] for w in _win]
+    read_window_s = time.perf_counter() - t0
 
-    # round-trip equality on spike times of unit 0
+    # round-trip equality: spike times (unit 0) AND trials columns
     orig = np.asarray(sess.clusters[0].spike_times, float)
-    ok = bool(np.array_equal(orig, np.asarray(_one_unit, float)))
+    ok_spk = bool(np.array_equal(orig, np.asarray(_one_unit, float)))
+    ok_tr = bool(
+        np.allclose(_trials["change_size"].to_numpy(),
+                    np.array([m[0] for m in trial_meta])) and
+        list(_trials["outcome"]) == [m[1] for m in trial_meta])
 
     ratio = out.stat().st_size / pkl.stat().st_size
-    record(f"d9.size_ratio.{subj}", "D9", f"NWB/pkl size ratio ({pkl.stem})",
+    record(f"d9.size_ratio.{subj}", "D9", f"gzip-NWB/pkl size ratio ({pkl.stem})",
            round(ratio, 2), "ratio", CMD, S, str(out.relative_to(REPO)))
     record(f"d9.readtimes.{subj}", "D9",
-           "load_pkl / write_nwb / read_trials / read_one_unit",
-           f"{load_pkl_s:.1f}/{write_s:.1f}/{read_trials_s:.2f}/{read_unit_s:.2f}",
+           "load_pkl / write_nwb / read_trials / read_one_unit / read_window_all_units",
+           f"{load_pkl_s:.1f}/{write_s:.1f}/{read_trials_s:.2f}/{read_unit_s:.2f}/{read_window_s:.2f}",
            "s", CMD, S,
-           notes="pkl load is ALL-OR-NOTHING; NWB unit read is lazy - compare col 1 vs col 4")
-    record(f"d9.roundtrip.{subj}", "D9", "spike-time round-trip exact equality",
-           ok, "bool", CMD, S)
+           notes="pkl load is ALL-OR-NOTHING; NWB reads are lazy per column/unit")
+    record(f"d9.roundtrip.{subj}", "D9", "round-trip equality: spikes(unit0)/trials-columns",
+           f"{ok_spk}/{ok_tr}", "bool", CMD, S)
     del sess; gc.collect()
+
+record("d9.keep_all_good", "D9",
+       "can all KS-good units be re-ingested without re-reading raw .ap.bin",
+       "not-measured", "n/a", CMD, S, "src/visdetect/core/ingest.py",
+       notes="requires a session's Kilosort output tree (spike_clusters.npy), which "
+             "lives on the X: mount - forbidden to the audit. Settle at sub-project 1 "
+             "with one pre-authorized lightweight X: read, per ADR-018's re-ingest plan")
 print("done")
 ```
 
 - [ ] **Step 3: Run with the scratch venv**
 
 Run: `data/cache/audit/nwbvenv/Scripts/python scripts/audit/d9_nwb_spike.py`
-Expected: three size ratios (< 1.0 anticipated — pkls are uncompressed), lazy unit-read ≪ pkl
-full-load, `roundtrip=True` for all three. Any failure is a *finding*, recorded, not fixed.
-Also record `d9.keep_all_good` (`grep -n "keep_all_good" src/visdetect/core/ingest.py` + whether
-Kilosort outputs for one session contain spike times for non-good clusters — check
-`spike_clusters.npy` unique count vs pkl cluster count; one `record` line). **Stop at the
+Expected: three gzip size ratios (< 1.0 anticipated), lazy reads ≪ pkl full-load,
+`roundtrip=True/True` for all three targets. Any failure is a *finding*, recorded, not fixed.
+`d9.keep_all_good` is recorded in-script as `not-measured` (the Kilosort trees live on the
+forbidden X: mount; settled at sub-project 1 with one pre-authorized read). **Stop at the
 time-box** regardless of completeness; write `09-storage-spike.md` with the numbers and the
 frame-log open question, and delete the `.nwb` scratch outputs after recording sizes.
 
