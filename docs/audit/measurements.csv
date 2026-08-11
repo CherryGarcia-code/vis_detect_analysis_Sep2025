@@ -1,0 +1,3 @@
+measurement_id,domain,metric,value,unit,command,script,evidence,notes
+d5.guardrail.after,D5,real HARD violations after .claude excluded,220,count,py scripts/audit/d5_guardrail_count.py,d5_guardrail_count.py,scripts/qc/check_refactor_guardrails.py,recon predicted ~218
+d5.guardrail.before,D5,HARD violations before fix,1590,count,see data/cache/audit/guardrails_before.txt,manual,scripts/qc/check_refactor_guardrails.py:35,
