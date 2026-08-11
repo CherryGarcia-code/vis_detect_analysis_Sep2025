@@ -48,6 +48,34 @@ normal repo evolution; several multi-file names (e.g. `CACHE`, `OUT_DIR`, `SUBJE
 definition sites inside the audit-era untracked scripts under `scripts/` — such deltas are
 the audit's own footprint, not drift.
 
+**CAVEAT — known bucket mislabels (Task 15 MUST read this).** The `"OUT" in name`
+substring rule mislabels scientifically loaded names as `path-alias`, and Task 15 must
+treat the following as **candidate divergent scientific parameters** when building the
+register, even though the CSV buckets them `path-alias`:
+
+- `OUTCOMES` — 8 disagreeing sites (`retypes_agree = False`); these are lists of which
+  trial outcomes an analysis includes, not paths. `defined_in`:
+  `scripts\tf_responsiveness\state_conditioned\continuum_common.py:21`;
+  `scripts\tf_responsiveness\state_conditioned\diseng_sensitivity.py:60`;
+  `scripts\tf_responsiveness\state_conditioned\learning_transient_sustained.py:38`;
+  `scripts\tf_responsiveness\state_conditioned\null_controls_continuum.py:35`;
+  `scripts\tf_responsiveness\state_conditioned\robustness_width_coupling.py:28`;
+  `scripts\tf_responsiveness\state_conditioned\spectrum_vs_classes.py:38`.
+- `OUTCOME_COLORS` — 3 disagreeing sites (`retypes_agree = False`); the config palette vs
+  local overrides. `defined_in`: `scripts\state_labeling\population_state_sensory.py:64`;
+  `scripts\video\sync_validation_figure.py:60`; `src\visdetect\analysis\config.py:220`.
+- `N_TRIALS_PER_OUTCOME` — 2 sites, values currently agree (`retypes_agree = True`), but
+  it is an analysis parameter, not a path; it belongs with the scientific names, not the
+  path scaffolds. `defined_in`: `scripts\video\batch_sync_sessions.py:54`;
+  `scripts\video\sync_validation_figure.py:43`.
+
+Conversely, the `divergent-parameter` bucket (98, `d1.constants.divergent_params`) is
+inflated by pure path/scaffold aliases that carry no keyword the heuristic recognizes —
+e.g. `_HERE` (41 sites), `CACHE` (26), `_REPO` (18) are script-directory/cache-path
+scaffolds sitting in bucket (a). So `d1.constants.divergent_params = 98` both omits real
+scientific parameters and includes scaffolds; Task 15 should re-triage bucket membership
+name-by-name from the CSV rather than consuming the bucket labels as ground truth.
+
 ### Mandatory spot-check: `CHANGE_SIZES`
 
 PASS — `CHANGE_SIZES` is **not** in constants.py-canon. The census classifies it
@@ -80,7 +108,9 @@ sites (`n_retype_sites`). Sites are quoted from the census CSV's `defined_in` co
 The top of this ranking is dominated by per-script path/scaffold aliases (`OUT`, `_HERE`,
 `REPO_ROOT`, `CACHE`, `OUT_DIR`, `_ROOT`, `CACHE_DIR`, `_REPO`) — many definition sites,
 low scientific risk. The scientifically loaded disagreements (e.g. `CHANGE_SIZES`,
-`STATES`, `SUBJECT`) carry fewer sites but feed Task 15's defect register directly.
+`STATES`, `SUBJECT`, and the mislabeled path-alias rows `OUTCOMES` / `OUTCOME_COLORS` /
+`N_TRIALS_PER_OUTCOME` named in the caveat above) carry fewer sites but feed Task 15's
+defect register directly.
 
 ## Executed measurements
 
