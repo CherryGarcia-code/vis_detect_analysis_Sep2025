@@ -1,0 +1,5 @@
+file,line,match,source_line
+src\visdetect\analysis\config.py,78,parents[3],ROOT = str(Path(__file__).resolve().parents[3])
+src\visdetect\analysis\state_tf_learning.py,24,parents[3],_REPO = Path(__file__).resolve().parents[3]
+src\visdetect\analysis\tf_labeling.py,25,parents[3],ROOT = str(Path(__file__).resolve().parents[3])
+src\visdetect\core\qc.py,218,parents[1],"else Path(__file__).resolve().parents[1] / ""config"" / ""qc_profiles.yml"""

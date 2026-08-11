@@ -1,0 +1,24 @@
+Processing .\.
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'error'
+  error: subprocess-exited-with-error
+  
+  Getting requirements to build wheel did not run successfully.
+  exit code: 1
+  
+  [6 lines of output]
+  running egg_info
+  writing src\visdetect.egg-info\PKG-INFO
+  writing dependency_links to src\visdetect.egg-info\dependency_links.txt
+  writing requirements to src\visdetect.egg-info\requires.txt
+  writing top-level names to src\visdetect.egg-info\top_level.txt
+  error: package directory 'src\scripts' does not exist
+  [end of output]
+  
+  note: This error originates from a subprocess, and is likely not a problem with pip.
+
+[notice] A new release of pip is available: 26.0.1 -> 26.2.1
+[notice] To update, run: python.exe -m pip install --upgrade pip
+ERROR: Failed to build 'file:///E:/python_analysis/git_repos/vis_detect_analysis_Sep2025' when getting requirements to build wheel
