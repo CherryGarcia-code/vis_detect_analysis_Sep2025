@@ -37,8 +37,20 @@ handful of sessions, locally.
 - **Budget (ADR-020):** ~5 working days for Tasks 1–13 + 15–16; D9 (Task 14) is hard time-boxed to
   1 day. If the budget is blown, remaining measurements are recorded as `not-measured` rows rather
   than silently skipped.
-- **Subagents:** every dispatched subagent runs on the newest Opus (`model: 'opus'` explicit).
+- **Subagents:** every dispatched subagent runs on the newest top-tier model (currently
+  **claude-fable-5**, enforced by `CLAUDE_CODE_SUBAGENT_MODEL` — verify the first dispatch's
+  transcript shows it).
+- **`data/cache/audit/` is GITIGNORED** (`.gitignore:48 data/cache/*`). Every commit step that
+  stages a path under it MUST use `git add -f` for that path, and any file YOUR task created
+  under it must be `-f`-added even if the task's listed command omits it. Never commit the
+  scratch venvs (`nwbvenv/`, `cleanvenv/`), wheels, `.nwb` files, or `*.err` files.
+- **Baselines vs the audit's own footprint:** the audit harness itself contains `sys.path.insert`
+  sites and lives under `scripts/`; when a measured count exceeds a recon baseline by a few,
+  attribute the delta to the audit's own files explicitly in the report — never report it as
+  drift.
 - All file writes UTF-8, LF; `measurements.csv` written via the recorder only.
+- **Parsing git output:** always `.splitlines()` on `git grep -l` / `git ls-files` output
+  (tracked paths under `scripts/` contain spaces); pass figure stems to `git grep` with `-F`.
 
 **measurements.csv schema (fixed):**
 `measurement_id,domain,metric,value,unit,command,script,evidence,notes` — `measurement_id` unique
@@ -227,8 +239,14 @@ print("HARD after fix:", n)
 ```
 
 Run: `py scripts/audit/d5_guardrail_count.py`
-Expected: a number near 218 (recon prediction). Manually record the before count too:
-`py -c "import sys; sys.path.insert(0,'scripts'); from audit._audit_lib import record; record('d5.guardrail.before','D5','HARD violations before fix',1375,'count','see data/cache/audit/guardrails_before.txt','manual','scripts/qc/check_refactor_guardrails.py:35')"`
+Expected: a number near 218 (recon prediction). Record the before count **parsed from the
+Step-1 capture, not the recon estimate** (round-2 fix — the working tree has changed since the
+recon, so 1,375 is an expectation, never the value to record):
+
+```bash
+BEFORE=$(grep -oE "HARD violations \(([0-9]+)\)" data/cache/audit/guardrails_before.txt | grep -oE "[0-9]+")
+py -c "import sys; sys.path.insert(0,'scripts'); from audit._audit_lib import record; record('d5.guardrail.before','D5','HARD violations before fix',$BEFORE,'count','see data/cache/audit/guardrails_before.txt','manual','scripts/qc/check_refactor_guardrails.py:35')"
+```
 
 - [ ] **Step 4: Commit (fix and measurement in separate commits)**
 
@@ -745,21 +763,21 @@ print("done")
 ```bash
 cd /e/python_analysis/git_repos/vis_detect_analysis_Sep2025
 py -m pip wheel . --no-deps -w data/cache/audit/wheel 2>&1 | tail -2
-py -m venv data/cache/audit/cleanvenv
-# PRE-FLIGHT FIX: --no-deps (10 install_requires would hit the network and a pip
-# failure would fake the finding), then a POSITIVE CONTROL before the probe:
-data/cache/audit/cleanvenv/Scripts/python -m pip install --no-deps data/cache/audit/wheel/*.whl -q
-data/cache/audit/cleanvenv/Scripts/python -c "import visdetect" ; echo "control-exit=$?"
-for m in core analysis suite anatomy utils viz integrations; do
-  data/cache/audit/cleanvenv/Scripts/python -c "import importlib; importlib.import_module('visdetect.$m')" 2> data/cache/audit/imp_$m.err
-  echo "$m-exit=$? :: $(head -1 data/cache/audit/imp_$m.err | tail -c 100)"
-done
+# ROUND-2 FIX (blocker): an import probe in a --no-deps venv can NEVER produce
+# the decisive error — visdetect/__init__ imports numpy first, so every module
+# fails identically on numpy before submodule lookup. The decisive, offline,
+# venv-free check is the WHEEL CONTENT itself:
+py -m zipfile -l data/cache/audit/wheel/visdetect-0.0.0-py3-none-any.whl > data/cache/audit/wheel_contents.txt
+grep -c "visdetect/core/" data/cache/audit/wheel_contents.txt            # control: MUST be > 0
+grep -E "visdetect/(viz|integrations)/" data/cache/audit/wheel_contents.txt ; echo "pkg-in-wheel-exit=$?"
+rm -rf build src/visdetect.egg-info    # audit residue from the wheel build
 ```
-Expected: `control-exit=0` is NOT required (deps absent under --no-deps). The decisive signal
-is the ERROR MESSAGE class per module: `viz`/`integrations` must fail with
-**`No module named 'visdetect.viz'`** (the package is absent from the wheel — the defect),
-while other modules fail, if at all, naming a *third-party* dep (`numpy`/`scipy` — mere
---no-deps absence, not the defect). Record `d2.packaging.viz_missing` and `d2.packaging.integrations_missing` with both exit
+Expected: the control grep finds core files; the viz/integrations grep prints nothing and
+exits **1** — the packages are absent from the wheel (`find_packages` drops them for lack of
+`__init__.py`), which IS the defect. Record `d2.packaging.viz_missing` with both grep results
+(evidence: `wheel_contents.txt`; note "50 importers break on any non-editable install"). The
+`rm -rf build src/visdetect.egg-info` removes audit-created residue so it cannot pollute Task
+12's untracked-file disposition table. Record `d2.packaging.viz_missing` and `d2.packaging.integrations_missing` with both exit
 codes and the error class in notes ("50 importers break on any non-editable install"). Also
 record two explicit rows: `d2.sideeffects.import = not-measured` (module-level `matplotlib.use`
 ×4 + `makedirs` at suite/config.py:19 — recon-evidenced, full enumeration deferred) and add a
@@ -893,26 +911,69 @@ record("d3.vdtf.writers", "D3", "scripts writing into the deleted vd_tf_bg046 tr
 
 # (5) PRE-FLIGHT ADDITION: per-script classification census (spec: classify the
 # ~130 scripts writing neither figure nor CSV; entry-point convention)
-cls_rows = []
+import ast as _ast
+srcs = {}
 for p in (REPO / "scripts").rglob("*.py"):
     if "__pycache__" in p.parts or "audit" in p.parts:
         continue
-    src2 = p.read_text(encoding="utf-8", errors="replace")
-    cls_rows.append([str(p.relative_to(REPO)),
+    srcs[str(p.relative_to(REPO))] = p.read_text(encoding="utf-8", errors="replace")
+
+# ROUND-2 ADDITION: intra-scripts import edges -> in-degree (spec's import DAG).
+# Scripts import siblings by bare module name after sys.path tricks, so an
+# import of a name matching another script's stem is an edge.
+by_stem = {}
+for rel in srcs:
+    by_stem.setdefault(Path(rel).stem, set()).add(rel)
+imported_by_someone = set()
+for rel, src2 in srcs.items():
+    try:
+        tree = _ast.parse(src2)
+    except SyntaxError:
+        continue
+    for node in _ast.walk(tree):
+        mods = []
+        if isinstance(node, _ast.Import):
+            mods = [a.name.split(".")[0] for a in node.names]
+        elif isinstance(node, _ast.ImportFrom) and node.module:
+            mods = [node.module.split(".")[0]]
+        for m in mods:
+            for target in by_stem.get(m, ()):
+                if target != rel:
+                    imported_by_someone.add(target)
+
+cls_rows = []
+for rel, src2 in sorted(srcs.items()):
+    cls_rows.append([rel,
                      bool(re.search(r'__name__\s*==\s*["\']__main__', src2)),
                      "argparse" in src2,
                      bool(re.search(r"savefig|save_figure", src2)),
-                     ".to_csv(" in src2 or "np.save" in src2 or "json.dump" in src2])
+                     ".to_csv(" in src2 or "np.save" in src2 or "json.dump" in src2,
+                     rel not in imported_by_someone])
 with (REPO / "data/cache/audit/script_classification.csv").open("w", newline="",
                                                                 encoding="utf-8") as fh:
     w3 = csv.writer(fh, lineterminator="\n")
-    w3.writerow(["file", "has_main", "has_argparse", "writes_figure", "writes_data"])
+    w3.writerow(["file", "has_main", "has_argparse", "writes_figure", "writes_data",
+                 "in_degree_0"])
     w3.writerows(cls_rows)
 no_output = sum(1 for r in cls_rows if not r[3] and not r[4])
+orphan_nonentry = sum(1 for r in cls_rows if r[5] and not r[1] and not r[2])
 record("d3.scripts.no_output", "D3",
        "scripts writing neither figure nor data artefact (shared-module / job-body / dead)",
        no_output, "files", CMD, S, "data/cache/audit/script_classification.csv",
        notes="Task 15 triages this CSV into shared-module vs dead for the drop-list")
+record("d3.scripts.orphan_nonentry", "D3",
+       "in-degree-0 scripts that are ALSO not entry points (no __main__, no argparse)",
+       orphan_nonentry, "files", CMD, S, "data/cache/audit/script_classification.csv")
+
+# shim importer count (Task 15's drop-list evidence for the dead top-level shims)
+shim = subprocess.run(["git", "grep", "-nE",
+                       r"from visdetect import (session|io)\b|from visdetect\.(session|io) import",
+                       "--", "scripts/", "src/", "tests/"],
+                      capture_output=True, text=True, cwd=REPO).stdout.splitlines()
+record("d3.shim_importers", "D3",
+       "importers of the top-level shims src/visdetect/{session,io}.py",
+       len(shim), "sites", CMD, S,
+       notes="0 expected - the evidence behind the drop-list entry")
 
 # (6) lick-channel overlap: the 33-session re-extraction batch list is not
 # materialized anywhere in the repo, and deriving it needs NI-file inspection on
@@ -959,13 +1020,14 @@ git commit -m "feat(audit): D3 scripts census - date trio, zfill dtypes, partial
 """D4a: extend the session-id integrity check to FIGURES/ and table_output/,
 classify the key domain of every CSV carrying a session-id column, and
 QUANTIFY rows lost when joined to the staging manifest."""
-import csv, sys
+import csv, re, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from audit._audit_lib import REPO, record, classify_token, canonical
 
 CMD = "py scripts/audit/d4_session_id_integrity.py"; S = "d4_session_id_integrity.py"
-ID_COLS = {"session_name", "session", "session_id", "sess", "sid", "session_key", "k"}
+# 'k' removed (round-2 fix): k-means hyperparameter columns would be misread as ids
+ID_COLS = {"session_name", "session", "session_id", "sess", "sid", "session_key"}
 ROOTS = ["data", "FIGURES", "table_output"]
 SKIP = {"audit", "__pycache__"}
 
@@ -985,25 +1047,38 @@ for root in ROOTS:
         col = next((c for c in head.columns if c.lower() in ID_COLS), None)
         if col is None:
             continue
-        df = pd.read_csv(f, usecols=[col], dtype=str)
+        subj_col = next((c for c in head.columns if c.lower() == "subject"), None)
+        try:   # round-2 fix: full read guarded too — one ragged/non-UTF8 legacy
+            usecols = [col] + ([subj_col] if subj_col else [])   # CSV must not kill the scan
+            df = pd.read_csv(f, usecols=usecols, dtype=str)
+        except Exception:
+            out_rows.append([str(f.relative_to(REPO)), -1, "READ-ERROR", False, 0])
+            continue
         toks = df[col].dropna()
         domains = toks.map(classify_token).value_counts().to_dict()
         n_bad = sum(v for k, v in domains.items()
                     if k in ("7digit-stripped", "float-string", "00-padded"))
-        # join-loss vs the BG_046 manifest — PRE-FLIGHT FIX: only for files that
-        # are actually BG_046-scoped (joining BG_031 caches to the BG_046
-        # manifest is not a join the codebase performs and fakes total loss).
-        # Subject prefixes are stripped before canonicalisation.
-        name_l = f.name.lower()
-        other_subject = any(s in name_l for s in
-                            ("bg_012", "bg_031", "bg_038", "bg_039", "bg_040",
-                             "bg_041", "bg_049"))
-        stripped = toks.map(lambda x: re.sub(r"^BG_\d{3}_", "", str(x)))
-        canon_toks = stripped.map(lambda x: canonical(x))
-        if other_subject:
-            lost = -1
+        # join-loss vs the BG_046 manifest — only for rows that are actually
+        # BG_046-scoped. Round-2 fix: multi-subject caches carry the subject in
+        # a COLUMN (session_group_features.csv, popgeom_theta deliverables), not
+        # the filename — join only subject==BG_046 rows where a column exists;
+        # fall back to the filename heuristic otherwise.
+        if subj_col is not None:
+            mask = df[subj_col] == "BG_046"
+            scoped = df.loc[mask, col].dropna()
+            lost = (-1 if scoped.empty else int(
+                (~scoped.map(lambda x: canonical(re.sub(r"^BG_\d{3}_", "", str(x))))
+                 .isin(manifest_keys)).sum()))
         else:
-            lost = int((~canon_toks.isin(manifest_keys)).sum())
+            name_l = f.name.lower()
+            other_subject = any(s in name_l for s in
+                                ("bg_012", "bg_031", "bg_038", "bg_039",
+                                 "bg_040", "bg_041", "bg_049"))
+            if other_subject:
+                lost = -1
+            else:
+                lost = int((~toks.map(lambda x: canonical(
+                    re.sub(r"^BG_\d{3}_", "", str(x)))).isin(manifest_keys)).sum())
         out_rows.append([str(f.relative_to(REPO)), len(toks), str(domains),
                          lost >= 0, max(lost, 0)])
         if n_bad:
@@ -1066,14 +1141,18 @@ from audit._audit_lib import REPO, record
 
 CMD = "py scripts/audit/d4_staleness.py"; S = "d4_staleness.py"
 
-# (1) staleness: cache mtime vs last commit touching the writer that names it
-writers = {}   # topic -> newest commit date of any script mentioning data/cache/<topic>
+# (1) staleness: cache mtime vs last commit touching the writer that names it.
+# ROUND-2 FIXES: --untracked (two topics' writers are untracked scripts);
+# splitlines (tracked paths contain spaces); tri-state — 7 of 23 topics have NO
+# literal path reference in code, and 'no writer found' must never read as
+# 'not stale'.
+writers = {}   # topic -> (newest_commit, newest_artefact, n_files, verdict)
 for topic_dir in sorted((REPO / "data/cache").iterdir()):
     if not topic_dir.is_dir() or topic_dir.name == "audit":
         continue
-    hits = subprocess.run(["git", "grep", "-l", f"data/cache/{topic_dir.name}",
-                           "--", "scripts/", "src/"],
-                          capture_output=True, text=True, cwd=REPO).stdout.split()
+    hits = subprocess.run(["git", "grep", "--untracked", "-l",
+                           f"data/cache/{topic_dir.name}", "--", "scripts/", "src/"],
+                          capture_output=True, text=True, cwd=REPO).stdout.splitlines()
     newest = ""
     for h in hits:
         d = subprocess.run(["git", "log", "-1", "--format=%cs", "--", h],
@@ -1084,16 +1163,21 @@ for topic_dir in sorted((REPO / "data/cache").iterdir()):
         continue
     newest_artefact = max(datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc)
                           for p in files).date().isoformat()
-    writers[topic_dir.name] = (newest, newest_artefact, len(files),
-                               newest_artefact < newest)  # artefact older than code
+    verdict = ("no-writer-found" if not newest
+               else "stale" if newest_artefact < newest else "current")
+    writers[topic_dir.name] = (newest, newest_artefact, len(files), verdict)
 rows = sorted(((t, *v) for t, v in writers.items()), key=lambda r: r[4], reverse=True)
 with (REPO / "data/cache/audit/stale_caches.csv").open("w", newline="", encoding="utf-8") as fh:
     w = csv.writer(fh, lineterminator="\n")
-    w.writerow(["topic", "newest_writer_commit", "newest_artefact_mtime", "n_files", "stale"])
+    w.writerow(["topic", "newest_writer_commit", "newest_artefact_mtime", "n_files", "verdict"])
     w.writerows(rows)
-record("d4.stale.topics", "D4", "cache topics whose newest artefact predates its writer's last commit",
-       sum(1 for r in rows if r[4]), "topics", CMD, S, "data/cache/audit/stale_caches.csv",
-       notes="mtime heuristic; known-stale tf_responsive must appear here or the metric is wrong")
+n_stale = sum(1 for r in rows if r[4] == "stale")
+n_unknown = sum(1 for r in rows if r[4] == "no-writer-found")
+record("d4.stale.topics", "D4",
+       "cache topics stale / writer-untraceable (excluded from denominator)",
+       f"{n_stale}/{n_unknown}", "topics", CMD, S, "data/cache/audit/stale_caches.csv",
+       notes="mtime heuristic over measurable topics only; known-stale tf_responsive "
+             "must appear as stale or the metric is wrong")
 
 # (2) SESSION_FILTER divergence
 from visdetect.analysis.config import load_staging_manifest
@@ -1132,7 +1216,15 @@ winners = []
 for subj, keys in coll.items():
     for k, files in keys.items():
         plain = [f for f in files if _re.fullmatch(rf"{subj}_{k}\.pkl", f)]
-        winners.append(f"{subj}/{k}->" + (plain[0] if plain else "AMBIGUOUS(None)"))
+        if plain:
+            verdict = plain[0]
+        else:
+            # round-2 fix: replicate the resolver's unique-suffix fallback
+            # (loader.py:129-135) rather than declaring all no-plain sets ambiguous
+            suffixed = [f for f in files
+                        if not f[:-4].rsplit("_", 1)[-1].isdigit()]
+            verdict = suffixed[0] if len(suffixed) == 1 else "AMBIGUOUS(None)"
+        winners.append(f"{subj}/{k}->{verdict}")
 record("d4.twins.winners", "D4",
        "which twin the resolver serves per colliding key (deterministic by code path)",
        " | ".join(winners[:12]) + (f" (+{len(winners)-12} more)" if len(winners) > 12 else ""),
@@ -1146,7 +1238,8 @@ import pandas as _pd
 chron = _pd.read_csv(psg, dtype=str)["chron"]
 bad = chron[chron.str.contains(r"\(\s*\d{1,4},\s*(1[3-9]|[2-9]\d),", regex=True, na=False)]
 record("d4.stale.chron_impossible", "D4",
-       "predicted_session_groups.csv chron tuples with month>12 (impossible dates)",
+       "predicted_session_groups.csv chron tuples with month>12 (LOWER BOUND: "
+       "same-parse rows with mis-placed day <=12 are not countable by pattern)",
        len(bad), "rows", CMD, S, str(psg.relative_to(REPO)),
        notes="frozen output of the pre-fix parser; proves the staleness class "
              "beyond the mtime heuristic. Per-script SESSION_FILTER diffs are an "
@@ -1209,8 +1302,8 @@ for topic in sorted(p for p in (REPO / "FIGURES").iterdir() if p.is_dir()):
     for fig in sorted(sample):
         stem = fig.stem
         method, producer = "untraceable", ""
-        hits = subprocess.run(["git", "grep", "-l", stem, "--", "scripts/", "src/"],
-                              capture_output=True, text=True, cwd=REPO).stdout.split()
+        hits = subprocess.run(["git", "grep", "-lF", stem, "--", "scripts/", "src/"],
+                              capture_output=True, text=True, cwd=REPO).stdout.splitlines()
         if hits:
             method, producer = "stem-in-source", hits[0]
         else:
@@ -1220,8 +1313,8 @@ for topic in sorted(p for p in (REPO / "FIGURES").iterdir() if p.is_dir()):
                 method, producer = "sidecar", str(sidecars[0].relative_to(REPO))
             else:
                 thits = subprocess.run(
-                    ["git", "grep", "-l", f"FIGURES/{topic.name}", "--", "scripts/"],
-                    capture_output=True, text=True, cwd=REPO).stdout.split()
+                    ["git", "grep", "-lF", f"FIGURES/{topic.name}", "--", "scripts/"],
+                    capture_output=True, text=True, cwd=REPO).stdout.splitlines()
                 if len(thits) == 1:
                     method, producer = "unique-topic-writer", thits[0]
         rows.append([str(fig.relative_to(REPO)), topic.name, method, producer])
@@ -1284,8 +1377,20 @@ rows, covered = [], set()
 tests = [p for p in (REPO / "tests").rglob("test_*.py") if "audit" not in p.parts]
 for t in tests:
     src = t.read_text(encoding="utf-8", errors="replace")
-    mods = set(re.findall(r"from (visdetect(?:\.\w+)*) import|import (visdetect(?:\.\w+)*)", src))
-    mods = {m for pair in mods for m in pair if m}
+    # ROUND-2 FIX: `from PKG import name` must credit PKG.name, not just PKG —
+    # the dominant test style is `from visdetect.analysis import decision_latents`
+    # (21 occurrences), which the old regex reduced to the bare package.
+    mods = set()
+    for pkg, names, plain in re.findall(
+            r"from (visdetect(?:\.\w+)*) import ([\w,\s]+)|import (visdetect(?:\.\w+)*)", src):
+        if plain:
+            mods.add(plain)
+        if pkg:
+            mods.add(pkg)
+            for n in names.split(","):
+                n = n.strip().split(" as ")[0].strip()
+                if n and n.isidentifier():
+                    mods.add(f"{pkg}.{n}")
     covered |= mods
     rows.append([str(t.relative_to(REPO)), bool(DATA_PAT.search(src)),
                  ";".join(sorted(mods))])
@@ -1295,9 +1400,10 @@ with (REPO / "data/cache/audit/test_partition.csv").open("w", newline="", encodi
 
 lib_modules = {"visdetect." + str(p.relative_to(REPO / "src/visdetect"))[:-3].replace("\\", ".")
                for p in (REPO / "src/visdetect").rglob("*.py") if p.stem != "__init__"}
-covered_stems = {m for c in covered for m in [c] } 
+# ROUND-2 FIX: exact-or-descendant ONLY. The old `m.startswith(c)` direction let a
+# single `from visdetect.analysis import X` line blanket all ~40 analysis modules.
 untested = sorted(m for m in lib_modules
-                  if not any(c == m or c.startswith(m) or m.startswith(c) for c in covered))
+                  if not any(c == m or c.startswith(m + ".") for c in covered))
 record("d5.tests.total", "D5", "test files", len(rows), "files", CMD, S)
 record("d5.tests.need_real_data", "D5", "test files requiring real sessions/caches",
        sum(1 for r in rows if r[1]), "files", CMD, S, "data/cache/audit/test_partition.csv")
@@ -1463,6 +1569,8 @@ git commit -m "feat(audit): D6 doc-vs-code literal resolver, dead paths, model i
 
 ```python
 # scripts/audit/d7_work_at_risk.py
+import os
+import stat as st
 import subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -1473,20 +1581,57 @@ CMD = "py scripts/audit/d7_work_at_risk.py"; S = "d7_work_at_risk.py"
 def sh(*a):
     return subprocess.run(a, capture_output=True, text=True, cwd=REPO).stdout
 
-# gitignored artefact volume per worktree + primary
+
+def _is_reparse(path):
+    # ROUND-2 FIX (blocker): NTFS junctions are NOT symlinks on Python 3.10 —
+    # is_symlink() misses them, and rglob happily descends THROUGH them.
+    # Live case: .claude/worktrees/qc1-alignment/data/pkls IS a junction into
+    # the primary ~30 GB pkl tree (the Jun-7 data-loss shape). Prune reparse
+    # points at EVERY level.
+    try:
+        return bool(os.lstat(path).st_file_attributes & st.FILE_ATTRIBUTE_REPARSE_POINT)
+    except OSError:
+        return True   # unreadable: treat as boundary, never descend
+
+
+def _sized(top):
+    if _is_reparse(top):
+        return 0, 0, [str(top)]
+    n, size, pruned = 0, 0, []
+    for root, dirs, fs in os.walk(top):
+        keep = []
+        for d in dirs:
+            fp = os.path.join(root, d)
+            if _is_reparse(fp):
+                pruned.append(fp)
+            else:
+                keep.append(d)
+        dirs[:] = keep
+        for fname in fs:
+            n += 1
+            try:
+                size += os.lstat(os.path.join(root, fname)).st_size
+            except OSError:
+                pass
+    return n, size, pruned
+
+
+# gitignored artefact volume per worktree + primary (junction-pruned)
 wt_root = REPO / ".claude" / "worktrees"
-lines = []
+lines, all_pruned = [], []
 for wt in ([REPO] + (sorted(wt_root.iterdir()) if wt_root.exists() else [])):
     for sub in ("data", "FIGURES"):
         p = wt / sub
-        if not p.exists() or p.is_symlink():
+        if not p.exists():
             continue
-        files = [x for x in p.rglob("*") if x.is_file()]
-        size = sum(x.stat().st_size for x in files)
-        lines.append(f"{wt.name}/{sub}: {len(files)} files, {size/1e9:.1f} GB")
-record("d7.gitignored.volume", "D7", "gitignored data/FIGURES volume per tree",
+        n, size, pruned = _sized(str(p))
+        all_pruned += pruned
+        lines.append(f"{wt.name}/{sub}: {n} files, {size/1e9:.1f} GB"
+                     + (f" [pruned {len(pruned)} junction(s)]" if pruned else ""))
+record("d7.gitignored.volume", "D7", "gitignored data/FIGURES volume per tree (junction-pruned)",
        " | ".join(lines), "inventory", CMD, S,
-       notes="no branch migration carries any of this")
+       notes="no branch migration carries any of this; junctions pruned: "
+             + ("; ".join(all_pruned) if all_pruned else "none"))
 
 # unmerged branches with unique commits
 branches = sh("git", "for-each-ref", "--format=%(refname:short)", "refs/heads").split()
@@ -1576,12 +1721,14 @@ git commit -m "feat(audit): sibling-repo duplication + stale results-doc survey 
 
 ```bash
 py -m venv data/cache/audit/nwbvenv
-data/cache/audit/nwbvenv/Scripts/python -m pip install -q pynwb "numpy<3" pandas scipy
+data/cache/audit/nwbvenv/Scripts/python -m pip install -q pynwb "numpy<3" pandas scipy matplotlib pyyaml
 data/cache/audit/nwbvenv/Scripts/python -c "import pynwb; print(pynwb.__version__)"
 ```
-(Pre-flight fix: `scipy` is required because `import visdetect` executes `core/io.py`'s
-module-level `import scipy.io`; `neuroconv` is dropped — the spike uses pynwb directly and the
-1-day box should not pay for an unused install.)
+
+(Round-2 fix: the full set is required because `import visdetect` executes the whole
+`core/__init__.py` chain — `core/io.py` needs `scipy.io`, and `core/__init__ → qc.py` imports
+`matplotlib`, `matplotlib.pyplot` and `yaml` at module level. `neuroconv` is dropped — the spike
+uses pynwb directly and the 1-day box should not pay for an unused install.)
 ```
 
 - [ ] **Step 2: Write the conversion script.** Minimal direct pynwb (not full NeuroConv
@@ -1610,7 +1757,8 @@ from hdmf.backends.hdf5.h5_utils import H5DataIO
 # PRE-FLIGHT FIX (blocker): all pkls are subject-prefixed (BG_046_01092025.pkl);
 # bare-date paths do not exist. Resolve every target by glob.
 TARGETS = [
-    ("BG_049", sorted((REPO / "data/pkls/BG_049").glob("*.pkl"))[0]),
+    ("BG_049", min((REPO / "data/pkls/BG_049").glob("*.pkl"),
+                   key=lambda p: p.stat().st_size)),   # smallest by size, per spec
     ("BG_046", next((REPO / "data/pkls/BG_046").glob("*01092025.pkl"))),
     ("BG_012", next(iter(sorted((REPO / "data/pkls/BG_012").glob("*_b.pkl"))),
                     sorted((REPO / "data/pkls/BG_012").glob("*.pkl"))[0])),
@@ -1635,13 +1783,23 @@ for subj, pkl in TARGETS:
         nwb.add_trial(start_time=float(i), stop_time=float(i) + 1.0,
                       change_size=cs, outcome=oc)
     for c in sess.clusters:
-        # PRE-FLIGHT FIX: the spec asks for COMPRESSED size — gzip via H5DataIO
-        nwb.add_unit(spike_times=H5DataIO(np.asarray(c.spike_times, float),
-                                          compression="gzip"))
+        nwb.add_unit(spike_times=np.asarray(c.spike_times, float))
+    # ROUND-2 FIX: per-row H5DataIO wrappers are consumed element-wise by hdmf
+    # and the compression silently drops. Set the DataIO on the CONCATENATED
+    # column, then VERIFY after write with h5py — a dropped compression becomes
+    # a detected finding, not a silent wrong number.
+    nwb.units.spike_times.set_data_io(H5DataIO, {"compression": "gzip"})
     out = REPO / "data/cache/audit" / f"{subj}_{pkl.stem}.nwb"
     with NWBHDF5IO(str(out), "w") as io:
         io.write(nwb)
     write_s = time.perf_counter() - t0 - load_pkl_s
+    import h5py
+    with h5py.File(out, "r") as h5:
+        observed_comp = h5["units/spike_times"].compression
+    record(f"d9.compression.{subj}", "D9", "observed HDF5 compression on units/spike_times",
+           str(observed_comp), "codec", CMD, S,
+           notes="must be gzip; None means set_data_io did not take and the size "
+                 "ratio row describes an UNCOMPRESSED file")
 
     # read patterns — all three the spec names
     t0 = time.perf_counter()
@@ -1735,17 +1893,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from audit._audit_lib import REPO, record
 
+# ROUND-2 FIX: patterns tightened. `session_name` alone matched 30/64 modules and
+# — worse — tagged the modules USING canonical_session_id (the mitigation) as
+# defect-affected. id-corruption now matches only the HAZARD shapes; canonicaliser
+# usage is recorded separately as a mitigation column. state-tags no longer fires
+# on the STATE_LABEL_COLORS palette constant.
 DEFECT_SYMBOLS = {
     "qc-profile-noop": r"load_qc_profile|qc_profiles",
     "tf-period-5x": r"TF_SAMPLE_PERIOD",
     "session-order": r"parse_session_date",
-    "id-corruption": r"session_name|canonical_session_id|zfill",
+    "id-corruption": r"\.zfill\(8\)|int\([^)]*session_name|session_name[^\n]*astype\(\s*int",
     "lick-channel": r"lick_times|Piezo|lick_channel",
     "stale-tf-registries": r"tf_responsive",
     "alignment-QC1": r"trial_event_index|Change_ON|align_spikes",
     "change-sizes-membership": r"CHANGE_SIZES",
     "ref-ambiguity": r"EVENT_VALID_OUTCOMES|CHANGE_PRESENTED",
-    "state-tags": r"state_tags|state_label",
+    "state-tags": r"data/cache/state_tags|state_label(?:er|ing)|state_rule",
 }
 rows = []
 for p in sorted((REPO / "src/visdetect").rglob("*.py")):
@@ -1753,11 +1916,13 @@ for p in sorted((REPO / "src/visdetect").rglob("*.py")):
         continue
     src = p.read_text(encoding="utf-8", errors="replace")
     hits = sorted(k for k, pat in DEFECT_SYMBOLS.items() if re.search(pat, src))
-    rows.append([str(p.relative_to(REPO / "src")), ";".join(hits) or "clean"])
+    uses_canon = bool(re.search(r"canonical_session_id|session_date_key", src))
+    rows.append([str(p.relative_to(REPO / "src")), ";".join(hits) or "clean",
+                 uses_canon])
 with (REPO / "data/cache/audit/module_register_map.csv").open("w", newline="",
                                                               encoding="utf-8") as fh:
     w = csv.writer(fh, lineterminator="\n")
-    w.writerow(["module", "register_entries"]); w.writerows(rows)
+    w.writerow(["module", "register_entries", "uses_canonicaliser"]); w.writerows(rows)
 record("d8.modules.classified", "D8", "library modules classified against the register",
        len(rows), "modules", "py scripts/audit/d8_module_classifier.py",
        "d8_module_classifier.py", "data/cache/audit/module_register_map.csv")
@@ -1767,8 +1932,19 @@ record("d8.modules.clean", "D8", "modules touching NO register entry",
 print("classified", len(rows))
 ```
 
-- [ ] **Step 2: Write `known-defect-register.md`** — the 12 master-design seeds + 5 ephys entries
-(ADR-018), each row: defect | direction of effect | affected modules (from the classifier CSV) |
+- [ ] **Step 2: Write `known-defect-register.md`** — the 12 master-design seeds (spec §D8 table)
+**plus these five ephys entries verbatim** (round-2 fix: their only prior home was the panel-raw
+JSON, a dead-end pointer for a fresh implementer):
+
+| Ephys defect | Direction of effect |
+|---|---|
+| Irreversible ingest-time QC (pkls store only good_and_stable units) | Unit counts under any new profile can only FALL, never rise, without re-ingest |
+| BG_046 detection-composition drift (broad/SPN 89→15 %, amplitude halving Jun→Jul) | Early sessions SPN/high-amplitude biased, late FSI/low-amplitude — any Naive→Expert cell-type contrast inflated in the drift's direction |
+| BG_046-calibrated track-QC thresholds applied to other subjects | Direction unknown — **quarantine** |
+| BG_031 Laser-event extraction gap (35 of 43 sessions missing the event) | BG_031 optotag yield UNDERSTATED; no negative claim about D2 yield supportable |
+| `KNOWN_SUSPECTS = {779, 873, 872}` hardcoded in tracking_qc.py | Tracked cohort slightly cleaner than uncurated by an UNMEASURED amount |
+
+Each register row: defect | direction of effect | affected modules (from the classifier CSV) |
 affected artefacts | evidence (measurement ids + file:line) | status. **Resolve the two
 quarantines with Task-4 data**: if `d1.ref.with_change_time ≈ d1.ref.total`, the ref entry
 becomes "change WAS presented; exclusion from Change_ON PETHs is a scientific choice — new repo
@@ -1815,7 +1991,11 @@ raw stays in `data/cache/audit/`), A6 (grep the summary for numbers; each traces
 ```bash
 git add docs/audit/00-executive-summary.md
 git commit -m "docs(audit): executive summary + acceptance self-check (Task 16) - sub-project 0 complete"
+# The remote is SSH-only and the agent is usually NOT running (round-2 fix):
+ssh-add -l || { eval $(ssh-agent -s) && ssh-add ~/.ssh/id_ed25519; }
 git push origin design/new-repo-foundation
+# If the push still fails (passphrase prompt unavailable in this shell), STOP and
+# hand the push to the project owner explicitly - never leave the audit unpushed silently.
 ```
 
 ---
