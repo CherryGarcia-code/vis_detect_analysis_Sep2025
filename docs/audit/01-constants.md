@@ -114,4 +114,99 @@ defect register directly.
 
 ## Executed measurements
 
-(To be filled by Task 4 — D1 executed measurements.)
+Runtime checks on real BG_046 pkls (Task 4). Script: `scripts/audit/d1_executed_checks.py`
+(`py scripts/audit/d1_executed_checks.py`, exit 0). Primary session `01072025` (deliberately a
+day-1-9 leading-zero id — `load_session("01072025")` resolved it correctly, so no id-handling
+finding); ref-trial check over 5 sessions. Measurement ids: `d1.qcprofile.*`, `d1.frfloor.*`,
+`d1.ref.*`, `d1.tfperiod.measured_s`, `d1.palette.*` in `docs/audit/measurements.csv`.
+
+| Measurement | Value | Expectation | Verdict |
+|---|---|---|---|
+| `d1.qcprofile.{default,qc_only,striatal_strict,striatal_lenient}` | `{}` × 4 | `{}` × 4 | no-op defect CONFIRMED by execution |
+| `d1.qcprofile.diff.*` (YAML-intended thresholds, session 01072025) | 108 units under all 4 profiles | counts differ across profiles | deviation — see verdict below |
+| `d1.frfloor.spread` (good_and_stable / getgood 1.0 Hz / getgood 0.1 Hz) | 108/92/108 | three distinct counts | deviation — two distinct populations, see verdict |
+| `d1.ref.total` / `d1.ref.with_change_time` | 18 / 18 | `ref_with_change ≈ tot_ref` | change WAS presented on every ref trial |
+| `d1.ref.rt_median_ms` | +83 ms | small positive median RT | reflex interpretation confirmed |
+| `d1.ref.rt_dict_keys` | `FA;Miss;RT;Ref;abort;gray` | — | `Ref` key present as pre-flight predicted |
+| `d1.tfperiod.measured_s` | not-measured | ≈ 0.05 s or honest fallback | stim logs `None` on this pkl; documentary fallback |
+| `d1.palette.hex_total` / `hex_distinct` | 692 / 174 | recon ≈ 717 / 194 | census confirmed at slightly smaller tracked-only scope |
+
+### Verdict: qc-profile no-op (`d1.qcprofile.*`)
+
+CONFIRMED at runtime. All four named profiles return `{}` from `load_qc_profile()`. Mechanism:
+`src/visdetect/core/qc.py:215-221` resolves the YAML as
+`Path(__file__).resolve().parents[1] / "config" / "qc_profiles.yml"` =
+`src/visdetect/config/qc_profiles.yml`, which does not exist — the real file lives at repo root
+`config/qc_profiles.yml` — and the function silently returns `{}` on the missing path. **Blast
+radius: every `--profile` invocation that does not pass an explicit `profiles_path`.** Live call
+sites: `scripts/batch_processing/batch_plot_tf_pulse.py:35`,
+`scripts/analysis/tf_response/plot_tf_pulse_grid.py:56`, and
+`src/visdetect/analysis/unit_selection.py:249` (which then does `used_params.update(prof)` — an
+empty dict updates nothing, so every profile silently collapses to the function-default
+parameters; `scripts/batch_processing/batch_plot_tf_grids.py` forwards `--profile` into
+`plot_tf_pulse_grid.py` and inherits the defect). A user requesting `striatal_strict`
+(1200 spikes, 3% ISI) actually ran the defaults (500 spikes, 20% ISI) with no warning.
+
+The intended-vs-actual comparison (`d1.qcprofile.diff.*`) shows a second, structural fact: on
+session 01072025 all four YAML-intended profiles pass the same 108 units, because the pkl stores
+spikes only for the 108 `good_and_stable` clusters (of 260 KS-good), and that ingest gate already
+dominates every YAML floor (measured on-pkl minima: 5223 spikes ≥ any `min_total_spikes`; max
+ISI-violation fraction 0.014 ≤ even strict's 0.03). So on today's pre-filtered pkls the four
+profiles are indistinguishable anyway — the no-op's practical blast radius is historical runs on
+fuller populations (raw KS outputs, pre-filter pkls) and, more importantly, the *silent* failure
+mode itself: the mechanism will misconfigure any future profile whose thresholds do bind.
+(Caveat: the intended-threshold check applies the three numeric floors only, not
+`require_good_cluster`/`min_median_spikes_per_trial`, per the audit script's explicit metric
+construction.)
+
+### Verdict: FR-floor spread (`d1.frfloor.*`)
+
+Deviation from the plan's prediction of three distinct counts: measured 108/92/108 — two
+distinct populations. Explanation from source: `get_good_cluster_ids` (`analysis/utils.py:239`)
+starts from `good_and_stable_ids` (108 units, ingest-gated at ≥ 0.5 Hz by
+`find_good_stable_units`, `core/qc.py:269`) and then applies its own rate floor. The yml's
+0.1 Hz floor (`config/qc_profiles.yml:8`) can therefore **never bind** downstream of the 0.5 Hz
+ingest gate — it is structurally vacuous on these pkls, which is why paths 1 and 3 coincide at
+108. The only live, binding floor is `get_good_cluster_ids`' hardcoded 1.0 Hz default, which
+drops 16/108 units (14.8%) on this session. The three *nominal* FR floors (0.1 yml / 0.5 ingest
+/ 1.0 code default) thus produce two *actual* populations, and which one an analysis used
+depends on whether it called `get_good_cluster_ids` or read `good_and_stable_ids` directly —
+a real, silent 15% population difference between scripts that believe they use "the" QC'd units.
+
+### Verdict: ref trials (`d1.ref.*`) — settles the Task 15 quarantine entry
+
+Across 5 sessions (01072025, 23062025, 08072025, 15072025, 30062025): 18 ref trials, and **all
+18 have a valid `change_time`** (`d1.ref.with_change_time` = 18 = total). The change stimulus
+WAS presented on ref trials. Median RT from change onset is **+83 ms** (`d1.ref.rt_median_ms`,
+keyed `Ref` in `Trial.reactiontimes`; observed keys `FA;Miss;RT;Ref;abort;gray`) — the lick
+lands after change onset but far below any plausible detection latency, i.e. a reflex/chance
+lick, exactly the behavioral-software definition. Resolution: `CHANGE_PRESENTED_OUTCOMES`
+including `Ref` is **factually right** (the stimulus event exists and could be aligned to), and
+`EVENT_VALID_OUTCOMES` excluding `ref` from `Change_ON` is a **scientific choice** (excluding
+trials whose lick is uninterpretable as detection), not a data fact. Task 15 should quarantine
+it as a documented convention, not a defect. Ref trials are rare (18 over 5 sessions, 0 in two
+of them), so no analysis is materially biased either way.
+
+### Verdict: TF sample period (`d1.tfperiod.measured_s`)
+
+`not-measured` — the honest fallback the plan anticipated. Session 01072025's trials carry the
+`stim_vbl` / `stim_tf_disp` fields but all are `None`: these are legacy-pkl placeholders "until
+backfilled from raw trials.json" (`core/session.py:32-35`), so no flip-timestamped TF trace
+exists in the pkl to measure a period from. The dt = 0.05 s value therefore rests on documentary
+evidence: `src/visdetect/analysis/psychophysical_kernel.py:18` ("Everything is dt = 0.05 s (the
+50 ms TF update). Never 0.25.") and the memory note `tf_fluctuation_50ms_vs_constant`. The
+canonical `TF_SAMPLE_PERIOD = 0.25` (`constants.py:113`) remains the known-wrong value, 5× the
+documented true period; its 83 consumer/`dt` sites are already censused in
+`d1.tfperiod.consumer_sites` (`data/cache/audit/tf_dt_sites.csv`). An executed measurement
+requires either a backfilled pkl or the raw `trials.json` — flagged for the register rather than
+guessed here.
+
+### Palette census (`d1.palette.*`)
+
+One-line census per the plan: `git grep -oh "#[0-9a-fA-F]\{6\}" -- scripts/ | sort | uniq -c |
+sort -rn > data/cache/audit/hexes.txt`. Measured: **692 hex-literal occurrences, 174 distinct
+colors** in tracked `scripts/` files (recon context: ≈ 717 / 194; the delta is scope — `git
+grep` sees tracked files only, excluding audit-era untracked scripts — plus normal drift).
+Top repeats: `#3474ae` ×38 and `#ef6548` ×28 — which are exactly the canonical
+`STATE_LABEL_COLORS` values (Disengaged, Impulsive) re-hardcoded per script instead of imported
+from config — then `#333333` ×27. Full ranking in `data/cache/audit/hexes.txt`.
