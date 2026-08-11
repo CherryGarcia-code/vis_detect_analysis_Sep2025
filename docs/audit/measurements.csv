@@ -1,3 +1,10 @@
 measurement_id,domain,metric,value,unit,command,script,evidence,notes
+d1.constants.dead,D1,canonical constants with zero importers and zero retypes,16,count,py scripts/audit/d1_constants_census.py,d1_constants_census.py,data\cache\audit\constants_census.csv,
+d1.constants.divergent_params,D1,non-canonical divergent parameter names (bucket a),98,count,py scripts/audit/d1_constants_census.py,d1_constants_census.py,,
+d1.constants.not_reexported,D1,canonical constants config.py fails to re-export,42,count,py scripts/audit/d1_constants_census.py,d1_constants_census.py,,
+d1.constants.shadow_disagree,D1,canonical constants with DISAGREEING retyped copies,0,count,py scripts/audit/d1_constants_census.py,d1_constants_census.py,,
+d1.constants.total,D1,canonical constants in constants.py,82,count,py scripts/audit/d1_constants_census.py,d1_constants_census.py,src/visdetect/analysis/constants.py,
+d1.tfperiod.consumer_sites,D1,TF_SAMPLE_PERIOD consumers + bare dt=0.05/DT_GEN/DT=0.02 sites,83,sites,py scripts/audit/d1_constants_census.py,d1_constants_census.py,data/cache/audit/tf_dt_sites.csv,
+d1.tfperiod.figure_attribution,D1,which published figures/caches were produced under each dt,not-measured,n/a,py scripts/audit/d1_constants_census.py,d1_constants_census.py,,requires per-figure provenance that does not exist (the D4 census measures exactly that gap); direction carried in the register
 d5.guardrail.after,D5,real HARD violations after .claude excluded,220,count,py scripts/audit/d5_guardrail_count.py,d5_guardrail_count.py,scripts/qc/check_refactor_guardrails.py,recon predicted ~218
 d5.guardrail.before,D5,HARD violations before fix,1590,count,see data/cache/audit/guardrails_before.txt,manual,scripts/qc/check_refactor_guardrails.py:35,
