@@ -1,0 +1,59 @@
+F......                                                                  [100%]
+================================== FAILURES ===================================
+______________ test_no_stripped_session_ids_in_csv_deliverables _______________
+
+    @pytest.mark.skipif(not _DATA.exists(), reason="no local data/ dir (CI checkout)")
+    def test_no_stripped_session_ids_in_csv_deliverables():
+        """No CSV under data/ may contain a bare 7-digit session id."""
+        offenders = []
+        for p in _csvs_with_session_col():
+            try:
+                with p.open("r", newline="", encoding="utf-8-sig") as fh:
+                    rdr = csv.reader(fh)
+                    try:
+                        header = next(rdr)
+                    except StopIteration:
+                        continue
+                    idxs = [i for i, h in enumerate(header)
+                            if h.strip().lower() in SESSION_COLS]
+                    if not idxs:
+                        continue
+                    bad = 0
+                    for rec in rdr:
+                        for i in idxs:
+                            if i < len(rec) and CORRUPT.match(rec[i].strip()):
+                                bad += 1
+                    if bad:
+                        offenders.append((p.relative_to(_ROOT).as_posix(), bad))
+            except (UnicodeDecodeError, OSError):
+                continue
+    
+        if offenders:
+            lines = "\n".join(f"    {n:>6} rows | {f}" for f, n in
+                              sorted(offenders, key=lambda t: -t[1]))
+>           pytest.fail(
+                f"{len(offenders)} CSV deliverable(s) contain leading-zero-stripped "
+                f"(7-digit) session ids:\n{lines}\n\n"
+                f"  A 7-digit id is always a corrupted 8-digit DDMMYYYY id.\n"
+                f"  Any join on this column silently drops every day-1-9 session.\n"
+                f"  Repair:  py scripts/qc/repair_session_ids.py --execute\n"
+                f"  Prevent: canonicalize the column via "
+                f"visdetect.analysis.config.canonicalize_session_column(df) BEFORE to_csv()."
+            )
+E           Failed: 6 CSV deliverable(s) contain leading-zero-stripped (7-digit) session ids:
+E                 6496 rows | data/cache/behavior/fa_hazard_trials_BG_046.csv
+E                 4958 rows | data/cache/behavior/fa_hazard_trials_BG_039.csv
+E                 4322 rows | data/cache/behavior/fa_hazard_trials_BG_031.csv
+E                   12 rows | data/cache/behavior/early_lick_repl_BG_046.csv
+E                    9 rows | data/cache/behavior/early_lick_repl_BG_039.csv
+E                    5 rows | data/cache/behavior/early_lick_repl_BG_031.csv
+E           
+E             A 7-digit id is always a corrupted 8-digit DDMMYYYY id.
+E             Any join on this column silently drops every day-1-9 session.
+E             Repair:  py scripts/qc/repair_session_ids.py --execute
+E             Prevent: canonicalize the column via visdetect.analysis.config.canonicalize_session_column(df) BEFORE to_csv().
+
+tests\test_session_id_csv_integrity.py:88: Failed
+=========================== short test summary info ===========================
+FAILED tests/test_session_id_csv_integrity.py::test_no_stripped_session_ids_in_csv_deliverables
+1 failed, 6 passed in 4.37s
