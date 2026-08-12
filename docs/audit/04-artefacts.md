@@ -181,6 +181,20 @@ Heuristic caveats (both directions):
    `session_sorting` hit; future re-runs inherit that date.)
 2. Filesystem mtime is not provenance: a copy/checkout refreshes it, so
    "current" here means "not provably stale by mtime", nothing stronger.
+3. **Day-boundary / timezone skew** (plan-mandated comparison, defect noted):
+   the two sides of the comparison use different timezone conventions —
+   artefact mtimes are converted to **UTC** dates, while
+   `git log --format=%cs` yields the committer's **local-timezone** date. Any
+   verdict resting on a one-day margin is convention-sensitive. One committed
+   verdict sits exactly on that margin: **`um_ref`** (writer 2026-07-02 vs
+   artefact 2026-07-01) — its "stale" ranking is within the skew and should be
+   treated as **uncertain**, not as an established staleness finding. No other
+   stale verdict is a one-day call.
+4. The sanctioned `.md` exclusion (see above) means a topic directory
+   containing ONLY `.md` files would be skipped by the empty-`files` guard and
+   vanish from the ranking silently, rather than appear as unmeasurable. No
+   current topic is affected (24 rows before and after the fix), but a future
+   banner-only cache directory would disappear without trace.
 
 **Value-level staleness proof, beyond the mtime heuristic
 (`d4.stale.chron_impossible` = 14 rows, LOWER BOUND):** the `chron` column of
