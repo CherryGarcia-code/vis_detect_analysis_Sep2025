@@ -3,8 +3,9 @@
 Empirical audit of the artefact trees (`data/`, `FIGURES/`, `table_output/`).
 Built across three tasks: **D4a** (session-id integrity + join loss, Task 7 —
 below), **D4b** (staleness ranking, filter divergence, twin collisions, Task 8
-— below), **D4c** (Task 9, pending). Scan-only: no artefact was modified or
-repaired.
+— below), **D4c** (figure traceability census + `tf_responsive` flip-count
+note, Task 9 — below). Scan-only: no artefact was modified or repaired, and no
+figure was regenerated.
 
 ## D4a — Session-id integrity extended + join-loss quantification (Task 7)
 
@@ -238,4 +239,99 @@ resolver (`src/visdetect/suite/loader.py:120-135`) serves is deterministic
   suffixed re-sort twin is never served — the "never concatenate twins" rule
   holds at the resolver level for these two.
 
-## D4c — (Task 9, pending)
+## D4c — Stratified figure-traceability census + `tf_responsive` flip note (Task 9)
+
+A no-regeneration census of `FIGURES/`: a stratified random sample (≤ 5 figures
+per topic directory, fixed seed 20260809 — the sample is byte-reproducible)
+**plus every git-tracked figure** (pre-flight fix for acceptance criterion A4).
+For each censused figure the producer is sought by three mechanical tiers, in
+order: (a) **stem-in-source** — `git grep -lF <stem>` over `scripts/` + `src/`;
+(b) **sidecar** — a `<stem>*.json` / `<stem>*_notes.md` next to the figure;
+(c) **unique-topic-writer** — exactly one `scripts/` file naming
+`FIGURES/<topic>`. No tier fires → **untraceable**.
+
+- Script: `scripts/audit/d4_traceability_census.py`
+  (`py scripts/audit/d4_traceability_census.py`, exit 0)
+- Census CSV (gitignored; committed with `git add -f`):
+  `data/cache/audit/traceability_sample.csv` (`figure,topic,method,producer`)
+- Measurement ids: `d4.trace.*`, `d4.tfresp.flips` in
+  `docs/audit/measurements.csv`
+
+### Summary
+
+| Measurement | Value | Notes |
+|---|---|---|
+| `d4.trace.sample` | 159 | census rows = stratified sample ∪ all tracked figures, across 22 topics |
+| `d4.trace.tracked_covered` | 83 | **A4 discharged**: post-run set-difference cross-check confirms all 83 tracked figures appear in the census CSV (0 missing) |
+| `d4.trace.untraceable_frac` | 0.42 | 67/159 — evidence for the S5 provenance layer, **not a target** |
+
+Method breakdown (all 159 rows): **stem-in-source 82**,
+**unique-topic-writer 10**, **sidecar 0**, **untraceable 67**. Restricted to
+the 83 tracked deliverables: stem-in-source 47, untraceable 36 — and all 36
+are `preparatory_fig5` figures. The two big tracked deliverable sets behave
+oppositely: `tf_glm_bg046` traces 40/40, `preparatory_fig5` only 4/40, because
+the former uses literal figure stems in source while the latter builds stems
+at runtime (below).
+
+### What "untraceable" is made of (67 rows, three classes)
+
+1. **Dynamic f-string stems (dominant class).** The producing script exists
+   and is tracked, but composes the filename at runtime, so the full stem is
+   never a literal: outcome-suffixed `preparatory_fig5/DMS/fig5e_fa.png`
+   (writer `fig5e_fraction_active.py`), paginated
+   `optotagging/BG_046/fig43d_candidate_gallery_p03.png` (the prefix IS
+   literal in `scripts/optotagging/b_candidate_gallery.py`; the `_p03` stem is
+   not), per-session `state_labeler/BG_031/tag_25062025.png`, per-unit
+   `tracking_qc/.../uid_0874.pdf` and `trusted_uid140_span4.pdf`, per-pair
+   `tracking_consensus/.../behavior_um1508_dant937.png`.
+2. **Untracked producers — invisible to `git grep` by construction.**
+   `git grep` searches the index only, so a producer that exists on disk but
+   is untracked cannot match: all 5 `chronic_feasibility` rows are untraceable
+   although a working-tree grep finds their stems verbatim in the (untracked)
+   `scripts/chronic_feasibility/chronic_feasibility_figure.py`. Provenance
+   that lives only in an untracked script is one `git clean` away from class 3.
+3. **Genuinely orphaned.** No file under `scripts/` — tracked or untracked —
+   mentions the stem at all, e.g.
+   `popgeom_fa_cutoff/behavioural_statespace_trajectories.png`.
+
+### Census caveats
+
+1. **`producer` names a mentioner, not a verified writer.** It is the first
+   `git grep` hit in tree order; 7 rows attribute
+   `scripts/audit/d3_scripts_census.py` — the audit's own Task-6 census, which
+   embeds artefact stems as data and sorts (`scripts/audit/…`) ahead of the
+   real writers. Spot-checks confirm the true writer sits later in the hit
+   list (`theta_count_matched` → `scripts/popgeom_theta/theta_count_matched.py`;
+   `within_session_dynamics` → `scripts/state_dynamics/within_session_dynamics.py`).
+   The **method** tier (traceable vs not) is unaffected; only the attribution
+   column self-contaminates, and future audit scripts will deepen this.
+2. **The sidecar tier fired 0 times in 159 rows** — the
+   `<stem>.json`/`<stem>_notes.md` sidecar convention is effectively absent
+   from the `FIGURES/` tree, so the S5 provenance layer cannot lean on it.
+3. **Empty topics vanish silently**: 23 topic directories exist but only 22
+   contributed rows — `FIGURES/tf_responsiveness/` holds no figure files (its
+   content is CSV/other), so it produces zero census rows rather than an
+   explicit "unmeasurable" row (same failure shape as D4b caveat 4).
+4. **Untraceable is method-relative**: it means "none of the three mechanical
+   tiers fires against tracked sources", not "no human can attribute it" —
+   classes 1–2 above are attributable with deeper (runtime or working-tree)
+   search. The 0.42 is therefore an upper bound on true orphanhood but a fair
+   measure of *mechanical* traceability, which is what a provenance layer
+   automates.
+5. **Reproducibility verified**: two full runs produced byte-identical census
+   CSVs (SHA-256 `6db41ed5…` both times).
+
+### `tf_responsive` flip count (`d4.tfresp.flips` = not-measured)
+
+The actual number of `resp_log2` calls that flip after the lick-channel fix
+requires re-running the TF GLM post-fix — compute this audit does not do. The
+value is recorded as **`not-measured`** via a `record()` one-liner, and the
+register entry carries **direction only**: per the cache's own README banner
+(`data/cache/tf_responsive/README.md`), every session of all three subjects
+had its lick regressor changed (BG_046's old pooled regressor inflated lick
+counts 1.12×–4.99×; BG_031 had 7/43 sessions fit on a contaminated ~63 Hz
+lick line; BG_039 de-pooled on 32/32), so borderline `resp_log2` calls WILL
+flip and the headline **VMS 5.3% > DMS 2.8%/3.1%** ordering is unsafe until
+re-derived. The README also names the cheapest sizing path (a paired
+within-unit re-fit on identical seed-fixed CV folds, ~150–500 near-threshold
+units) — that is S-layer work, not audit work.
