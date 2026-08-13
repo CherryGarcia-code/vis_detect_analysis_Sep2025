@@ -1,0 +1,21 @@
+doc,line,symbol,doc_value,code_value,verdict
+CLAUDE.md,82,DEFAULT_BIN_SIZE,0.025 s (25 ms),0.025,match
+CLAUDE.md,83,DEFAULT_SIGMA_MS,25.0 ms,25.0,match
+CLAUDE.md,84,DEFAULT_Z_THRESH_TF,3.0,3.0,match
+CLAUDE.md,85,TF_PULSE_PRE_WINDOW,"(-0.4, 0.0) s","(-0.4, 0.0)",match
+CLAUDE.md,86,TF_PULSE_POST_WINDOW,"(0.0, 0.5) s","(0.0, 0.5)",match
+CLAUDE.md,87,TF_FAST_THRESH_LOG2,0.25,0.25,match
+CLAUDE.md,88,TF_SLOW_THRESH_LOG2,-0.25,-0.25,match
+CLAUDE.md,89,FA_RT_SPLIT,3.0 s,3.0,match
+CLAUDE.md,90,CHANGE_SIZES,"[1.25, 1.35, 1.5, 2.0, 4.0]",sorted(ALL_GO_CHANGE_SIZES),MISMATCH
+docs\AI_interaction\copilot-instructions.md,114,CHANGE_SIZES,"[1.25, 1.35, 1.5, 2.0, 4.0]",sorted(ALL_GO_CHANGE_SIZES),MISMATCH
+docs\AI_interaction\copilot-instructions.md,115,DEFAULT_Z_THRESH_TF,3.0,3.0,match
+docs\AI_interaction\copilot-instructions.md,116,TF_PULSE_PRE_WINDOW,"(-0.4, 0.0) s","(-0.4, 0.0)",match
+docs\AI_interaction\copilot-instructions.md,117,TF_PULSE_POST_WINDOW,"(0.0, 0.5) s","(0.0, 0.5)",match
+docs\AI_interaction\copilot-instructions.md,118,STAGE_ORDER,"[""Learning"", ""Expert""]",,symbol-not-found
+docs\science\2026-07-01-B10-results.md,6,FA_RT_SPLIT,3.0 s; early FAs are reflexive) — keeps,3.0,match
+docs\science\state_labeler\methods.md,167,STATE_LABELS,"Impulsive, StimSens, Disengaged, Abort","['Impulsive', 'StimSens', 'Disengaged', ",MISMATCH
+docs\science\state_labeler\methods.md,168,STATE_FEATURE_COLS,"f_applick, f_inapplick, f_nolick, f_abor","['f_applick', 'f_inapplick', 'f_nolick',",MISMATCH
+docs\science\state_labeler\methods.md,169,STATE_LABEL_W_GRID,"11, 15, 21, 31, 41, 51, 61","[11, 15, 21, 31, 41, 51, 61]",match
+docs\science\state_labeler\methods.md,171,STATE_EASY_CHANGE_THRESH,2.0 (TF ratio),2.0,match
+docs\science\state_labeler\methods.md,172,STATE_CONFIDENCE_THRESHOLD,0.8 (gating),0.8,match
