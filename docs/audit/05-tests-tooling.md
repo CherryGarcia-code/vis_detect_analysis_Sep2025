@@ -9,6 +9,9 @@ two that abort collection and the one that fails by design.
 
 - Script: `scripts/audit/d5_test_inventory.py`
   (`py scripts/audit/d5_test_inventory.py`, exit 0)
+- Supplement: `scripts/audit/d5_test_inventory_ast.py`
+  (`py scripts/audit/d5_test_inventory_ast.py`, exit 0) — AST-corrected
+  untested-module count (see the blind-spot section)
 - Partition CSV (gitignored; committed with `git add -f`):
   `data/cache/audit/test_partition.csv`
   (`test_file,needs_real_data,covers_modules`)
@@ -24,7 +27,7 @@ two that abort collection and the one that fails by design.
 | `d5.tests.offline_runtime_s` | 630 | wall time; `1 failed, 654 passed, 4 deselected, 6 warnings, 2 errors in 627.46s` — see below |
 | `d5.tests.realdata_runtime_s` | not-measured | running the real-data tier is out of audit scope; file list in the partition CSV |
 | `d5.tests.untested_modules` | 32 | the shipped regex count — **overcount, see the blind-spot section** |
-| `d5.tests.untested_modules_ast` | 14 | AST-corrected count from an out-of-band `ast.parse` probe |
+| `d5.tests.untested_modules_ast` | 14 | AST-corrected count (`scripts/audit/d5_test_inventory_ast.py`) |
 | `d5.guardrail.before` | 1,590 | Task-2: HARD guardrail violations before fix |
 | `d5.guardrail.after` | 220 | Task-2: real HARD violations after `.claude/` excluded (recon predicted ~218) |
 
@@ -86,6 +89,10 @@ pytest` invocation cannot complete collection at all** — anyone "running the
 tests" plainly gets zero test results. The audit did not modify or delete the
 orphans (finding, not repair).
 
+Disclosure: in both runs a `tee` was inserted before the brief's `tail -2` so
+the full pytest log survives for honest failure reporting — flags, ordering,
+and timing untouched.
+
 Re-run with `--continue-on-collection-errors` (added solely to obtain the
 runtime the spec asks for; all other flags identical):
 
@@ -131,8 +138,9 @@ from visdetect.analysis.kernel_width import (
 
 After `import ` the regex requires `([\w,\s]+)` — but the next character is
 `(`, so the whole statement matches nothing and the file gets **zero credit**.
-An out-of-band `ast.parse` probe (ground truth for import statements; probe
-script in the session scratchpad, method described here) finds the regex
+An `ast.parse` probe (ground truth for import statements; committed as
+`scripts/audit/d5_test_inventory_ast.py`, same test set and same
+exact-or-descendant crediting rule as the shipped census) finds the regex
 under-credits **67 of 98** test files and that **18 of the 32 "untested"
 modules do have test imports** — several with dedicated same-named test files
 (`test_kernel_width.py`, `test_spectrum_stats.py`, `test_waveform_celltype.py`,
