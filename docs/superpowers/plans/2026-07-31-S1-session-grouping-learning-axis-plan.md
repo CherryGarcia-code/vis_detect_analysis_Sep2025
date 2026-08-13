@@ -110,6 +110,83 @@ estimate as a trend.
 
 ---
 
+## Phase 6 — Chunking / segmentation ⬜ OPEN DECISIONS (parked 2026-08-03)
+
+Discussion state at the point this thread paused. **Four decisions are unresolved**; the supporting
+numbers are recorded so they need not be re-derived.
+
+### What the data already settled
+
+- **State-GENERAL segmentation, not disengagement-anchored.** The original design keyed everything
+  off the longest *Disengaged* bout, which sees only the minority of transitions. Sustained-run
+  transition counts (runs ≥10 trials, all 3 mice):
+
+  | transition | BG_046 | BG_039 | BG_031 | total |
+  |---|---|---|---|---|
+  | Impulsive → StimSens | 77 | 26 | 93 | **196** |
+  | StimSens → Impulsive | 72 | 23 | 85 | **180** |
+  | StimSens → Disengaged | 31 | 54 | 41 | 126 |
+  | Disengaged → StimSens | 30 | 55 | 33 | 118 |
+  | Disengaged → Impulsive | 11 | 8 | 34 | 53 |
+  | Impulsive → Disengaged | 14 | 3 | 22 | 39 |
+
+  **StimSens↔Impulsive (376) > all Disengaged-involving (336)** — and StimSens↔Impulsive *is* the
+  regulation axis the project spine is about. Phenotype split: BG_039 oscillates engaged↔disengaged
+  (54/55); BG_046 and BG_031 oscillate StimSens↔Impulsive (77/72, 93/85).
+- **Threshold ~10–20 trials.** ~90% of state-trials sit in runs ≥10 (sustained runs at ≥10:
+  544/345/598; at ≥20: 276/191/323). The MEDIAN run (3–7 trials) is the wrong statistic — it is
+  dominated by short flickers that occupy almost no session area. **An earlier claim that "median
+  run is 3–4.5 so don't chunk by state runs" was WRONG and is retracted here.**
+- **Bridging Abort trials changes run lengths negligibly** (tested) — Abort need not be special-cased.
+- **StimSens is more fragmented** than Impulsive/Disengaged (fraction of state-trials in runs ≥30:
+  0.00/0.41/0.24 vs 0.52–0.74). StimSens segments will be shorter and scarcer → trial-count matching
+  is mandatory for any encoding-strength comparison (the B9 attenuation trap).
+- **Episode/recovery features do NOT improve classification** (tested; BG_046 κ 0.824→0.783) — but
+  chunking is an OPERATIONAL tool for making comparable analysis units, not a predictor, so this
+  does not undercut it. Expect segment-level *occupancy* to remain the summary statistic.
+
+### The four open decisions
+
+1. **Threshold** — one documented default (proposed **≥15**) with a 10/20/30 sensitivity check, or
+   tuned per analysis? *Lean: fixed + sensitivity, so it is not a researcher degree of freedom.*
+2. **Low-confidence trials** (`state_gated == -1`, ~3.8% in BG_046) — include, or allow holes?
+   *Lean: include; 3.8% is negligible and excluding fragments segments for no gain.*
+3. **Segment purity** — pure single-state runs, or dominant-state windows tolerating brief
+   incursions? *Lean: pure as primary, dominant as a sensitivity check (dominant yields more
+   StimSens material).*
+4. **First neural question** — transitions **descriptive** ("does activity change at the switch")
+   vs **predictive** ("does activity precede the switch")? The predictive version is the stronger
+   claim (striatum *drives* rather than *reflects* regulation) but the honest framing predicts the
+   BEHAVIOURAL switch, with the state label only as its operational definition.
+
+### Proposed segment-table schema (cheap: tag CSVs only, no pkl loading)
+
+`subject, session_name, segment_id, start_trial, end_trial, n_trials, state, purity,
+position_in_session, prev_state, next_state, neural_safe`
+
+### Two traps that apply specifically here
+
+- **Movement/lick confound.** StimSens→Impulsive *is by definition* a change in licking, so any
+  neural difference at the boundary may be motor, not state. This is the N1 lesson (raw 0.56 → 0.03
+  after leakage-filtering + movement-matching). Pre-register the control; do not discover it later.
+- **`neural_safe` filter applies.** Segment *definition* is behaviour-derived and valid on every
+  session, but segment **neural** analysis must exclude the sessions flagged by
+  `scripts/QC_technical/audit_trial_baselineon_alignment.py` — including two BG_046 Expert sessions.
+  Wire the filter into the loader from the start. See
+  [QC1 handoff](../specs/2026-08-03-QC1-trial-baselineon-realignment-handoff.md).
+
+### Sequencing
+
+1. Build the segment table + descriptive picture (segment counts, durations, transition rates
+   across learning). Cheap, and it de-risks everything after.
+2. Pick **one** neural question and do it properly. Transitions are the novel option — the
+   segment-aggregate StimSens-vs-Impulsive contrast partly replicates existing trial-level work
+   (engaged-StimSens lower-gain change response, p=1.4e-9); its novelty is the cleaner regime
+   definition plus within-session pairing, which controls the chronic drift confound (yield 89%→15%).
+3. `harden-result` before any claim leaves the repo.
+
+---
+
 ## Standing constraints
 
 - **Circularity scope:** behaviour-derived groups are clean for NEURAL DVs, circular for
