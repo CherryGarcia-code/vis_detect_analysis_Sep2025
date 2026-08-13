@@ -6,10 +6,11 @@ uncommitted file when the old repo is frozen (sub-project 6 cutover).
 **The `DECISION` column is deliberately empty. The audit does not decide.**
 `RECOMMENDED` is the evidence-backed default from the migration brief in
 `docs/superpowers/specs/2026-08-05-new-repo-master-design.md`; the project owner
-fills `DECISION` at review. Where the evidence contradicts the recommendation,
-the row is flagged inline and adjudicated in an evidence note below the table
-rather than silently resolved — one row is in that state today
-(`feature/fig5eh-preparatory-cellclass`).
+fills `DECISION` at review. Where the evidence contradicts a recommendation's
+stated reasoning, the row is flagged inline and adjudicated in an evidence note
+below the table rather than silently resolved — one row is in that state today
+(`feature/fig5eh-preparatory-cellclass`: its stated precondition fails, though
+the drop turns out to be safe for a different, verified reason).
 
 **Snapshot as-of 2026-08-13 15:12.** The commit columns move: the audit's own
 commits inflate `design/new-repo-foundation`, and
@@ -45,11 +46,11 @@ audit.**
 | `design/new-repo-foundation` | *(primary checkout)* | 2026-08-13 | 64/63 (1 merge) | **16** | The new-repo design corpus (8 ADRs, master design, panel review) + 16 audit commits (Tasks 1–12) — the 16 local-only commits **are** the audit commits | **Keep — active work.** Push the local-only commits before any freeze step | |
 | `feature/camera-tagger-2b` | `camera-tagger-2b` | 2026-08-06 | 0/0 | 0 | Nothing unique — merged to main as `caa377d` (amortized ROI + per-frame pupil label capture, Plan 2b) | **Port-on-first-use (whole subsystem)** — the camera/tagger subsystem is cold-listed under ADR-020, not carried at cutover | |
 | `feature/early-lick-and-session-sorting` | `qc1-alignment` | **2026-08-13 (moved during this audit)** | 33/32 (1 merge) | **3** | Live QC1 trial/event-alignment repair: 32 files, +8,821/−23 (solver, repair script, integrity gate, verification harnesses) | **Owner decision — live work in flight.** Not a freeze candidate while QC1 is open; push the 3 local-only commits regardless | |
-| `feature/fig5eh-preparatory-cellclass` | *(none)* | 2026-07-24 | 4/4 | 0 | 4 doc/spec commits (prep-activity vs regulation-axis spec, Phase-2 trajectories, Appendix A dataset inventory) | **Drop after verifying still-ancestor** — ⚠️ *the verification fails, see Evidence below; drop is not yet authorised* | |
+| `feature/fig5eh-preparatory-cellclass` | *(none)* | 2026-07-24 | 4/4 | 0 | 4 doc/spec commits (prep-activity vs regulation-axis spec, Phase-2 trajectories, Appendix A dataset inventory) | **Drop after verifying still-ancestor** — ⚠️ *the stated precondition FAILS (not an ancestor of main, 4 `+` patches), but the drop is safe by a different route: all 4 commits are ancestors of `design/new-repo-foundation` and its origin ref. See evidence note* | |
 | `feature/population-field-plan2` | `population-field-plan2` | 2026-08-04 | 4/3 (1 merge) | 0 | 3 unique doc commits: Plan 2 analysis-layers design spec, Plan 2a implementation plan, NI lick-channel semantics null control | **Merge docs to main before freeze** | |
 | `feature/tf-transient-sustained-spectrum` | *(none)* | 2026-07-10 | 1/0 | 0 | 1 commit (`2f82abe`, anatomy TF/kernel-width cell maps) — `git cherry` reports `-`: already applied upstream under a rewritten sha | **Drop (cherry-verified applied)** | |
 | `fix/lick-channel-resolver` | `lick-channel-fix` | 2026-08-03 | 0/0 | 0 | Nothing unique — fully contained in main | **Drop** — 0 unique commits | |
-| `hardening/fa-psth-and-manifest-sort` | *(none)* | 2026-07-21 | 3/3 | 0 | `2f6fcdc` (centralised `fa_lick` PSTH condition + manifest sort fix for DDMMYY tokens) plus 2 doc commits shared with `fig5eh` | **Carry the fix into the new-repo foundation** — the sort fix is the known-defect register's session-id/date-ordering entry | |
+| `hardening/fa-psth-and-manifest-sort` | *(none)* | 2026-07-21 | 3/3 | 0 | `2f6fcdc` (centralised `fa_lick` PSTH condition + manifest sort fix for DDMMYY tokens) plus 2 doc commits shared with `fig5eh` | **Carry the fix into the new-repo foundation** — the sort fix is the known-defect register's session-id/date-ordering entry. ⚠️ *Load-bearing: `2f6fcdc` is contained in no other branch (see evidence note) — dropping this ref strands the fix* | |
 | `worktree-camera-tagging` | `camera-tagger-2a` | 2026-07-29 | 0/0 | 0 | Nothing unique — fully contained in main | **Drop** — 0 unique commits | |
 | `worktree-population-field` | `population-field` | 2026-07-09 | 0/0 | 0 | Nothing unique — fully contained in main | **Drop** — 0 unique commits | |
 | `worktree-theta-prototype` | `theta-prototype` | 2026-07-21 | 0/0 | 0 | Nothing unique — fully contained in main | **Drop** — 0 unique commits | |
@@ -59,18 +60,66 @@ carries **22 commits that exist on no `origin/*` ref** (tip `caa377d`,
 2026-08-07; cached `origin/main` tip 2026-08-04), so "freeze main" is not a
 no-op: main must be pushed first.
 
-### Evidence note — `feature/fig5eh-preparatory-cellclass`
+### Evidence note — `feature/fig5eh-preparatory-cellclass`: precondition fails, drop is still safe
 
-The recommendation is conditional ("drop **after verifying** still-ancestor")
-and **the verification fails as measured**: the branch is not an ancestor of
-main and carries 4 patches `git cherry` marks `+` (not applied upstream). Two of
-them — `381b4d3` and `6da0f31` — also sit on
-`hardening/fa-psth-and-manifest-sort`, so carrying that branch rescues half the
-content; the exclusive pair is `5d1e732` (Phase-2 across-session
-state-conditioned trajectories + circularity-scope fix) and `6cad30e`
-(Appendix A, the read-only X: dataset-expansion inventory). Dropping the branch
-today loses those two doc commits. Either merge them to main first, or record
-the drop as a deliberate discard.
+Two separate questions, and they come apart on this branch.
+
+**1. The brief's stated precondition does not discharge.** "Drop after verifying
+still-ancestor" is a claim about `main`, and against `main` it is false:
+
+```
+$ git merge-base --is-ancestor feature/fig5eh-preparatory-cellclass main   -> NOT-ANCESTOR (exit 1)
+$ git cherry main feature/fig5eh-preparatory-cellclass                     -> 4 patches, all "+"
+```
+
+So the branch is *not* contained in main, and nobody should drop it on the
+strength of the recommendation as worded.
+
+**2. The drop is nevertheless safe, by a different route.** All four commits are
+ancestors of the active `design/new-repo-foundation` branch (and of
+`feature/early-lick-and-session-sorting`), and of the cached `origin/*` refs for
+both:
+
+```
+$ git branch -a --contains 5d1e732        (identical output for 6cad30e, 381b4d3, 6da0f31)
+* design/new-repo-foundation
++ feature/early-lick-and-session-sorting
+  feature/fig5eh-preparatory-cellclass
+  remotes/origin/design/new-repo-foundation
+  remotes/origin/feature/early-lick-and-session-sorting
+  remotes/origin/feature/fig5eh-preparatory-cellclass
+
+$ git merge-base --is-ancestor <each of the 4> design/new-repo-foundation        -> ANCESTOR (exit 0)
+$ git merge-base --is-ancestor <each of the 4> origin/design/new-repo-foundation -> ANCESTOR (exit 0)
+$ git log --ancestry-path --oneline 5d1e732..design/new-repo-foundation          -> 61 commits (linear path exists)
+```
+
+**Deleting the `fig5eh` ref therefore loses nothing**, and the content reaches
+main automatically when `design/new-repo-foundation` merges. No merge-to-main
+of this branch is needed, and dropping it is not a discard of anything. This is
+consistent with the table row's `Local-only = 0`. The four commits are all
+documentation (`381b4d3`, `6da0f31` regulation-axis spec; `5d1e732` Phase-2
+trajectories + circularity-scope fix; `6cad30e` Appendix A dataset inventory) —
+the ref is a redundant label on content held by two live branches.
+
+**Contrast — `hardening/fa-psth-and-manifest-sort` is the opposite case, and its
+recommendation is load-bearing.** Its code fix exists nowhere else:
+
+```
+$ git branch -a --contains 2f6fcdc
+  hardening/fa-psth-and-manifest-sort
+  remotes/origin/hardening/fa-psth-and-manifest-sort
+$ git merge-base --is-ancestor 2f6fcdc main                      -> NOT-ANCESTOR
+$ git merge-base --is-ancestor 2f6fcdc design/new-repo-foundation -> NOT-ANCESTOR
+```
+
+Dropping that ref *would* strand the centralised `fa_lick` PSTH condition and
+the DDMMYY manifest-sort fix. (Its two doc commits `381b4d3`/`6da0f31` are the
+shared ones above and are safe regardless — only `2f6fcdc` is unique to it.)
+**`fig5eh` = safe to drop despite the failed precondition; `hardening` = must be
+carried.** Both show `Local-only = 0`, so that column alone does not
+distinguish them — "on a remote" is not the same question as "held by a branch
+that will survive the freeze".
 
 ## Stash-tags
 

@@ -41,6 +41,31 @@ def _is_reparse(path):
         return True
 
 
+def _count_bytes(top):
+    """(files, bytes, pruned) with the same every-level reparse discipline as
+    _sized() in d7_work_at_risk.py. Path.rglob would descend THROUGH an inner
+    junction and .stat() would follow it - the 2026-06-07 data-loss shape."""
+    if _is_reparse(top):
+        return 0, 0, [str(top)]
+    n, size, pruned = 0, 0, []
+    for root, dirs, fs in os.walk(top):
+        keep = []
+        for d in dirs:
+            fp = os.path.join(root, d)
+            if _is_reparse(fp):
+                pruned.append(fp)
+            else:
+                keep.append(d)
+        dirs[:] = keep
+        for fname in fs:
+            n += 1
+            try:
+                size += os.lstat(os.path.join(root, fname)).st_size
+            except OSError:
+                pass
+    return n, size, pruned
+
+
 # ---- 1. commits that exist on no origin ref (the sub-project -1 exposure) ----
 local_only = sh("git", "rev-list", "--count", "--all", "--not", "--remotes").strip()
 per_branch = []
@@ -98,24 +123,28 @@ sets = {"data/cache/tf_labeling": "TF unit labels",
         "data/cache/state_tags": "behavioural state tags",
         "data/cache/session_sorting": "blinded session sorter",
         "data/cache/video_sync": "video-sync / pupil labels"}
-parts = []
+parts, hl_pruned = [], []
 for rel, label in sets.items():
     p = REPO / rel
-    if not p.exists() or _is_reparse(str(p)):
-        parts.append(f"{rel}: absent-or-reparse")
+    if not p.exists():
+        parts.append(f"{rel}: absent")
         continue
-    files = [f for f in p.rglob("*") if f.is_file()]
+    n, size, pruned = _count_bytes(str(p))
+    hl_pruned += pruned
     tracked = len([x for x in sh("git", "ls-files", rel).splitlines() if x])
-    parts.append(f"{rel} ({label}): {len(files)} files, "
-                 f"{sum(f.stat().st_size for f in files)/1e6:.1f} MB, {tracked} tracked")
+    parts.append(f"{rel} ({label}): {n} files, {size/1e6:.1f} MB, {tracked} tracked"
+                 + (f" [pruned {len(pruned)} junction(s)]" if pruned else ""))
 backup = Path("e:/python_analysis/_handlabel_backup_20260806")
-bfiles = [f for f in backup.rglob("*") if f.is_file()] if backup.exists() else []
+bn, bsize, bpruned = _count_bytes(str(backup)) if backup.exists() else (0, 0, [])
+hl_pruned += bpruned
 record("d7.handlabels.exposure", "D7",
        "irreplaceable gitignored hand-label sets and their backup coverage",
        " | ".join(parts) + f" || backup {backup.as_posix()}: "
-       + (f"{len(bfiles)} files, {sum(f.stat().st_size for f in bfiles)/1e6:.1f} MB"
-          if bfiles else "MISSING"),
+       + (f"{bn} files, {bsize/1e6:.1f} MB" if bn else "MISSING"),
        "inventory", CMD, S,
        notes="no code can regenerate these; backup is on the SAME physical disk (E:) "
-             "as the repo, so it is a second copy, not an off-disk copy")
+             "as the repo, so it is a second copy, not an off-disk copy"
+             # only widens the recorded string if a junction actually appears, so the
+             # walk-discipline fix does not by itself churn measurements.csv
+             + (f"; junctions pruned: {'; '.join(hl_pruned)}" if hl_pruned else ""))
 print("done")

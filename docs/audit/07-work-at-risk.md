@@ -193,8 +193,14 @@ merge decision.
 ## What D7 does not measure
 
 - **Whether a dropped branch's ideas were reimplemented elsewhere.** `git cherry`
-  detects patch-identity, not intellectual overlap. The only branch it clears
-  outright is `feature/tf-transient-sustained-spectrum`.
+  detects patch-identity, not intellectual overlap. The only branch *cherry*
+  clears outright is `feature/tf-transient-sustained-spectrum` — but cherry
+  against `main` is the wrong question for a branch whose commits are already
+  held by another live branch. `git branch -a --contains` is that test, and it
+  clears `feature/fig5eh-preparatory-cellclass` too (all 4 commits are ancestors
+  of `design/new-repo-foundation`) while showing
+  `hardening/fa-psth-and-manifest-sort`'s fix is held nowhere else. See the
+  evidence note in `docs/audit/branch-disposition.md`.
 - **Remote reality** — see the `ls-remote` caveat above.
 - **Whether the gitignored artefacts are actually regenerable.** The 155 GB is
   sized, not provenance-checked; D4's artefact provenance survey is the place
