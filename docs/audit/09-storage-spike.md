@@ -9,8 +9,12 @@ must be carried into the new repo.
 - Script: **none** — `scripts/audit/d9_nwb_spike.py` was never written
 - Scratch venv: **not created by this task** (see *Repo state* at the end)
 - `.nwb` files produced: **none**
-- Measurement ids: `d9.*` in `docs/audit/measurements.csv` — **all five
-  `not-measured`**, recorded via `record()` one-liners (`script = manual`)
+- Measurement ids: `d9.*` in `docs/audit/measurements.csv` — the four spike
+  measurements are **`not-measured`**; `d9.keep_all_good` is
+  **`code-side YES; data-side not-measured`** (see carry-forward 2). All recorded
+  via `record()` one-liners (`script = manual`)
+- Also recorded from this task: `d5.tooling.delete_guard_falsepositive` — a
+  tooling defect found while cleaning up, **for Task 15's register**
 
 ## What the spike would have measured
 
@@ -23,7 +27,7 @@ each converted with direct `pynwb` in a throwaway venv, then:
 | `d9.readtimes` | `load_pkl` / `write_nwb` / `read_trials` / `read_one_unit` / `read_window_all_units` |
 | `d9.roundtrip` | equality of `spike_times` (unit 0) and the trials columns after the round trip |
 | `d9.compression` | the HDF5 codec actually present on `units/spike_times` after writing |
-| `d9.keep_all_good` | whether every Kilosort-good unit can be re-ingested without re-reading raw `.ap.bin` |
+| `d9.keep_all_good` | whether every Kilosort-good unit can be re-ingested without re-reading raw `.ap.bin` — **partly answered in-repo after all; see carry-forward 2** |
 
 ## Why it was not run
 
@@ -38,8 +42,10 @@ existing pickles. That voids the spike on both counts:
    pickle path validates nothing on the critical path.
 
 Running it anyway would have spent the time-box producing numbers about a
-migration that will not happen. The five ids are recorded as `not-measured` with
-this reason rather than silently skipped, per the plan's global constraint.
+migration that will not happen. All five ids are recorded with this reason rather
+than silently skipped, per the plan's global constraint: the four spike
+measurements as `not-measured`, and `d9.keep_all_good` at its true partial state
+(code-side answered in-repo, data-side still open — carry-forward 2).
 
 ## What is therefore NOT known
 
@@ -57,6 +63,11 @@ from.** Specifically unknown —
 The new repo will discover all of these during its own build, against its own
 writer, which is the only place the numbers would have been valid anyway. They
 should be measured there before any of them is quoted.
+
+> **Note for Task 16.** The executive-summary brief asks for "the D9 numbers".
+> There are none. Task 16 must instead cite the five `not-measured` `d9.*` ids and
+> the owner's 2026-08-13 format decision recorded here. The absence is a decision,
+> not an omission, and should be presented as one.
 
 ## Carry-forward 1 — the gzip-compression gotcha
 
@@ -89,41 +100,75 @@ assertion, not as a plausible-looking size number. This generalises past gzip:
 any storage option set through a wrapper object should be read back off the
 written file and checked, because the failure mode is silence.
 
-## Carry-forward 2 — `d9.keep_all_good` is a live blocker
+## Carry-forward 2 — `d9.keep_all_good`: code-side YES, data-side open
 
 **This one is not about storage format at all, and it does not go away with the
 spike.** It sits on the critical path for the owner's raw re-ingest plan whichever
-format is chosen.
+format is chosen. But the open part is **narrower than the spike's framing
+suggested**, and the difference matters for how sub-project 1 spends its one
+pre-authorised `X:` read.
 
 **The question:** can every Kilosort-good unit be re-ingested **without** re-reading
 the raw `.ap.bin` files?
 
-**Why it is unanswered:** settling it requires reading a session's Kilosort output
-tree (`spike_clusters.npy`) on the **`X:` mount**, which this audit is forbidden to
-touch. It is a cheap read — one file, one session — but it is outside the audit's
-permission boundary, so it stays open.
+### The code-side answer is already YES — verified in-repo
 
-**Why it matters.** The current pickles are the product of an **irreversible
-ingest-time QC gate**: they store spikes only for `good_and_stable` units. On
-session `01072025` that is **108 units of 260 Kilosort-good**
-(`docs/audit/01-constants.md:152`; ids `d1.frfloor.good_and_stable`,
-`d1.frfloor.getgood_01hz`, `d1.frfloor.getgood_1hz`, `d1.frfloor.spread`). The
-consequence is directional and hard: **unit counts under any new QC profile can
-only FALL, never rise, without re-ingest.** The other 152 units are not filtered in
-the pickle — they are absent from it. If the rebuild cannot recover them from the
-Kilosort tree alone, the new repo either inherits the old gate or pays for a full
-raw re-read.
+This was settled by reading the repo, inside the audit's permitted scope. No `X:`
+access was needed or used.
 
-- **Evidence:** `src/visdetect/core/ingest.py`
-- **Settles with:** one pre-authorised lightweight `X:` read of a session's
-  `spike_clusters.npy`, at sub-project 1
+- **The flag already exists.** `build_session_from_raw` takes
+  `keep_all_good: bool = False` (`src/visdetect/core/ingest.py:415`). Its `True`
+  branch keeps `set(good_cluster_ids)` — every KS-good cluster — instead of the
+  default `set(good_and_stable_ids)` (`ingest.py:492-495`). The capability is not
+  hypothetical; it is a parameter with a live branch.
+- **The ingest path never opens raw ephys.** Spike times come from
+  `spike_times_sec_adj.npy` / `spike_times_sec.npy` / `spike_times.npy`, cluster
+  assignments from `spike_clusters.npy` / `spike_clusters_ks.npy`
+  (`ingest.py:243-267`), quality labels from `cluster_KSLabel.tsv` /
+  `cluster_group.tsv` (`ingest.py:191-192`), and waveforms from `templates.npy`
+  (`core/kilosort.py:42-49`). A grep across `src/visdetect/core/` finds **no
+  `.ap.bin`, no `memmap`, and no `np.fromfile`** anywhere in the chain; the only
+  binary read in the package core is the pickle loader at `core/session.py:196`.
+
+So: re-ingesting all KS-good units requires the **Kilosort/Phy output tree only**,
+and the code to do it is already written.
+
+### What is genuinely still open
+
+Only this: **are the Kilosort trees actually present and complete on `X:` for every
+session?** The code can consume them; whether they all exist, for every session of
+every subject, with the `.npy`/`.tsv` files the path requires, is a property of the
+data store — not of the code — and that is the part the audit cannot see.
+
+**That is what the one pre-authorised `X:` read should be spent on:** an existence
+and completeness sweep of the per-session Kilosort directories, **not** a
+re-derivation of the code-side answer, which this document has already established.
+
+### Why it matters
+
+The current pickles are the product of an **irreversible ingest-time QC gate**:
+they store spikes only for `good_and_stable` units. On session `01072025` that is
+**108 units of 260 Kilosort-good** (`docs/audit/01-constants.md:152`; ids
+`d1.frfloor.good_and_stable`, `d1.frfloor.getgood_01hz`, `d1.frfloor.getgood_1hz`,
+`d1.frfloor.spread`). The consequence is directional and hard: **unit counts under
+any new QC profile can only FALL, never rise, without re-ingest.** The other 152
+units are not filtered in the pickle — they are absent from it. Recovering them
+means re-ingesting with `keep_all_good=True`, which the code supports, against
+Kilosort trees whose completeness is the remaining unknown.
+
+- **Evidence:** `src/visdetect/core/ingest.py:415` (flag), `:492-495` (branch),
+  `:243-267` + `:191-192` and `core/kilosort.py:42-49` (inputs are `.npy`/`.tsv`
+  only)
+- **Settles with:** one pre-authorised `X:` sweep for Kilosort-tree
+  presence/completeness per session, at sub-project 1
 - **Blocking:** the raw re-ingest plan, format-independent
 
 ## Repo state — the scratch venv was not deleted
 
 An earlier interrupted attempt left a scratch venv at
-`data/cache/audit/nwbvenv/` (**1,204 dirs / 12,581 files / 321.7 MB**). This task
-was to delete it. **It is still present.**
+`data/cache/audit/nwbvenv/` (**1,204 dirs / 12,581 files / 321.7 MiB**, i.e.
+337.4 MB decimal / 337,352,165 bytes). This task was to delete it. **It is still
+present.**
 
 The tree was verified safe to delete — walked with
 `os.lstat(...).st_file_attributes & FILE_ATTRIBUTE_REPARSE_POINT` (the test
@@ -134,9 +179,10 @@ root plain.
 
 The delete was nonetheless blocked by the repo's own `PreToolUse` guard,
 `.claude/hooks/guard_recursive_delete.ps1` — **a false positive with respect to
-this target.** The guard always adds `.` (the cwd, here the repo root) to its
-candidate list, scans it to depth 4, and denies on any junction found anywhere in
-that scan. It reported:
+this target.** `Get-Candidates` unconditionally adds `.` (the cwd, here the repo
+root) to its candidate list (`:85`), each candidate is scanned to
+`$MAX_DEPTH = 4` (`:37`), and the hook denies whenever the hit list is non-empty
+(`:170`) regardless of which candidate produced the hit. It reported:
 
 ```
 .claude/worktrees/qc1-alignment/.superpowers  [Junction] -> <repo>/.superpowers
@@ -155,12 +201,26 @@ Two consequences worth the owner's attention:
    candidate, *every* recursive delete run from this repo is currently denied while
    that junction exists — regardless of what is actually being deleted.
 2. **The fix is in the guard, not the junction.** Scoping the scan to the paths the
-   command actually names (dropping the unconditional `.`, or only using `.` when
-   the command has no resolvable path argument) would restore the guard's precision
-   without weakening it. The junction itself is legitimate and should stay.
+   command actually names — dropping the unconditional `.` at `:85`, or falling
+   back to `.` only when no path argument resolves — would restore the guard's
+   precision without weakening it: a command that names its target would then be
+   judged on that target alone. The junction itself is legitimate and should stay.
+
+> **This is a tooling defect, not a D9 finding, and it must not fall through the
+> gap between this document and sub-project 1.** It is recorded as
+> `d5.tooling.delete_guard_falsepositive` in `measurements.csv` (domain D5,
+> value `blocked-all-recursive-deletes`, evidence
+> `.claude/hooks/guard_recursive_delete.ps1:85`) so it has an id to cite.
+> **Task 15 must carry it into the known-defect register** — direction of effect:
+> every recursive delete in the repo is denied while the depth-4 junction exists,
+> which pushes an operator toward either the guard's own suggested remedy
+> (deleting a live worktree's junction — the 2026-06-07 hazard shape) or toward
+> rewording the command to dodge the verb regex. Both are worse than the false
+> positive itself, which is what makes this worth fixing before sub-project 1
+> rather than after.
 
 The leftover venv is gitignored (`.gitignore:48`, `data/cache/*`), so it costs
-321.7 MB of disk and nothing in the repo. It can be removed by the owner with:
+321.7 MiB of disk and nothing in the repo. It can be removed by the owner with:
 
 ```powershell
 Remove-Item -Recurse -Force 'E:\python_analysis\git_repos\vis_detect_analysis_Sep2025\data\cache\audit\nwbvenv'
