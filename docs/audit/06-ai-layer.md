@@ -4,15 +4,19 @@ Empirical audit of the instruction/documentation layer: every backticked
 `SYMBOL` = value claim in CLAUDE.md, `docs/`, and the seven skills resolved
 mechanically against code ground truth; a dead-path census of the same corpus;
 a model-id survey of primary `.claude` prose; a count of instruction files
-claiming canonical authority; plus two Step-2 surveys (retraction markers in
-`docs/superpowers/`, skill trigger-overlap). Measurement only: **no scanned
-doc, skill, or CLAUDE.md was modified.**
+claiming canonical authority; plus three Step-2 surveys (retraction markers in
+`docs/superpowers/`, `docs/science`-vs-memory agreement, skill trigger-overlap).
+Measurement only: **no scanned doc, skill, or CLAUDE.md was modified**, and the
+out-of-repo memory layer was read read-only.
 
 - Script: `scripts/audit/d6_ai_layer.py`
   (`py scripts/audit/d6_ai_layer.py`, exit 0)
 - Supplement: `scripts/audit/d6_retraction_survey.py`
   (`py scripts/audit/d6_retraction_survey.py`, exit 0) — the Step-2
   retraction-marker survey's one `record` row
+- No script for `d6.science.stale_docs`: it is a per-claim judgment across
+  `docs/science/` and the out-of-repo memory notes, recorded via a `record()`
+  one-liner; every verdict is cited both sides (`doc:line` + memory note) below
 - CSVs (gitignored; committed with `git add -f`):
   `data/cache/audit/doc_literals.csv`
   (`doc,line,symbol,doc_value,code_value,verdict`) and
@@ -31,6 +35,7 @@ doc, skill, or CLAUDE.md was modified.**
 | `d6.authority.claimants` | 4 | CLAUDE.md + 3 `docs/AI_interaction` files; only CLAUDE.md is loaded by the harness |
 | `d6.dup_pair_agreement` | not-measured | recon overlap %s restated below; full pairwise diff deferred (ADR-005 deletes the copies) |
 | `d6.superpowers.retraction_markers` | 4 | of 80 files under `docs/superpowers/` (spec recon counted 76 before the audit added its own) |
+| `d6.science.stale_docs` | 4 | of 12 `docs/science/` results docs — but **not the two cases the spec predicted**, and 3 of the 4 are stale in a single clause (see below) |
 
 ## Scan scope and the self-contamination guard
 
@@ -189,6 +194,110 @@ not labelled in the corresponding spec/plan files; the
 retraction only as a lowercase aside about *prior* work. A reader (human or
 agent) with only `docs/superpowers/` cannot tell live designs from dead ones;
 the terminal-status record lives entirely in the private memory layer.
+
+## `docs/science` vs the memory layer: 4 of 12 stale — and the disease is milder here
+
+The retraction-marker survey above tests `docs/superpowers/` (designs and plans).
+This section tests the same disease in `docs/science/` (results write-ups): for
+each results doc, does a claim in it get walked back in the project's **memory
+layer** — which lives outside the repo at
+`C:\Users\Ben\.claude\projects\e--python-analysis-…\memory\` — with no marker in
+the doc itself? Judgment + grep, not a script; the memory notes were read
+read-only. Scope: the 11 dated results docs plus `QUESTION_INDEX.md`
+(= the spec's 12); the three `state_labeler/` files were surveyed too and are
+clean. Recorded as `d6.science.stale_docs = 4`.
+
+**Both cases the spec named as known resolve as ALREADY MARKED.** This is the
+headline, and it inverts the expectation:
+
+- *Transient/sustained state retraction* — fully marked in-doc.
+  `2026-07-02-transient-sustained-tf-cells.md` carries it at line 8 ("A follow-up
+  state analysis was **null**"), lines 20–21 ("the state claim (§7) was retracted
+  as a firing-rate artifact"), and the §7 heading itself (line 185, "**NULL**
+  (corrected)"), with the full raw-Hz-artifact post-mortem at line 190. Memory
+  side: `tf_transient_sustained_state_jul2026`.
+- *"Sustained StimSens = expert signature" refutation* — **never asserted in
+  `docs/science` at all.** The claim lived in a design spec
+  (`docs/superpowers/specs/2026-07-31-S1-…-design.md:30`) and was refuted in that
+  same spec at line 36; `QUESTION_INDEX.md:67` records the refutation explicitly
+  ("REFUTED en route: 'sustained StimSens bouts' is NOT an expert signature").
+  Memory side: `session_grouping_learning_axis_jul2026`.
+
+So the predicted count for these two is **zero**. The four stale docs found are
+different ones:
+
+| Doc:line | Claim as written | Walked back by | Marked? |
+|---|---|---|---|
+| `QUESTION_INDEX.md:49` | "**VMS engagement-gated** (StimSens≫Disengaged)" | memory `b10_impulsivity_kernel_jul2026` — "the earlier 'VMS strongly engagement-gated' was **per-trial PSEUDOREPLICATION** … engagement modulation **UNRESOLVED**" | no |
+| `2026-06-17-post-tf-null-research-direction.md:4, 48` | "…across BG_046 DMS, BG_031 striatum, **BG_039 cortex**, and **BG_038 GPe**"; "Batch on **BG_039 (cortex/M2)** — tests whether the TF-null is *regional*" | memory `multisubject_event_psth_readiness_jun2026` — BG_039 is "dorsal CP striatum (DMS…) **Pool-compatible with BG_046**"; BG_038 is cortex (MOp/SSp), "planning-doc 'GPe' = shank target not recording site" (resolved 2026-06-30) | no |
+| `2026-07-02-transient-sustained-tf-cells.md:108, 116` | "Every cell is TF-locked (diagonal = latency tiling)"; "~50 % of responsive cells are **suppression-type**"; "Fast pulses subsampled to 600/session (thousands occur; **irrelevant to the mean**)" | memory `tf_pulse_peth_circularity_bug_jul2026` — that heatmap is "**STILL SUSPECT (not yet audited)**", its tiling/TF-locked claims "probably sorting artifacts"; suppression fraction corrected 49 % → **36.9 %**; `PULSE_CAP=600` "threw away ~98.5 % of the ~41k fast pulses/session" | **§7 only** |
+| `2026-07-07-transient-sustained-spectrum-celltype.md:52, 172` | "`pulse_fwhm` … Spearman 0.11 … — **inherent, not a bug**"; mandatory caveat 2: "Describe the spectrum as skewed/heavy-tailed, **not clean lognormal**" | memory `tf_pulse_peth_circularity_bug_jul2026` (the ρ=0.11 weakness "is probably just noise" — same 600-cap) and `tf_spectrum_celltype_orthogonality_jul2026` ("a direct lognorm-vs-gamma MLE/AIC/KS fit later **FAVORED lognormal in all 3 regions** … OK to call `interp_fwhm` ~lognormal now") | no |
+
+Two details make the first two rows firmer than a prose comparison would:
+
+- **The B10 index row was never touched by its own correction.** It is
+  byte-identical since `39c19db` (2026-07-01); the two commits that landed the
+  correction — `e16fcd5` "honest CI corrections" and `bfefa87` "paired
+  within-session tests settle the two suggestive contrasts", both 2026-07-02 —
+  edited only `2026-07-01-B10-results.md` and `2026-07-02-B10-RESULTS-explained.md`.
+  `QUESTION_INDEX.md` was then edited three further times (2026-07-21, 2026-08-03
+  ×2) and the stale clause survived every pass. **Both results docs it links to
+  say the opposite** ("Do NOT say 'tracking switches off when disengaged'"), so
+  the index contradicts its own children — the failure is the summary layer, not
+  the science.
+- **The region error is load-bearing, not cosmetic.** The 2026-06-17 doc's
+  argument is "**Four regions including cortex all at ≈0% ⇒ the floor reflects the
+  metric, not the biology**" (line 6) and its recommended cheap control is to
+  batch BG_039 to "test whether the TF-null is *regional*". BG_039 is the same
+  region as BG_046, so that control was void as designed. Every `docs/science`
+  doc from 2026-07-01 onward states "BG_046, BG_039 = DMS" — the corpus
+  contradicts itself and only the older doc is wrong.
+
+### The honest read: `docs/science` is markedly healthier than `docs/superpowers`
+
+Eight of twelve are clean, and three of the four hits are stale in **one clause**
+rather than wholesale. The corpus has a real correction habit that
+`docs/superpowers/` lacks: `2026-08-03-early-lick-learning-results.md` carries an
+explicit "❌ Corrected overclaim" section (§4) plus the "'Naive' is not naive"
+S1 caveat; `2026-07-02-B10-RESULTS-explained.md` ends with a "Corrections applied
+during verification" section; `2026-07-20-preparatory-activity-transient-sustained.md`
+reframes its own Claim 1 from latency to magnitude and demotes Claim 2 to WEAK;
+`2026-07-21-sensory-motor-geometry-regulation-null.md` is a write-up *of* a
+result collapsing under its own confound battery. Row 3 above is the
+instructive case: the same file that contains the corpus's **best** in-doc
+retraction (§7) leaves §3 unmarked — corrections here are attached to the claim
+that was attacked, not swept across the document.
+
+### The bigger exposure is a different disease, and it is not in this count
+
+`d6.science.stale_docs` counts walked-back **claims**. It deliberately does not
+count invalidated **inputs**, which are more widespread and marked nowhere in
+`docs/science`:
+
+- **The stale TF-responsive registry.** `data/cache/tf_responsive/README.md`
+  carries a prominent "⚠️ STALE — these registries predate the lick-channel fix
+  (2026-07-31)" banner: the lick nuisance regressor changed on *every session of
+  all three subjects*, so "borderline `resp_log2` calls will flip" and the
+  "VMS 5.3 % > DMS 2.8 % / 3.1 %" headline "must be re-derived" (see
+  `d4.tfresp.flips`). **Six** `docs/science` docs rest on that registry —
+  `2026-07-01-B9`, `2026-07-01-B10`, `2026-07-02-B10-RESULTS-explained`,
+  `2026-07-02-transient-sustained-tf-cells`, `2026-07-07-…-spectrum-celltype`,
+  `2026-07-20-preparatory-activity-…` — and **none mentions it**. The cache knows
+  it is stale; the write-ups do not.
+- **Corrupted caches under a live results doc.**
+  `2026-08-03-early-lick-learning-results.md` §7 lists
+  `data/cache/behavior/early_lick_*.csv` as its artefacts. Three of those files
+  (`early_lick_repl_BG_046/039/031.csv`) plus the three `fa_hazard_trials_*.csv`
+  are exactly the six offenders in the RED integrity test
+  (`d4.ids.integrity_test_red`, 15,802 stripped-id rows). No note in the doc.
+- **QC1.** `QUESTION_INDEX.md:66` states that 23 pkls make "`ni_events`-aligned
+  NEURAL analyses invalid on them", naming BG_046 `20082025` and `05092025_b`
+  (both Expert, both on the primary subject). No neural results doc cites it.
+
+These are not counted because none is a claim someone retracted — they are
+inputs someone later found broken. But for the new repo they are the more
+dangerous class: a reader who checks each doc for a retraction banner finds
+none and concludes the work is current.
 
 ## Skill trigger-overlap: judgment from the seven descriptions
 

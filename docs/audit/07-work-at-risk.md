@@ -9,7 +9,9 @@ disposition table (deliverable 7).
 **Strictly read-only.** The scripts walk and `lstat`; they issue `git`
 *plumbing* queries only. No `git worktree` command was run, and nothing under
 `.claude/worktrees/`, `data/` or `FIGURES/` was created, staged, modified or
-deleted.
+deleted. The same guarantee covers the **sibling repo** surveyed at the end of
+this document: it was grepped and one `git log -1` was read; nothing in it was
+written, staged or committed.
 
 - Script: `scripts/audit/d7_work_at_risk.py`
   (`py scripts/audit/d7_work_at_risk.py`, exit 0)
@@ -18,6 +20,8 @@ deleted.
   the disposition table's verdicts rest on
 - Disposition draft: `docs/audit/branch-disposition.md`
   (RECOMMENDED filled, **DECISION empty — the owner fills it at review**)
+- No script for `d7.sibling.duplication`: a single read-only `grep` against the
+  sibling repo, recorded via a `record()` one-liner (command in the CSV row)
 - Measurement ids: `d7.*` in `docs/audit/measurements.csv`
 
 ## Summary
@@ -30,6 +34,7 @@ deleted.
 | `d7.untracked.at_risk` | **5 of 6** untracked entries exist on no ref | the 6th is byte-identical to a committed QC1 copy |
 | `d7.handlabels.exposure` | 269 files / 31.0 MB of hand labels, **220 of them untracked** | backed up 2026-08-06 — but to the **same physical disk** |
 | `d7.stash.0` / `d7.stash.1` | both tags present and readable | 2026-05-13/14; neither is on any remote ref |
+| `d7.sibling.duplication` | **12** `.py` files in the photometry sibling repo | re-declares this repo's task constants and manifest contract; has **0** uses of `canonical_session_id` |
 
 ## The junction hazard is live, and the prune works
 
@@ -189,6 +194,72 @@ stash can be applied blind; the question at review is whether the *intent* of
 either change survived. The audit's finding is narrower and firm: **the two tags
 carry 6 commits that exist on no remote ref**, so securing them is a push, not a
 merge decision.
+
+## The sibling repo: 12 files that re-declare this repo's task semantics
+
+Work at risk is not only work that exists in one place — it is also *definitions*
+that exist in two places with no link between them. The photometry sibling
+`e:/python_analysis/git_repos/vis_detect_analysis_Apr2023` (package
+`visdetect_photom`, HEAD `b2736d2` 2026-06-16) is a **separate repo that is not
+in scope for the rebuild** but shares this project's task, subjects and staging
+concepts. It was treated as **strictly read-only**: nothing was written, staged
+or committed there, and the only `git` command issued against it was a
+`git log -1`.
+
+```
+grep -rlE "canonical_session_id|zfill\(8\)|CHANGE_SIZES|staging_manifest" \
+  /e/python_analysis/git_repos/vis_detect_analysis_Apr2023 --include=*.py
+```
+
+**12 files** (`d7.sibling.duplication`):
+
+| Area | Files |
+|---|---|
+| library | `src/visdetect_photom/core/constants.py`, `core/staging.py`, `analysis/geometry.py`, `analysis/group_utils.py` |
+| scripts | `scripts/analysis/behavior/fit_hmm.py`, `scripts/data_management/stage_sessions.py`, `scripts/analysis/photometry/{01_d1_vs_d2_response_profiles,04_neural_psychometric,08_d1_d2_geometry,09_tf_pulse_encoding,11_fa_suppression}.py` |
+| tests | `tests/core/test_staging.py` |
+
+By pattern: `CHANGE_SIZES` 7 files, `staging_manifest` 6 files,
+`canonical_session_id` **0**, `zfill(8)` **0**.
+
+What matters is *how* they match — these are **independent re-declarations, not
+imports**. The sibling cannot import `visdetect`; it re-states the same
+constructs:
+
+- **`core/constants.py:26`** — `CHANGE_SIZES = [1.25, 1.35, 1.5, 2.0, 4.0]`,
+  **verbatim equal** to this repo's live `config.CHANGE_SIZES`, alongside its own
+  `FA_RT_SPLIT = 3.0` (also equal) and its own `EVENT_VALID_OUTCOMES` — which
+  encodes the same alignment rule under **different keys and casing**
+  (`change`/`fa_lick`/`hit_lick` → `['Hit','Miss']` vs this repo's
+  `Change_ON`/`FA`/`Hit` → `{'hit','miss'}`). Same rule, two spellings, no shared
+  source: exactly the divergence hazard the doc-twin section of D6 describes,
+  across a repo boundary where no grep in either checkout will find the other.
+- **`core/staging.py:12`** — a second `load_staging_manifest()` with a different
+  contract: it takes a path and returns `None` when the file is absent, where
+  this repo's takes `qc_only=` and applies `SESSION_FILTER`. Two functions, one
+  name, incompatible semantics.
+
+**The session-id finding is the sharpest one.** The sibling has **zero** uses of
+`canonical_session_id` or `zfill(8)`; `staging.py:33` matches sessions with a raw
+`manifest["session_name"] == session.session_id`. Its only `zfill` calls are
+`zfill(3)` on *subject* ids. So the leading-zero-day footgun this repo spent a
+`canonical_session_id()` helper, a CLAUDE.md paragraph and a (currently RED)
+integrity test to close is **simply unfixed there** — and 15,802 corrupted rows
+in this repo (`d4.ids.integrity_test_red`) are the measured cost of getting it
+wrong once.
+
+**Scope note.** A third tree, `vis_detect_analysis_May2026`, sits beside the two;
+it is **not a git repo** (loose copy, package `vis_detect_analysis_may2026`) and
+greps **0** for all four patterns, so the boundary is specifically Apr2023.
+
+**For the ADR-011 / ADR-015 boundary:** the new repo's canonical constants and
+manifest contract have an external consumer that will not be migrated with it.
+Two options, and the decision belongs to the owner: publish the task-semantics
+layer (`CHANGE_SIZES`, `FA_RT_SPLIT`, `EVENT_VALID_OUTCOMES`, the session-id
+canonicaliser, the manifest schema) as something the sibling can depend on, or
+declare the duplication accepted and record the divergence in both repos. What is
+not viable is the status quo, where the two copies already disagree on outcome
+casing and on whether the session-id bug is fixed.
 
 ## What D7 does not measure
 
