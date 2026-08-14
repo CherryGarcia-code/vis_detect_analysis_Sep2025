@@ -10,10 +10,24 @@ register:
 
 | Was quarantined | Resolved by | Now |
 |---|---|---|
-| `ref`-trial change-presented ambiguity | Task 4 (`d1.ref.with_change_time` = 18 = `d1.ref.total`, median RT +83 ms) | Register entry **11**, status SETTLED-CONVENTION |
+| `ref`-trial change-presented ambiguity | Task 4 (`d1.ref.with_change_time` = 18 = `d1.ref.total`, median RT +83 ms), **and independently at the hardware level** — all 43 surplus raw `Change_ON` pulses fall on Hit/Miss/Ref, none on `fa`/`abort` | Register entry **11**, status SETTLED-CONVENTION, two independent sources |
 | `CHANGE_SIZES` membership divergence | Task 15 per-consumer check (`d8.changesizes.catch_in_go_loops` = 0) | Register entry **12**, status SETTLED-CONVENTION |
 
-Ordered by how much they block. **Q1–Q5 block sub-project 3 or sub-project 1; Q6–Q13 do not.**
+**Q6 was substantially resolved after the audit's first pass** by
+`docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` (2026-08-13/14) and is rewritten below rather than closed:
+the method is settled and validated, per-session generalisation is not. **Q12 is new**, raised by
+the same document. Both changes are Task-15-fix additions.
+
+> **On the new evidence source.** `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` was produced outside this
+> audit and is **read-only** to it. It is also **untracked in git** — a single uncommitted copy on
+> the same disk as the repo — so it is itself work at risk (`d7.untracked.at_risk` = 5 of 6 becomes
+> 6 of 7). Securing it is a commit, not an analysis. Its scope caveat is load-bearing and is
+> repeated wherever it is cited: **one session (BG_046, 17 Sep 2025) of one subject**, with every
+> numeric constant to be re-derived per session.
+
+Ordered by how much they block. **Q1–Q5 block sub-project 3 or sub-project 1; Q6–Q12 do not** —
+with the exception that Q6's *remaining* part is a scoping question for sub-project 1's `X:` pass
+and Q12 blocks any D1/D2 pathway claim from optotagging.
 
 ---
 
@@ -104,25 +118,48 @@ Ordered by how much they block. **Q1–Q5 block sub-project 3 or sub-project 1; 
 - **Blocks** — the entire raw re-ingest plan, format-independent. **This is the highest-priority
   quarantine entry.**
 
-## Q6 — Which NI events the re-ingest actually re-extracts (the hinge decision)
+## Q6 — The NI re-extraction: **method settled, generalisation open**
 
-- **Not a measurement gap — an unmade decision**, and it is the one that flips four register
-  entries (6, E4, 8 and, indirectly, A1). As the code stands, "re-ingest from raw" means
-  **re-ingest from the MATLAB extraction output**: `build_session_from_raw` reads an
-  already-extracted `*NIdaq_events.mat` (`ingest.py:444`) plus behavioural trials from `raw_dir`
-  (`ingest.py:441`). It never opens `nidq.bin`.
-- **Why it matters** — `lick_channels.py:5-8` records that the raw `nidq.meta` channel map is
-  **byte-identical across all 50 BG_046 raw sessions** and always names the lines
-  `Piezo_1`/`Piezo_2`. So the naming split, and plausibly BG_031's 35-of-43 missing `Laser`
-  events, are artefacts of the **extraction step**, not of the recordings. Re-extracting NI from
-  SpikeGLX dissolves them; re-running ingest against the existing `.mat` files reproduces them
-  exactly.
-- **The check that settles it** — on **one** BG_031 session that currently lacks `Laser`
-  (e.g. `BG_031_100325`), extract the NI digital lines directly from `nidq.bin`/`nidq.meta` and
-  check whether a laser pulse train is present. One session answers it. If present, the new
-  ingest must own NI extraction; if absent, the gap is acquisition-side and E4 becomes permanent.
-- **Cost** — one session's `X:` read; fold into the Q5 sweep.
-- **Blocks** — the re-ingest disposition of register entries 6, 8 and E4.
+**Substantially resolved on 2026-08-13/14, after the audit's first pass.** This entry previously
+read "an unmade decision". It is no longer one.
+
+- **What is now settled.** `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` re-extracted one BG_046 session
+  (17092025) directly from `nidq.bin` and (a) **confirms the diagnosis** — the existing pipeline's
+  NI half reads the MATLAB product (`build_session_from_raw` → `*NIdaq_events.mat`,
+  `ingest.py:444`; it never opens `nidq.bin`), while its *behavioural* half genuinely does read
+  raw JSON (`load_behavioral_trials` globs `Session/*trials.json`, `ingest.py:71-73`) — and
+  (b) **supplies a validated recipe**: channel map parsed from `~snsChanMap`, per-channel
+  threshold derivation from observed levels, pulse-width rules per channel, and a 12-step pipeline
+  checklist. Validation: on the threshold-insensitive channels the re-extraction reproduces MATLAB
+  at **0.000 ms** — `Baseline_ON` 739/739, `Change_ON` 323/323, `Valve` 251/251, `Laser`
+  1003/1003.
+- **The disposition therefore changes** from *"needs an owner decision"* to **"needs the new
+  pipeline to extract NI from `nidq.bin` per this spec"**. Register entries 6, E4 and 8 stay
+  `CONDITIONAL` only in the sense that they are conditional on that work being done, not on a
+  choice being made.
+- **What genuinely remains open — and the spec says so itself.**
+  1. **Per-session generalisation.** One session of one subject. The channel map is *reported*
+     byte-identical across all 50 BG_046 raw sessions, but every numeric constant — thresholds,
+     the 67 ms display latency, the 8σ lick threshold — is explicitly to be **re-derived per
+     session**. The recipe is per-session by construction; the *numbers* in the document are not
+     transferable.
+  2. **BG_031 specifically.** The Laser mechanism (E4) was established on BG_046. **Check:** on
+     one BG_031 session currently lacking `Laser` (e.g. `BG_031_100325`), read ch7 from
+     `nidq.bin`/`nidq.meta` and test for a ~0.38 V pulse train at a derived threshold. One session
+     answers it. If present, E4 is an extraction artefact and dissolves; if absent, the gap is
+     acquisition-side and E4 becomes permanent.
+  3. **Two channel-specific traps that must not be re-discovered.** `Baseline_ON` contains a
+     single excursion to the negative rail (−32768) while resting near 0 V, so a min/max midpoint
+     threshold lands *below* the resting level and edge detection collapses — **0 of 739 pulses
+     recovered**. Use a robust two-level estimate instead. And the Laser peaks at **0.383 V**, so
+     any assumed logic level finds zero pulses.
+  4. **Whether the digital word carries more than MATLAB ever took.** `dig4` is a duplicate of the
+     raw `Baseline_ON` line that MATLAB never extracted — a free cross-check on trial-onset
+     extraction that no current artefact uses.
+- **Cost** — one BG_031 session's `X:` read for item 2; fold into the Q5 sweep. Items 1, 3 and 4
+  are new-pipeline work, not audit work.
+- **Blocks** — nothing that a decision would unblock. It scopes sub-project 1's NI extraction
+  stage, which `visdetect.core.spikeglx` (cold, and **truly untested**) is the natural home for.
 
 ## Q7 — The BG_046 detection-composition drift figure has no measurement of its own
 
@@ -190,6 +227,39 @@ Recorded so nothing falls between documents. None blocks sub-project 3.
 | `partial_spearman` estimator spread measured on **one** input | `d3.pspearman.spread` = 0.892 / 0.901 / 0.901 | Max spread 0.0090 ≤ the 0.02 upgrade threshold, so the register entry was **not** upgraded. Re-run the three families on 2–3 further real inputs with different tie structure before consolidating; B and C are an exact algebraic identity, so only A-vs-B can move |
 | Whether the two 21.99 GB eye-cam copies are one file on disk | — | `fsutil hardlink list` on both paths; not probed because it is write-adjacent tooling on worktree trees |
 | Historical figure `dt` provenance | `d1.tfperiod.figure_attribution` | See Q3 — unrecoverable; superseded by ADR-019 |
+
+## Q12 — Which optotagging laser block was SNr and which was GPe
+
+- **Register entry** — A15. Direction is known and stark — **every D1/D2 pathway label from
+  optotagging may be swapped** — but the polarity is not resolvable from anything in the repo.
+- **The disagreement.** `split_laser_blocks` returns the blocks **in time order** and its caller
+  binds them positionally as `(gpe_pulses, snr_pulses)`, i.e. **first block = GPe**
+  (`src/visdetect/analysis/optotagging.py:505-510`, `:773`). The NI spec measured **first block =
+  SNr** on BG_046 17092025 (`docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §10). Neither assumption is
+  recorded anywhere authoritative: the spec **checked all six settings files** and the mapping is
+  in none of them.
+- **Why it is quarantined rather than asserted.** The spec establishes the mapping for *one*
+  session from the experimenter's own account, not from a file. It is entirely possible the block
+  order varies between sessions — which is precisely why the spec's recommendation is to capture
+  the mapping as acquisition metadata. Declaring the code "wrong" on one session's testimony would
+  substitute one undocumented assumption for another.
+- **The check that settles it, in order of strength.**
+  1. **Documentary** — recover the per-session fibre→structure assignment from the experimenter's
+     records or lab notebook and write it into per-session metadata (ADR-019 already requires
+     `subjects` and `acquisition` tables). This is the only check that settles it *correctly*, and
+     it is not a compute task.
+  2. **Anatomical** — the fibre tracks are localisable; `visdetect.anatomy` already does CCF
+     localization for this subject. A fibre track terminating in SNr versus GPe is decisive and
+     independent of the block order.
+  3. **Corroborative only** — the response asymmetry (16 block-0-only responders vs 1
+     block-1-only) is consistent with the repo's standing "3 collision-confirmed, all D1" claim
+     under the spec's mapping and inconsistent under the code's. Suggestive; different sessions
+     and different pipelines, so it cannot arbitrate on its own.
+- **Until it is settled** — no claim naming D1 or D2 from optotagging is supportable, and the
+  existing `data/cache/optotagging/*` label columns should be treated as *block index*, not as
+  pathway. ADR-018 already makes `celltype_label_source` a required ledger field; this entry is
+  why `optotag_candidate` must carry the block→target provenance with it.
+- **Blocks** — every D1/D2 pathway claim derived from optotagging.
 
 ---
 

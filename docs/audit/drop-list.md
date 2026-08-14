@@ -204,7 +204,7 @@ otherwise inherit.
 | `data/cache/audit/syspath_sites.csv` | 3 **self-scan junk rows** — `scripts\audit\d2_layering.py:2`, `:30`, `:36` (category `computed`) are the census matching its own docstring, comment and detector string. Filter `file` starting `scripts/audit`; the tree has **225** sites net of all 8 audit-own rows |
 | `data/cache/audit/date_parser_sites.csv` | **Incomplete**: 19 `strptime` rows (plus 77 `zfill8` rows in the same file). The true parser-site population is **23** — the 4 out-of-regex sites are enumerated in register entry 3 |
 | `data/cache/audit/csv_key_domains.csv` | **`rows_lost_on_join` / `joinable_to_manifest` are unusable** for the 126 path-scoped other-subject files (~118,621 phantom "lost" rows; the heuristic reads only the filename). Genuine BG_046 loss is **667 rows across 8 files** |
-| `data/cache/audit/constants_census.csv` | **Bucket labels are not ground truth** (the `"OUT" in name` rule). Use `data/cache/audit/constants_retriage.csv` instead: of 127 disagreeing names, **43** are scientific parameters, 84 are non-scientific, 0 ambiguous (`d8.constants.scientific_divergent`). `defined_in` is capped at 6 sites, so names with more are under-enumerated |
+| `data/cache/audit/constants_census.csv` | **Bucket labels are not ground truth** (the `"OUT" in name` rule). Use `data/cache/audit/constants_retriage.csv` instead: of 127 disagreeing names, **43** are scientific parameters, 84 are non-scientific, 0 ambiguous (`d8.constants.scientific_divergent`). `defined_in` is capped at 6 sites, so names with more are under-enumerated. **The re-triage CSV holds only `retypes_agree = False` rows**, so of the three names `01-constants.md:51-70` flags as suspect mislabels, `OUTCOMES` and `OUTCOME_COLORS` appear (both non-scientific: a figure-panel spec and a palette) while **`N_TRIALS_PER_OUTCOME` is absent by construction — its two sites agree, so it is not a divergence at all.** All three of that caveat's candidates therefore resolve as *not* scientific-parameter divergences |
 | `data/cache/audit/traceability_sample.csv` | The `producer` column names a **mentioner, not a verified writer**; 7 rows attribute `scripts/audit/d3_scripts_census.py`, which embeds artefact stems as data and sorts ahead of the real writers. The `method` column is unaffected. Separately, **`d4.trace.tracked_covered` = 83 counts `git ls-files` output, not verified census inclusion** — a tracked figure outside a `FIGURES/<topic>/` directory would inflate it silently. None exists today (checked), and the implementer's manual set-difference confirmed 0 missing, but the check is not mechanically re-derivable from the commit; re-verify with a set-difference, not by trusting the number |
 | All census CSVs | **Windows backslash separators.** Normalise on read. `module_register_map.csv`, `cold_list_seed.csv` and `constants_retriage.csv` (Task-15 outputs) use forward slashes |
 
@@ -218,6 +218,15 @@ otherwise inherit.
 - **`data/cache/tf_responsive/README.md`** — its STALE banner is the only in-place record of
   register entry 5, and it is what defeats the mtime staleness heuristic. Keep the banner; fix the
   heuristic.
+- **`docs/raw_data/NIDAQ_AND_EVENT_SPEC.md`** — appeared during the Task-15 fix pass, **untracked
+  and on no ref**: 386 lines / 20,711 bytes, a full re-extraction of one BG_046 session directly
+  from `nidq.bin` with every claim measurement-backed. It is now cited by register entries 6, 8,
+  11, E4, A13, A14 and A15 and by quarantine Q6/Q12 — the single most load-bearing new evidence in
+  the corpus — and it exists as **one uncommitted copy on the same disk as the repo**. That makes
+  `d7.untracked.at_risk` 6 of 7, not 5 of 6. **Not a drop candidate; a commit candidate**, and it
+  should be committed before anything else in this list is acted on. The working code it refers to
+  (`tmpclaude-BG_046_17092025/`, ~6.3 GB, git-ignored) is a separate, larger exposure that D7 did
+  not size because it did not exist at D7's snapshot.
 - **The five single-copy untracked scripts** (`validate_event_spike_clock_drift.py`,
   `chronic_feasibility_figure.py`, `render_opto_exemplar_figure.py`,
   `exemplar_tracking_figure.py`, `scratchpad_state_bout_inventory.csv`) — 1,489 lines that exist
