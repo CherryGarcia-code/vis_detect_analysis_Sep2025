@@ -219,14 +219,17 @@ otherwise inherit.
   register entry 5, and it is what defeats the mtime staleness heuristic. Keep the banner; fix the
   heuristic.
 - **`docs/raw_data/NIDAQ_AND_EVENT_SPEC.md`** — appeared during the Task-15 fix pass, **untracked
-  and on no ref**: 386 lines / 20,711 bytes, a full re-extraction of one BG_046 session directly
-  from `nidq.bin` with every claim measurement-backed. It is now cited by register entries 6, 8,
-  11, E4, A13, A14 and A15 and by quarantine Q6/Q12 — the single most load-bearing new evidence in
-  the corpus — and it exists as **one uncommitted copy on the same disk as the repo**. That makes
-  `d7.untracked.at_risk` 6 of 7, not 5 of 6. **Not a drop candidate; a commit candidate**, and it
-  should be committed before anything else in this list is acted on. The working code it refers to
-  (`tmpclaude-BG_046_17092025/`, ~6.3 GB, git-ignored) is a separate, larger exposure that D7 did
-  not size because it did not exist at D7's snapshot.
+  and on no ref**: **481 lines**, a full re-extraction of one BG_046 session directly from
+  `nidq.bin`, then **adversarially audited by six independent reviewers** and corrected. It is now
+  cited by register entries 6, 8, 11, E1, E4, A13, A14 and A15 and by quarantine Q6/Q12 — the
+  single most load-bearing new evidence in the corpus — and it exists as **one uncommitted copy on
+  the same disk as the repo**. That makes `d7.untracked.at_risk` 6 of 7, not 5 of 6. **Not a drop
+  candidate; a commit candidate**, and it should be committed before anything else in this list is
+  acted on. ⚠ It is also a **living** document that has already revised itself once mid-audit
+  (386 → 481 lines, with retractions); cite it by section and re-read before relying on a figure.
+  The working code it refers to (`tmpclaude-BG_046_17092025/`, ~6.3 GB, git-ignored, including six
+  reviewers' scratch work under `_refute1/`…`_refute6/`) is a separate and much larger exposure
+  that D7 did not size because it did not exist at D7's snapshot.
 - **The five single-copy untracked scripts** (`validate_event_spike_clock_drift.py`,
   `chronic_feasibility_figure.py`, `render_opto_exemplar_figure.py`,
   `exemplar_tracking_figure.py`, `scratchpad_state_bout_inventory.csv`) — 1,489 lines that exist

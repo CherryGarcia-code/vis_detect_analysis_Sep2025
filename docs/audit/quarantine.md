@@ -10,7 +10,7 @@ register:
 
 | Was quarantined | Resolved by | Now |
 |---|---|---|
-| `ref`-trial change-presented ambiguity | Task 4 (`d1.ref.with_change_time` = 18 = `d1.ref.total`, median RT +83 ms), **and independently at the hardware level** — all 43 surplus raw `Change_ON` pulses fall on Hit/Miss/Ref, none on `fa`/`abort` | Register entry **11**, status SETTLED-CONVENTION, two independent sources |
+| `ref`-trial change-presented ambiguity | Task 4 (`d1.ref.with_change_time` = 18 = `d1.ref.total`, median RT +83 ms), **and independently at the hardware level** — each trial's own `Baseline_ON` pulse ends *before the change was scheduled* on 100 % of FA trials (n=263, median margin 3.163 s) and 100 % of aborts (n=153, 4.749 s) | Register entry **11**, status SETTLED-CONVENTION, two independent sources |
 | `CHANGE_SIZES` membership divergence | Task 15 per-consumer check (`d8.changesizes.catch_in_go_loops` = 0) | Register entry **12**, status SETTLED-CONVENTION |
 
 **Q6 was substantially resolved after the audit's first pass** by
@@ -24,6 +24,12 @@ the same document. Both changes are Task-15-fix additions.
 > 6 of 7). Securing it is a commit, not an analysis. Its scope caveat is load-bearing and is
 > repeated wherever it is cited: **one session (BG_046, 17 Sep 2025) of one subject**, with every
 > numeric constant to be re-derived per session.
+>
+> ⚠ **Cite only the audited version.** The document was adversarially reviewed by six independent
+> reviewers and **explicitly retracts several of its own first-pass claims**. This audit corrected
+> its register and quarantine entries against the audited text on 2026-08-14; anything marked ❌
+> there is refuted and must not be re-imported. The retracted set is listed in the register's
+> evidence-source note.
 
 Ordered by how much they block. **Q1–Q5 block sub-project 3 or sub-project 1; Q6–Q12 do not** —
 with the exception that Q6's *remaining* part is a scoping question for sub-project 1's `X:` pass
@@ -128,35 +134,59 @@ read "an unmade decision". It is no longer one.
   NI half reads the MATLAB product (`build_session_from_raw` → `*NIdaq_events.mat`,
   `ingest.py:444`; it never opens `nidq.bin`), while its *behavioural* half genuinely does read
   raw JSON (`load_behavioral_trials` globs `Session/*trials.json`, `ingest.py:71-73`) — and
-  (b) **supplies a validated recipe**: channel map parsed from `~snsChanMap`, per-channel
-  threshold derivation from observed levels, pulse-width rules per channel, and a 12-step pipeline
-  checklist. Validation: on the threshold-insensitive channels the re-extraction reproduces MATLAB
-  at **0.000 ms** — `Baseline_ON` 739/739, `Change_ON` 323/323, `Valve` 251/251, `Laser`
-  1003/1003.
+  (b) **supplies a validated recipe**: settings-first discipline, channel map parsed from
+  `~snsChanMap`, per-channel threshold derivation from observed levels, a merge-then-first-pulse
+  edge rule, and a 13-step pipeline checklist. Under the corrected rule the re-extraction matches
+  MATLAB **exactly** — `Baseline_ON` 739/739, `Change_ON` 323/323, `Valve` 251/251, all at
+  **0.0000 ms**. (⚠ The earlier "Laser 1003/1003" agreement row was **retracted**: there are 1004
+  raw rises — 1002 real plus two 0.094 ms artefacts, **both mid-behaviour** — and no rule yields
+  1003. Likewise "reproduces `NI_Sync.txt` to 0.000 ms" was retracted as a mathematical identity.)
 - **The disposition therefore changes** from *"needs an owner decision"* to **"needs the new
   pipeline to extract NI from `nidq.bin` per this spec"**. Register entries 6, E4 and 8 stay
   `CONDITIONAL` only in the sense that they are conditional on that work being done, not on a
   choice being made.
+- **⚠ Read the document in its audited form.** It was adversarially reviewed by six independent
+  reviewers and **retracts several of its own first-pass claims**. Anything marked ❌ there must
+  not be re-imported: the ≥15 ms sliver rule, the "~5 ms tick", "~4 frames", the
+  surplus-`Change_ON` argument for `EVENT_VALID_OUTCOMES`, the laser-threshold explanation of the
+  2025 gap, the 8σ detector's self-validation, and the "6× / 100 %-valid" encoder figures.
+- **§0 is the process lesson, and it generalises beyond NI.** Two constants were laboriously
+  *fitted* that were sitting in `Session/*_session_settings.json` all along, missed because the
+  file was searched with keyword regexes that matched none of the actual names. **Dump the settings
+  JSONs in full and read them before deriving anything.** The file also resolves several standing
+  puzzles for free: `Torientationdelaymin/…meanadd = 6/2` explains the 6–11 s change latencies,
+  `Trewdavailable = 2` explains the ~2000 ms second pulses on Miss trials, `punishearly` defines
+  the `fa` outcome, and `changelist1/2` = [4, 2] / [1.5, 1.35, 1.25] *are* the change sizes
+  (cross-check for register entry 12).
 - **What genuinely remains open — and the spec says so itself.**
-  1. **Per-session generalisation.** One session of one subject. The channel map is *reported*
-     byte-identical across all 50 BG_046 raw sessions, but every numeric constant — thresholds,
-     the 67 ms display latency, the 8σ lick threshold — is explicitly to be **re-derived per
-     session**. The recipe is per-session by construction; the *numbers* in the document are not
-     transferable.
-  2. **BG_031 specifically.** The Laser mechanism (E4) was established on BG_046. **Check:** on
-     one BG_031 session currently lacking `Laser` (e.g. `BG_031_100325`), read ch7 from
-     `nidq.bin`/`nidq.meta` and test for a ~0.38 V pulse train at a derived threshold. One session
-     answers it. If present, E4 is an extraction artefact and dissolves; if absent, the gap is
-     acquisition-side and E4 becomes permanent.
-  3. **Two channel-specific traps that must not be re-discovered.** `Baseline_ON` contains a
-     single excursion to the negative rail (−32768) while resting near 0 V, so a min/max midpoint
-     threshold lands *below* the resting level and edge detection collapses — **0 of 739 pulses
-     recovered**. Use a robust two-level estimate instead. And the Laser peaks at **0.383 V**, so
-     any assumed logic level finds zero pulses.
-  4. **Whether the digital word carries more than MATLAB ever took.** `dig4` is a duplicate of the
-     raw `Baseline_ON` line that MATLAB never extracted — a free cross-check on trial-onset
-     extraction that no current artefact uses.
-- **Cost** — one BG_031 session's `X:` read for item 2; fold into the Q5 sweep. Items 1, 3 and 4
+  1. **Per-session generalisation.** One session, one subject, nothing replicated. The channel map
+     is *reported* byte-identical across all 50 BG_046 raw sessions, but every numeric constant —
+     thresholds, the ~67 ms latency, the lick threshold, the wheel scale — is explicitly to be
+     **re-derived per session**. The procedures transfer; the numbers do not.
+  2. **BG_031 specifically, and the check has changed shape.** E4's mechanism is no longer "the
+     0.383 V laser never crossed threshold" (retracted — at 0.150 V the line has 1,007 crossings);
+     it is **structural**: `Valve_R` is a per-trial field and no laser pulse falls inside any
+     trial. **Check:** on one BG_031 session lacking `Laser` (e.g. `BG_031_100325`), read ch7 from
+     `nidq.bin`/`nidq.meta` at a derived threshold *and* establish whether that subject's
+     extraction stores laser events per-trial. One session answers both.
+  3. **Channel traps that must not be re-discovered.** `Baseline_ON` has a single excursion to the
+     negative rail while resting near 0 V, so a min/max midpoint threshold sits *below* the
+     resting level and recovers **0 of 739** pulses — use robust levels. The Laser peaks at
+     **0.383 V**, so any assumed logic level finds zero. And **guard unconnected lines**: `Airpuff`
+     swings 0.028 V and a naive level estimator put a threshold inside its own noise, emitting
+     **17.4 million spurious edges** — require a minimum ~0.1 V swing before treating a line as
+     TTL (that keeps `Laser` and rejects `Airpuff`).
+  4. **Edge-pairing is unguarded in most code and one case is live.** `dig1`/`dig2` have **1 rise
+     and 0 falls** — they go high and never return. Code that pairs `rise[i]` with `fall[i]`
+     assumes the line starts LOW and every rise has a later fall; violate either and every event
+     pairs with the wrong partner, producing negative widths **with no error raised**. Assert both.
+  5. **`dig4` is NOT a duplicate of the analog `Baseline_ON`** (earlier claim retracted): only
+     **663/761** rise indices are sample-identical and the 22 slivers on each line occur at
+     completely different times (0 of 22 coincide). Its real value is being **threshold-free**,
+     which is what adjudicated the merge rule — and that rule matters, because the old width cut
+     placed **20 trial onsets 5.02 ms late** and the trial *count* cannot detect it (both rules
+     return 739).
+- **Cost** — one BG_031 session's `X:` read for item 2; fold into the Q5 sweep. Items 1 and 3–5
   are new-pipeline work, not audit work.
 - **Blocks** — nothing that a decision would unblock. It scopes sub-project 1's NI extraction
   stage, which `visdetect.core.spikeglx` (cold, and **truly untested**) is the natural home for.
@@ -251,10 +281,19 @@ Recorded so nothing falls between documents. None blocks sub-project 3.
   2. **Anatomical** — the fibre tracks are localisable; `visdetect.anatomy` already does CCF
      localization for this subject. A fibre track terminating in SNr versus GPe is decisive and
      independent of the block order.
-  3. **Corroborative only** — the response asymmetry (16 block-0-only responders vs 1
-     block-1-only) is consistent with the repo's standing "3 collision-confirmed, all D1" claim
-     under the spec's mapping and inconsistent under the code's. Suggestive; different sessions
-     and different pipelines, so it cannot arbitrate on its own.
+  3. **Corroborative only** — the response asymmetry (**17** block-0-only, 3 both, **0**
+     block-1-only, with 199 untestable reported separately) is consistent with the repo's standing
+     "3 collision-confirmed, all D1" claim under the spec's mapping and inconsistent under the
+     code's. Suggestive; different sessions and different pipelines, so it cannot arbitrate alone.
+     The asymmetry itself is not a detection-power artefact — responders are not higher-firing
+     (p = 0.705) and 8,397 sham tests produced zero false positives.
+- **A second, independent reason this matters more than a label.** The spec's audit moved the
+  antidromic interpretation from "consistent but not proven" to **disfavoured**: collision is
+  negative and well powered (short/long-gap P(evoked) ratio **1.197, 95 % CI [1.048, 1.367]** —
+  excluding *any* reduction), and responses **outlast the light by >50 ms**, which a conducted
+  spike cannot do. So even with the mapping settled, these are **candidates, not identified cell
+  types**, and synaptic/network drive is the positively supported alternative. Settling Q12 fixes
+  *which structure the fibre was over*; it does not by itself license a D1/D2 call.
 - **Until it is settled** — no claim naming D1 or D2 from optotagging is supportable, and the
   existing `data/cache/optotagging/*` label columns should be treated as *block index*, not as
   pathway. ADR-018 already makes `celltype_label_source` a required ledger field; this entry is

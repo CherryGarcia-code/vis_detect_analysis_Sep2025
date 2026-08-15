@@ -40,19 +40,30 @@ Entries **6 (lick channel)**, **E4 (BG_031 Laser gap)** and **8 (QC1 alignment)*
 the three rows dispositioned `CONDITIONAL` in the index below. Re-extracting NI from
 `nidq.bin`/`nidq.meta` dissolves the first two outright.
 
-**This is no longer an open decision.** `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` (2026-08-13/14)
-is a full re-extraction of one BG_046 session directly from `nidq.bin` that both **confirms the
-diagnosis** and **supplies a validated recipe** — channel map, per-channel threshold derivation,
-width rules, and a 12-step pipeline checklist, with the threshold-insensitive channels reproducing
-MATLAB at **0.000 ms** (`Baseline_ON` 739/739, `Change_ON` 323/323, `Valve` 251/251,
-`Laser` 1003/1003). What remains open is **per-session generalisation**, not method: the spec is
-one session of one subject and says so. Carried as `quarantine.md` **Q6**.
+**This is no longer an open decision.** `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` (2026-08-13/14,
+then **adversarially audited by six independent reviewers** and corrected) is a full re-extraction
+of one BG_046 session directly from `nidq.bin` that both **confirms the diagnosis** and **supplies
+a validated recipe** — settings-first discipline, channel map, per-channel threshold derivation,
+a merge-then-first-pulse edge rule, and a 13-step pipeline checklist. Under the corrected rule the
+re-extraction matches MATLAB **exactly**: `Baseline_ON` 739/739, `Change_ON` 323/323, `Valve`
+251/251, all at **0.0000 ms**. What remains open is **per-session generalisation**, not method:
+one session, one subject, nothing replicated. Carried as `quarantine.md` **Q6**.
 
-> **Evidence-source note.** Every citation below to `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` is to a
-> document produced outside this audit and **read-only** to it — nothing in it was edited. It is
-> also **untracked in git**, i.e. a single uncommitted copy on the same disk as the repo, which
-> makes it a work-at-risk item in its own right (see `drop-list.md`, *Not dropped, and why*, and
-> `d7.untracked.at_risk`, whose 5-of-6 becomes 6-of-7 with this file).
+> **Evidence-source note — read this before citing the spec.** It is a document produced outside
+> this audit and **read-only** to it; nothing in it was edited. It is **untracked in git**, i.e. a
+> single uncommitted copy on the same disk as the repo, which makes it a work-at-risk item in its
+> own right (see `drop-list.md`, *Not dropped, and why*, and `d7.untracked.at_risk`, whose 5-of-6
+> becomes 6-of-7 with this file).
+>
+> ⚠ **It retracts several of its own earlier claims, and this register was corrected against the
+> audited version.** Claims marked ❌ there must not be carried forward, notably: the "Laser
+> 1003/1003" agreement row (no rule yields 1003 — there are 1004 raw rises, 1002 real plus two
+> 0.094 ms artefacts, **both** mid-behaviour); "reproduces `NI_Sync.txt` to 0.000 ms" (a
+> mathematical identity, since `NI_Sync.txt` is CatGT's extraction converted with the same meta
+> rate, and the two `.mat` files are byte-identical to each other — three "independent
+> confirmations" were one measurement); the ≥15 ms sliver rule; the "~5 ms tick"; "~4 frames"; the
+> surplus-`Change_ON` argument; and the 8σ detector's self-validation. Each is handled at the
+> entry that cites it.
 
 ---
 
@@ -65,7 +76,7 @@ one session of one subject and says so. Carried as `quarantine.md` **Q6**.
 | 3 | `parse_session_date` mis-sorts stripped / 6-digit ids | LIVE | SURVIVES | Session ORDER changes → every learning-trajectory slope |
 | 4 | Corrupted session-id rows in live caches | LIVE | DISSOLVED (artefacts) / SURVIVES (mechanism) | Raw-string joins drop rows; canonical joins recover them → n increases |
 | 5 | Stale `tf_responsive` registries | CODE-FIXED / ARTEFACTS-STALE | DISSOLVED | Responsive-unit sets change post-lick-fix; VMS>DMS ordering unsafe |
-| 6 | Lick-channel extraction defect | CODE-FIXED / ARTEFACTS-STALE | CONDITIONAL | **Bidirectional, and the root cause is now measured**: the piezo is an ANALOG sensor thresholded as TTL — 2026 `Piezo_1` explains only 14.9 % of rewards |
+| 6 | Lick-channel extraction defect | CODE-FIXED / ARTEFACTS-STALE | CONDITIONAL | **Bidirectional, and the root cause is now measured**: the piezo is an ANALOG sensor thresholded as TTL — 2026 `Piezo_1` covers only **14.9 %** of rewards. The defect is *sensitivity*, not mis-timing |
 | 7 | TF-pulse PETH circularity + pre-fix caches | CODE-FIXED / ARTEFACTS-STALE | DISSOLVED | Sign-aligned averages lose the manufactured effect; raw PETH now validates the GLM |
 | 8 | Trial/event alignment (QC1) | IN-REPAIR | CONDITIONAL | Trial↔event pairing changes on 23 of 253 pkls; `ni_events`-aligned neural results invalid there |
 | 9 | Retracted transient/sustained **state** result | HISTORICAL | SURVIVES (as a claim) | Effect vanishes after FR-normalization — do not re-assert |
@@ -75,7 +86,7 @@ one session of one subject and says so. Carried as `quarantine.md` **Q6**.
 | E1 | Irreversible ingest-time QC in the pkls | LIVE | **DISSOLVED** | Unit counts under any new profile can only FALL, never rise, without re-ingest |
 | E2 | BG_046 detection-composition drift | LIVE (data fact) | SURVIVES | Any Naive→Expert cell-type contrast inflated in the drift's direction |
 | E3 | BG_046-calibrated track-QC thresholds on other subjects | **QUARANTINED** | SURVIVES | Direction unknown — see `quarantine.md` Q1 |
-| E4 | BG_031 Laser-event extraction gap (35/43) | LIVE, **mechanism identified** | CONDITIONAL | BG_031 optotag yield UNDERSTATED; no negative claim about D2 yield supportable. The laser line peaks at **0.383 V** and never crosses a TTL threshold |
+| E4 | BG_031 Laser-event extraction gap (35/43) | LIVE, **mechanism identified (structural, not threshold)** | CONDITIONAL | BG_031 optotag yield UNDERSTATED; no negative claim about D2 yield supportable. `Valve_R`/Laser is a **per-trial field** and no laser pulse falls inside any trial |
 | E5 | `KNOWN_SUSPECTS = {779, 873, 872}` hardcoded | LIVE | SURVIVES | Tracked cohort slightly cleaner than uncurated, by an UNMEASURED amount |
 | A1 | `canonical_session_id` manufactures `00DDMMYY` | LIVE | SURVIVES | Multi-subject joins on canonical ids mismatch; produces unrepairable keys |
 | A2 | 5-digit day-stripped DDMMYY tokens (1,670 rows) | LIVE | DISSOLVED (artefacts) / SURVIVES (mechanism) | Uncounted third corruption form; same silent-wrong-date exposure |
@@ -89,8 +100,8 @@ one session of one subject and says so. Carried as `quarantine.md` **Q6**.
 | A10 | Default `py -m pytest` yields zero results | LIVE | SURVIVES | The manual gate reports success by reporting nothing |
 | A11 | Delete-guard false positive blocks all recursive deletes | LIVE | SURVIVES | Pushes an operator toward the 2026-06-07 data-loss shape |
 | A12 | No built distribution has ever contained `visdetect` | LIVE | DISSOLVED | Every non-editable consumer breaks at build time |
-| A13 | TF-GLM wheel regressor edge-counts one encoder line | LIVE | SURVIVES | Manufactures ~6× apparent movement in quiet windows → the "movement-controlled" GLM is not movement-controlled |
-| A14 | NI event times are not stimulus times | LIVE (data fact) | SURVIVES | `Baseline_ON` precedes the physical screen change by **+67.3 ms**, comparable to striatal visual latency; every NI time also carries a ~5 ms tick |
+| A13 | TF-GLM wheel regressor edge-counts one encoder line | LIVE | SURVIVES | Unsigned, direction-blind: over-states movement (session-wide gross/net **1.25×**, larger in quiet windows) → the "movement-controlled" GLM is not movement-controlled |
+| A14 | NI event times are not stimulus times | LIVE (data fact) | SURVIVES | `Baseline_ON` leads the physical screen change by up to **+67.3 ms** (an upper bound), comparable to striatal visual latency — and is **not frame-locked**, sd **14.6 ms** per trial |
 | A15 | Optotag block→target mapping is assumed, and inverted on the one measured session | LIVE | SURVIVES | Every D1(SNr)/D2(GPe) pathway label from optotagging may be **swapped** — see `quarantine.md` Q12 |
 | D1 | `QUESTION_INDEX.md:49` asserts refuted VMS engagement-gating | LIVE | SURVIVES | Misdirects design, not values |
 | D2 | `2026-06-17-post-tf-null…md:4,48` names the wrong region | LIVE | SURVIVES | Its "cheap decisive control" is void as designed |
@@ -246,21 +257,23 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   threshold**, a choice nobody recorded. Neither is ground truth.
 - **Direction of effect — BIDIRECTIONAL, and the seed's single direction is only half of it.**
   Three distinct failures share this name:
-  1. **Wrong threshold on an analog line (the dominant one).** Measured on BG_046 17092025, against
-     the hardware criterion that every reward must be preceded by the lick that earned it:
+  1. **Wrong threshold on an analog line (the dominant one).** Measured on BG_046 17092025:
 
-     | detector | contacts | rewards preceded | median lead | ILI in the 6–8 Hz band |
+     | detector | contacts | rewards preceded | lead time | ILI 100–200 ms |
      |---|---|---|---|---|
-     | derived, 8σ = 0.214 V, 30 ms refractory | **3,580** | **100 %** | **4.63 ms** | 46.3 % |
-     | `Lick_L` (2025) | 4,651 | 100 % | 5.00 ms | 45.9 % |
-     | `Lick_R` (2025) | 3,638 | 82.2 % | 3.96 ms | 46.5 % |
-     | `Piezo_1` (2026) | **494** | **14.9 %** | **35,923 ms** | 9.7 % |
+     | derived, 8σ = 0.214 V, 30 ms refractory | **3,580** | **100 %** | 4.63 ms | 46.3 % |
+     | `Lick_L` (2025), de-bounced 30 ms | 4,651 | 100 % | 5.00 ms | 45.9 % |
+     | `Piezo_1` (2026) | **494** | **14.9 %** | see below | 9.7 % |
 
-     **Use these figures, not the "10–40×" hand-wave** the memory record carries. The 2026
-     `Piezo_1` train is not a sparse sample of the licks — with a 36-second median gap to the
-     reward its "nearest lick" earned, it is *not detecting the licks that earned the rewards at
-     all*. Direction: lick counts from a 2026-convention session are understated ~7× against a
-     correctly derived detector (494 vs 3,580) and are not merely thinned but **mis-timed**.
+     **Use the 14.9 % reward-coverage figure, not the "10–40×" hand-wave** the memory record
+     carries. Direction: a 2026-convention session yields ~7× fewer contacts than a correctly
+     thresholded detector on the *same physical line* (494 vs 3,580), and covers only 14.9 % of
+     reward deliveries.
+     ⚠ **The defect is sensitivity, not wrongness** — the spec's audit retracted the stronger
+     reading. The 2026 train's headline "35,923 ms median lead" measures **train sparsity**: on
+     the 36 rewards it *does* cover, its lead is **2.08 ms** (§7). It finds too few licks; the ones
+     it finds are correctly placed. So a lick *rate* from such a session is badly understated,
+     while a lick *time* it does report is usable.
   2. **Silent zeros.** A reader hard-coding one channel name returns an **empty array** on every
      session written by the other convention. Four scripts had this bug; affected sessions read
      0 licks and cross-session lick-rate trends flatten.
@@ -271,10 +284,35 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
 
   So a ported lick-rate number can move **either way**, and which way depends on which code path
   the old output came from. Attribute with the path, never with the defect name alone.
-- **A fourth hazard the spec adds: raw threshold crossings are not licks.** Every train —
-  including the 2025 MATLAB one — is dominated by sub-10 ms intervals, which are piezo *ringing
-  within one contact*. De-bounce (30 ms: below the ~125 ms lick period, above the ringing) before
-  counting anything. A pipeline that skips de-bouncing over-counts in the opposite direction.
+- **⚠ Do NOT carry the derived detector as a validated replacement.** The spec's own audit
+  dismantled most of its self-validation (§7, "What the audit established"), and a porter who
+  inherits the 8σ recipe uncritically will inherit a false sense of independence:
+  - "Independent of any previous extraction" is **false**. The valve opens ~5 ms after the *online
+    task computer* registered a lick — itself a threshold on the same `Piezo_1` line — so
+    "highest threshold explaining 100 % of rewards" recovers **the online detector's threshold**.
+  - 100 % reward coverage is **tautological by construction** (it is the selection rule).
+  - The criteria **disagree**: rhythm plateaus at 7.75σ, the post-change surge peaks at 12.5σ, and
+    the lead-time criterion points to **5.5σ**. There is no single optimum.
+  - The **30 ms refractory is asserted, not derived** — coverage is 100 % at every refractory from
+    0–100 ms, contact count moves ±8 % between 20 and 50 ms, and ~10 % of intervals pile against
+    the floor.
+  - `r = 0.9994` against the software RT is **not** independent validation: both descend from the
+    same online threshold on the same line, and `r` is uninformative here (a detector with 50 ms
+    RMS error still scores 0.9935).
+  - **`Lick_L` (2025) de-bounced at 30 ms matches or beats the derived detector on every stated
+    criterion.** The honest framing is "we independently arrived at essentially the 2025 train",
+    not "we did better".
+- **✅ What does survive, and it is the part worth porting** — **post-reward consumption bouts,
+  never used in fitting**: 4.98 Hz in the second after reward vs 1.00 Hz before, median
+  post-reward ILI 155 ms (6.4 Hz), 72.1 % of post-reward ILIs in the 100–200 ms band, and 98.8 %
+  of rewards followed by ≥3 contacts. That establishes the detected contacts genuinely **are**
+  licks — it does not validate 8σ specifically. ⚠ Also measured: **186 contacts (5.2 %) fall in
+  the optotagging epoch**, where no reward-seeking lick is possible, and they are not rhythmic
+  (21 % in band vs 46 %) — a noise floor of order 30 % of the behavioural train.
+- **De-bouncing is still required, but the reason is narrower than first stated.** "Every train is
+  dominated by sub-10 ms intervals" was **refuted** — only `Lick_R` exceeds 50 %, and the 2026
+  trains have median ILIs inside the lick band. De-bounce because piezo ringing exists, not
+  because every train is ringing-dominated.
 - **Affected modules** — `visdetect.analysis.lick_channels` (the canonical resolver, and the
   record of both failures), `analysis.lick`, `analysis.hmm_validation`, `analysis.tf_glm`,
   `analysis.tf_glm_data` (module map, `lick-channel`).
@@ -283,11 +321,12 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
 - **Evidence** — `d3.lick.overlap` = **not-measured** (the 33-session re-extraction batch list is
   still not materialized in the repo); mechanism and the pooling magnitudes at
   `src/visdetect/analysis/lick_channels.py:1-45`; `data/cache/tf_responsive/README.md`; the
-  threshold table, the analog-sensor root cause and the de-bounce rule from
-  `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §1, §3 and §7 (one session, BG_046 17092025).
-  The derived train independently validates against the task's own online RT at **r = 0.9994**,
-  median difference **0.36 ms**, 99.6 % of Hit trials within 50 ms — so the recipe is not
-  self-referential.
+  the analog-sensor root cause, the detector table and every retraction above from
+  `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §1, §3 and §7 (one session, BG_046 17092025,
+  adversarially audited). §1 now measures the equivalence rather than inferring it: at a 0.150 V
+  threshold ch4 reproduces all 10,093 `Lick_L` times at **offset zero, 100.00 %** (best alternative
+  channel 26.4 %), and at 1.000 V the same lines give exactly the 2026 counts of 797 and 349 — so
+  "same lines, different threshold" is now a measurement.
 - **Status** — CODE-FIXED / ARTEFACTS-STALE (all four buggy scripts now route through the
   resolver; see A4 for the one that does not). **Note the resolver fixes *selection*, not
   *threshold*:** it picks the one true line from whichever MATLAB extraction wrote the events, but
@@ -357,10 +396,11 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   (commit `a029ba3`, "align.py honours `trial_event_index`") lives on
   `feature/early-lick-and-session-sorting`, which was still receiving commits on the day of the
   audit.
-  *Cross-check worth noting*: QC1's own acceptance constant carries the spec's timing tick —
-  `run_alignment.py:27` sets `ACCEPT_RESID_S = 0.05` with the comment "10x above the observed
-  0.0051 s aligned value", and 5.1 ms is exactly the ~5 ms state-machine tick the spec measures
-  independently (see A14).
+  *Cross-check, corrected*: QC1's acceptance constant `ACCEPT_RESID_S = 0.05`
+  (`run_alignment.py:27`) is commented "10x above the observed 0.0051 s aligned value". That
+  5.1 ms is **`refLine: 0.005`, a scheduling flip-lead**, not a hardware tick — the spec's audit
+  refuted the tick reading (see A14). The constant is still well chosen; the *explanation*
+  attached to it in my first pass was wrong.
 - **Status** — IN-REPAIR (on a branch, not on `main` or `design/new-repo-foundation`).
   **Re-ingest** — CONDITIONAL, and now *partly* resolvable: the duplicate-JSON mode **dissolves**
   with a hash-dedup at ingest, and "total behavioural load failure" plausibly dissolves on a clean
@@ -412,14 +452,22 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   included**, and the added trials carry a fast, non-detection lick, so any RT distribution gains
   a short-latency tail and hit-rate on the affected conditions moves upward. Magnitude is small:
   18 trials over 5 sessions, **0 in two of them** (`d1.ref.per_session.*`).
-- **SECOND SOURCE — independently confirmed at the hardware level.** The NI spec re-extracted
-  `Change_ON` from `nidq.bin` on BG_046 17092025 and found **323** change events after the
-  sliver/first-pulse rules — *exactly* the Hit/Miss/Ref trials, and matching the JSON identity
-  `count(Hit) + count(Miss) + count(Ref) = 256 + 58 + 9 = 323`. Of the **43 surplus raw pulses**,
-  **every one falls on a Hit/Miss/Ref trial and none on `fa` or `abort`**. The hardware never
-  marks a change on a trial where no change was presented. This corroborates the Task-4 resolution
-  from a completely independent direction — pkl trial fields vs raw voltage — and closes the
-  question that `Change_ON` on `fa`/`abort` is meaningless: verified at the metal.
+- **SECOND SOURCE — corroborated at the hardware level, by the argument that survived audit.**
+  ⚠ **Do not use the surplus-pulse argument.** An earlier version of the NI spec argued that "all
+  43 surplus `Change_ON` pulses fall on Hit/Miss/Ref and none on `fa`/`abort`". Its own adversarial
+  audit **retracted** that (§9): the claim is *logically entailed* by the set equality
+  `count(Hit) + count(Miss) + count(Ref) == n Change_ON`, so it carries no extra information —
+  and **35 of the 43 start after their assigned trial had ended** (median 0.495 s into the ITI).
+  Attributing those forwards instead, equally arbitrary, puts **17 on FA/abort**. The original
+  conclusion was an artefact of `searchsorted` attributing ITI events backwards.
+- **✅ The valid hardware argument** — the trial's own `Baseline_ON` pulse **ends before the change
+  was even scheduled**, on **100 % of FA trials** (n = 263, median margin **3.163 s**) and **100 %
+  of aborts** (n = 153, **4.749 s**). No change could have been presented. That is independent of
+  the pkl trial fields Task 4 used, and it is the argument to cite.
+- **The set-equality invariant still holds and is worth porting as an assertion** —
+  `count(Hit) + count(Miss) + count(Ref) == n Change_ON` (256 + 58 + 9 = **323** on this session,
+  with the trial *sets* identical, not merely the counts). It is a check, not evidence for the
+  exclusion rule.
 - **Affected modules** — `visdetect.analysis.constants`, `analysis.align`, `analysis.utils`,
   `core.run_alignment`, `analysis.tf_glm_data`, `analysis.config` (module map, `ref-ambiguity`).
 - **Affected artefacts** — every `Change_ON`-aligned PETH, tensor and decoder cache built under
@@ -429,7 +477,8 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   `d1.ref.rt_dict_keys` = `FA;Miss;RT;Ref;abort;gray`, `d1.ref.per_session.*` (5 sessions);
   constants at `src/visdetect/analysis/constants.py:49` and
   `src/visdetect/core/run_alignment.py:24`, enforcement at `analysis/align.py:158`, `:284`;
-  second source `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §5 and §9 (one session, BG_046 17092025).
+  second source `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` **§9** (one session, BG_046 17092025) —
+  cite the `Baseline_ON`-ends-first argument, **not** the retracted surplus-pulse one.
 - **A porting trap in the same place** — `run_alignment.py:22-24` warns verbatim: "CASE-SENSITIVE.
   Real pkl labels are capitalised: Hit/Miss/FA/abort/Ref. Do NOT refactor onto
   `EVENT_VALID_OUTCOMES` — that is lowercase and omits Ref." Two constants encode one rule in two
@@ -513,11 +562,16 @@ full, with evidence.
   (`ingest.py:243-267`, `:191-192`, `core/kilosort.py:42-49`) — a grep of `src/visdetect/core/`
   finds no `.ap.bin`, no `memmap`, no `np.fromfile`. What remains open is **data-store
   completeness on `X:`**, not code: see `quarantine.md` Q5.
-- **One spec checklist item is ALREADY satisfied — do not re-litigate it.** The NI spec's step 11
-  ("prefer `spike_times_sec_adj.npy`; the TPrime correction is not negligible — median shift
-  −9.0 ms, range −14.9 to +0.03 ms") is already the code's behaviour: `ingest.py:247` tries
+- **One spec checklist item is ALREADY satisfied — do not re-litigate it.** "Prefer
+  `spike_times_sec_adj.npy`; the TPrime correction is not negligible — median shift −9.0 ms, range
+  −14.9 to +0.03 ms" is already the code's behaviour: `ingest.py:247` tries
   `spike_times_sec_adj.npy` first and only falls back to `spike_times_sec.npy` (`:250`) or raw
-  samples (`:253`), logging which it used. Recorded here so a porter does not spend the check.
+  samples (`:253`), logging which it used.
+- **But the spec adds two traps in the same file that the code only half-handles.**
+  `spike_times_sec_adj.npy` is **not sorted** (117 backsteps of up to 19.7 µs, minimum value
+  −0.0002 s), and it has shape `(N,)` while `spike_times_sec.npy` is `(N,1)`. The ingest's
+  `.flatten()` neutralises the shape trap; **nothing anywhere asserts sortedness**, and any
+  `searchsorted`-based binning silently mis-assigns those spikes. Port an explicit sort-and-assert.
 
 ### E2. BG_046 detection-composition drift (broad/SPN 89 → 15 %, amplitude halving Jun → Jul)
 
@@ -558,17 +612,25 @@ full, with evidence.
 - **Direction of effect** — **BG_031 optotag yield is UNDERSTATED, and no negative claim about D2
   yield is supportable from it.** This is the entry that matters most for misattribution: a
   data-completeness defect that **looks like a biological result** ("we found no D2 units").
-- **MECHANISM — now identified, on BG_046, and very likely the same here.** The NI spec shows the
-  2025 MATLAB extraction named the 8 analog channels **positionally**, so what it called
-  `Valve_R` was really **ch7, the Laser** — and it read empty for one reason: **the laser line
-  peaks at 0.383 V and never crosses a conventional 2.5 V TTL threshold.** The 2026 re-extraction,
-  run specifically to add the opto channel, found 1,003 pulses on the same physical line. So the
-  "missing" Laser events are a **threshold artefact of the extraction, not absent data** — the
-  pulses are in `nidq.bin`.
-  **Hedge, stated plainly:** this was measured on **BG_046 17092025**, not on BG_031. The
-  inference to BG_031's 35 sessions is by mechanism and by the shared 8-channel map, not by
-  measurement. It is the single most likely explanation and it is cheap to test (quarantine Q6),
-  but it is not yet demonstrated on BG_031.
+- **MECHANISM — identified on BG_046, and it is NOT the one first proposed.** The NI spec's own
+  adversarial audit **retracted** the threshold explanation: "❌ *Earlier claim*: 'the 2025 run's
+  `Valve_R` was empty because the laser's 0.38 V never crossed threshold.' **False** — at 0.150 V
+  the laser line has 1,007 crossings" (§1). The real reason is **structural**: the 2025 extraction
+  named the 8 analog channels **positionally**, so its `Valve_R` was really ch7 (the Laser), and
+  `Valve_R` is a **per-trial field** — while **no laser pulse falls inside any trial** (the
+  optotagging blocks run after behaviour ends, from 8908 s against a behavioural end at 8857 s).
+  A per-trial container simply has nowhere to put an out-of-trial event, so the field is empty
+  even though the pulses are present in the raw file at any sane threshold.
+- **The sub-TTL voltage is still a real extraction hazard — just not the cause here.** The laser
+  line peaks at **0.383 V**, so a conventional 2.5 V threshold finds **zero** pulses (§3). Any new
+  extractor must derive thresholds from observed levels. Both facts matter; only the structural
+  one explains the 2025 gap.
+- **Hedge, stated plainly:** all of this was measured on **BG_046 17092025**, not on BG_031. The
+  inference to BG_031's 35 sessions rests on the shared 8-channel map and the shared per-trial
+  extraction shape, **not** on measurement. It is cheap to test (quarantine Q6) and is not yet
+  demonstrated on BG_031. The corrected mechanism also changes what the test should look for: not
+  merely "is there a pulse train on ch7", but "does BG_031's extraction store laser events in a
+  per-trial container that cannot represent post-behaviour pulses".
 - **Affected modules** — `visdetect.analysis.optotagging` (`LASER_KEY = "Laser"` at
   `optotagging.py:38`; `optotagging.py:761` raises when the key is absent, so the failure is at
   least loud at that call site).
@@ -901,77 +963,109 @@ Each of these can move a number or a scope decision and none was in the seed lis
 - **Direction of effect** — the "lick-and-movement-controlled" TF GLM builds its wheel covariate
   as **tick density of `ni_events['Rot_enc_A']`** — one line of a two-line quadrature encoder,
   unsigned, undecoded (`src/visdetect/analysis/tf_glm_data.py:501` documents it as
-  "`Rot_enc_A` tick DENSITY (ticks/bin)"; `:521-522` reads and sorts the raw edge times). Counting
-  raw edges conflates travel with back-and-forth jitter: in a quiet pre-change window the gross
-  edge rate is **median 6/s against a dither-cancelled net displacement of median 1/s — ~6×
-  manufactured movement.** Direction: the covariate **over-states movement precisely where there
-  is none**, so the GLM regresses out variance that is dither, not locomotion, while leaving
-  genuine signed travel under-controlled. Any claim resting on "movement was controlled for" is
-  weaker than it reads, and the bias is largest in the quiet baseline windows the TF analysis
-  cares most about.
+  "`Rot_enc_A` tick DENSITY (ticks/bin)"; `:521-522` reads and sorts the raw edge times). An
+  unsigned single-line edge count cannot distinguish travel from back-and-forth dither, and it
+  cannot see direction at all — the B line, which carries the sign, is never read. Direction: the
+  covariate **over-states movement where the wheel is merely jittering** and **cannot represent
+  reversal**, so the GLM regresses out variance that is dither while leaving genuine signed travel
+  under-controlled. Any claim resting on "movement was controlled for" is weaker than it reads.
+  ⚠ **Magnitude, corrected.** An earlier version of the spec put the gross-to-net inflation at
+  **~6×**; its audit found that to be a divide-by-small-denominator artefact of quiet windows and
+  gives the **session-wide ratio as 1.25×** (§3). Cite 1.25× session-wide, note that it is larger
+  in quiet windows, and do **not** quote the 6×. Decoding is still the correct method — that
+  number was simply never the reason.
 - **The correct method is specified and cheap** — reconstruct A/B states and walk the Gray-code
-  sequence (`00→01→11→10` one way, reverse the other), summing signed counts. On the measured
-  session 977,531 transitions decode with **100 % validity** for a net displacement of −782,315
-  counts. **Both lines are already in the pkls** — `Rot_enc_A` (226,405 events) and `Rot_enc_B`
-  (226,758) on session `01072025` — so decoding needs no re-ingest, only the B line the current
-  code ignores.
+  sequence (`00→01→11→10` one way, reverse the other), summing signed counts. ⚠ **The "100 %
+  transition validity" figure is a tautology and was retracted**: a threshold extractor emits
+  strictly alternating rise/fall per line, so every consecutive pair flips one bit and any one-bit
+  change of a 2-bit Gray state is ±1 — the test returns 100 % for pure noise. The informative test
+  is whether consecutive transitions **alternate between lines**; here **5.3 % do not** (real
+  bounce), so honest validity is **94.7 %**. **Both lines are already in the pkls** — `Rot_enc_A`
+  (226,405 events) and `Rot_enc_B` (226,758) on session `01072025` — so decoding needs no
+  re-ingest, only the B line the current code ignores.
+- **Calibration is bracketed, not point-identified.** The rig's own abort rule
+  (`spdrnghigh = 5` cm/s × `spdavgbin = 0.05` s = 2.5 mm per 50 ms) brackets the count scale at
+  **T = 16 → 0.156 mm/count, range [0.139, 0.167], ±9 %** (§8). **Do not quote four significant
+  figures**: an earlier "0.1667 mm/count" moved 33 % when the selection criterion changed. Any
+  analysis converting wheel counts to distance inherits that ±9 %.
 - **Affected modules** — `visdetect.analysis.tf_glm_data` (sole consumer;
   `git grep Rot_enc` finds exactly two non-test sites, both in this file).
 - **Affected artefacts** — every TF-GLM fit whose design matrix included `wheel_bins`:
   `data/cache/tf_glm_bg046/*`, `data/cache/tf_responsive/*`, and the six `docs/science` docs
   resting on those registries (see entry 5, with which this compounds).
-- **Evidence** — `tf_glm_data.py:501`, `:521-522`; the ~6× figure and the decoding recipe from
-  `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §3; encoder-key presence and counts verified in-repo by
-  a read-only probe of `data/pkls/BG_046/…01072025` (`ni_events` keys include `Rot_enc_A`,
-  `Rot_enc_B`). Corroborating repo note: `scripts/docs/CHANGELOG_meta_file_validation.md:13`
-  records "~226k rotary encoder events" polluting an earlier duration calculation.
-- **A QC assertion the spec hands over free** — completed trials are near-motionless: net
-  displacement in the second before the change is median **1.0** counts/s on Hit and Miss versus
-  **7.0** on abort (Mann-Whitney p = 2 × 10⁻²³), with 26.8 % of Hit/Miss trials at *exactly zero*.
-  If a decoding shows appreciable baseline travel on a completed trial, the decoding is wrong.
+- **Evidence** — `tf_glm_data.py:501`, `:521-522`; the decoding recipe, the corrected 1.25×
+  session-wide ratio, the 94.7 % honest validity and the calibration bracket from
+  `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §3 and §8; encoder-key presence and counts verified
+  in-repo by a read-only probe of `data/pkls/BG_046/…01072025` (`ni_events` keys include
+  `Rot_enc_A`, `Rot_enc_B`). Corroborating repo note:
+  `scripts/docs/CHANGELOG_meta_file_validation.md:13` records "~226k rotary encoder events"
+  polluting an earlier duration calculation.
+- **A QC assertion the spec hands over free** — completed trials are near-motionless. ⚠ Use the
+  **corrected** figures: measured over the last 1 s **inside each trial** (an earlier version
+  anchored to `onset + 2 s`, and since 81/153 aborts are shorter than 3 s, ~43 % of that window
+  fell *after* the trial ended and measured post-abort ITI running, inflating the abort mean to
+  247 counts/s). Corrected: abort median **47.0** counts/s versus Hit/Miss **1.0**
+  (p = 3.7 × 10⁻⁶⁸), and **0/153** aborts show zero net motion against **26.8 %** of completed
+  trials. If a decoding shows appreciable in-trial baseline travel on a completed trial, the
+  decoding is wrong. Note this is the rig's *configuration* (`cRunning: 1`,
+  `spdrnghigh/low = ±5`), not a discovery — only the effect size is informative.
 - **Status** — LIVE. **Re-ingest** — SURVIVES: the raw edges are already in the pkls; this is a
   decoding defect in analysis code, not an extraction defect. It is the one NI-layer entry that
   re-extraction does **not** fix.
 
 ### A14. NI event times are not stimulus times
 
-- **Direction of effect — three quanta, one theme: the TTL is not the event.**
-  1. **Display latency ≈ +67.3 ms (IQR 55–79, ~4 frames).** The photodiode — which watches a
-     corner sync square and therefore timestamps when the stimulus *physically appeared* — lags
-     the `Baseline_ON` TTL by 67.3 ms. **Aligning to the raw TTL places "stimulus onset" ~67 ms
-     too early**, and the spec flags that this is *comparable to striatal visual latency itself*.
-     Direction on any latency claim: measured response latencies are **overstated by ~67 ms**, and
-     an onset-difference between conditions is unaffected only if the display lag is constant
-     across them — untested.
-  2. **A ~5 ms state-machine tick.** Every NI event time carries a quantised offset from software
-     intent: measured `Change_ON` runs **5.128 ms** later than the programmed `stimT` (IQR 70 µs;
-     295/323 trials at 5.1–5.2 ms, the rest at 10.2 ms = two ticks), reward follows the registered
-     lick by **4.97 ms**, and every spurious TTL sliver is exactly 4.91/5.00 ms wide.
-     Correlation of measured against programmed latency is **r = 1.000000** — the offset is a
-     constant tick, not noise, so it biases absolute latencies and cancels in differences.
-  3. **Two trials are 5 ms early in MATLAB's `Change_ON`** (trials 122 and 183), because MATLAB
-     applied first-pulse-per-trial *without* first dropping sub-5 ms slivers.
-- **Why one entry and not three** — they share a single mechanism class (NI timestamps ≠ physical
-  or intended times), a single consumer set (everything that aligns to `Baseline_ON` or
-  `Change_ON`), and a single remedy (capture photodiode onsets and record the tick), so a porter
-  handles them together. Sub-fact 3 is a two-trial rounding artefact that would not merit an entry
-  alone.
+- **Direction of effect — the `Baseline_ON` TTL is not the moment the stimulus appeared, and the
+  gap is neither small nor constant.**
+  1. **The TTL leads the physical screen change by ~67 ms — an UPPER BOUND, not a display
+     latency.** Measured TTL→photodiode is **+67.3 ms (IQR 55–79)**, robust to detector settings
+     (3σ → 65.5 ms, 24σ → 72.0 ms). **Aligning visual responses to the raw `Baseline_ON` TTL
+     therefore places "stimulus onset" tens of ms too early, comparable to striatal visual latency
+     itself.** Use `vbl` and/or the photodiode. Direction on any latency claim: measured response
+     latencies are **overstated**, by an amount bounded above by ~67 ms.
+  2. **The larger hazard is the JITTER, not the mean.** The TTL is **not frame-locked** — sd
+     **14.6 ms** against the stimulus PC's own `vbl` log — while the photodiode **is**
+     (corr −0.988; re-referencing to the frame removes 97.6 % of the variance). So the 67.3 ms
+     decomposes as (TTL→frame, unknown mean, **sd 14.6 ms**) + (frame→photons, sd 2.29 ms), and
+     **the data cannot split it**. A per-trial 14.6 ms sd is not removable by subtracting a
+     constant, and it smears any TTL-aligned PETH.
+- **Two claims from the first draft are RETRACTED — do not carry them.**
+  - ❌ **"~4 frames."** The latency is **not frame-quantised** and spans **2.8 frames** p5–p95.
+  - ❌ **"A ~5 ms state-machine tick."** There is no tick. The 5.13 ms is `refLine: 0.005`, a
+    **flip-lead subtracted at scheduling**: `stimT = (integer frames)/60 − 0.005` holds for
+    **732/732 trials to 2 × 10⁻¹³ s** (§8). The task's real quantum is the **16.67 ms video
+    frame**. The original quantisation test was degenerate — a pure constant scores R = 0.95–1.00
+    at *every* candidate tick — and a proper test (reward minus the continuous piezo-derived
+    contact) gives a p5–p95 spread of **0.94 ms**: fixed latency, no tick.
+  - ❌ **"MATLAB's `Change_ON` is 5 ms early on 2 trials."** This came from the spec's own
+    now-retracted sliver rule. §5 reverses it: the ≥15 ms width cut was **wrong on 20 of 739
+    trials**, placing those onsets **5.02 ms late**, because 20 of the 22 "slivers" are the
+    *leading edge* of a single trial marker split by a one-sample dip — the threshold-free `dig4`
+    copy shows one continuous pulse whose rise coincides with the sliver on 20/20. **MATLAB was
+    right on all 8 `Change_ON` outliers.** The correct rule is to **merge pulses separated by ≤2
+    samples, then take the first pulse per trial** — no width cut, no fallback — which tightens
+    `Change_ON` against programmed `stimT` from an 8.98 ms spread with 8 outliers to **0.227 ms**
+    with none, a 40× improvement.
+- **Why one entry** — the surviving facts share a mechanism (NI timestamp ≠ time of photons), a
+  consumer set (everything aligned to `Baseline_ON`), and a remedy (capture `vbl`/photodiode).
 - **Affected modules** — `visdetect.analysis.align`, `analysis.constants` (the window constants
   are all defined relative to TTL time), `core.run_alignment`, and every module the map flags
   `alignment-QC1`.
-- **Affected artefacts** — **every `Baseline_ON`- or `Change_ON`-aligned PETH, tensor, kernel and
-  latency estimate in the tree.** No artefact is *wrong* in a way that changes an ordering; they
-  are all shifted by the same amounts, which is why this is an attribution entry rather than a
-  repair item.
-- **Evidence** — `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §8 (display latency, tick) and §5
-  (the sliver rule and the two early trials). The photodiode gives an 18.7× SD step at onset
-  (0.037 → 0.698 V) confirming stimulus presence on 99.5 % of trials — but **cannot** validate
-  `Change_ON`, because a TF change alters neither mean luminance nor contrast and the diode
-  watches the sync square, not the grating. Independent in-repo corroboration of the tick:
-  `src/visdetect/core/run_alignment.py:27` sets `ACCEPT_RESID_S = 0.05` with the comment
-  "10x above the observed **0.0051 s** aligned value".
-- **Scope caveat** — one session, BG_046 17092025; the spec says explicitly the display latency is
-  "not yet verified on other sessions". The tick is corroborated independently by QC1's constant.
+- **Affected artefacts** — **every `Baseline_ON`-aligned PETH, tensor, kernel and latency estimate
+  in the tree.** The constant part shifts them all alike (an attribution item, not a repair item);
+  the **14.6 ms per-trial sd does not**, and that part genuinely smears onset estimates.
+- **Evidence** — `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §8 (latency, jitter, the `refLine`
+  refutation) and §5 (the corrected merge rule). The photodiode is the *only* onset witness and it
+  **cannot** validate `Change_ON` — it returns **0/323** detections there, because a TF change
+  alters neither mean luminance nor contrast and the diode watches the sync square (logged at
+  `monitors.left.photodiode_location = [0, 930, 150, 1080]`, the bottom 150 rows of 1080, painted
+  last in the raster), not the grating.
+  ⚠ **A cross-reference I previously drew is void**: `run_alignment.py:27`'s
+  `ACCEPT_RESID_S = 0.05` comment ("10x above the observed 0.0051 s aligned value") records the
+  same 5.1 ms number, but that number is `refLine: 0.005`, a scheduling flip-lead — **not** an
+  independent confirmation of a hardware tick, because there is no tick.
+- **Scope caveat** — one session, BG_046 17092025, nothing replicated on a second recording. The
+  spec's own scope note is explicit that every numeric constant must be re-derived per session.
 - **Status** — LIVE (a property of the acquisition, not a bug). **Re-ingest** — SURVIVES the NI
   re-extraction *unless the new pipeline captures photodiode onsets alongside the TTLs*. The
   photodiode is analog ch0 and is already in `nidq.bin`; nothing downstream has ever used it.
@@ -991,13 +1085,22 @@ Each of these can move a number or a scope decision and none was in the seed lis
   "GPe (block 1) and SNr (block 2)". So this is not "the code disagrees with the truth"; it is
   **two undocumented assumptions that disagree with each other**, with no artefact in the repo
   able to arbitrate.
-- **Why this is not filed as merely a naming nit** — the spec's screening found **16
-  block-0-only responders against 1 block-1-only**. Under the spec's mapping that is 16 SNr
-  (putative D1); under the code's it is 16 GPe (putative D2). The repo's standing claim is "3
-  collision-confirmed units, **all D1**" (`optotagging_yield_jun2026`), which is consistent with
-  the spec's mapping and inconsistent with the code's. That is suggestive, not decisive — the two
-  results come from different sessions and different pipelines — but it is exactly the kind of
-  delta ADR-009 exists to attribute.
+- **Why this is not filed as merely a naming nit** — the spec's per-block screen (exact Poisson on
+  the 1–10 ms window, BH-FDR q < 0.01, ≥10 evoked spikes) is starkly one-sided: **17 block-0-only,
+  3 both, 0 block-1-only**, 437 tested-and-negative, **199 untestable** (too few evoked spikes) and
+  14 not screened. Under the spec's mapping that is 17 SNr (putative D1) and zero GPe-only; under
+  the code's it is 17 GPe (putative D2). The repo's standing claim is "3 collision-confirmed units,
+  **all D1**" (`optotagging_yield_jun2026`) — consistent with the spec's mapping, inconsistent with
+  the code's. Suggestive, not decisive (different sessions, different pipelines), but exactly the
+  kind of delta ADR-009 exists to attribute.
+  ⚠ Two methodological cautions travel with those counts. **Report "untestable" separately** — an
+  earlier version collapsed the 199 into "638 neither", overstating specificity. And a
+  **baseline**-count guard is the wrong fix for the `inf`-z problem: requiring ≥20 baseline spikes
+  made any unit below 0.887 Hz untestable and discarded a genuine responder (cluster 209,
+  q ≈ 5 × 10⁻¹⁷). Use an exact Poisson test with an **evoked**-count floor.
+  The asymmetry itself was attacked and survived: responders are not higher-firing (p = 0.705),
+  the detectability floor *rises* with baseline rate, and an empirical null over 8,397 sham tests
+  gave **zero** false positives.
 - **Affected modules** — `visdetect.analysis.optotagging` (`split_laser_blocks` at `:500-537`;
   the positional bind at `:773`; `LASER_KEY` at `:38`).
 - **Affected artefacts** — `data/cache/optotagging/optotagging_results.csv`,
@@ -1006,14 +1109,26 @@ Each of these can move a number or a scope decision and none was in the seed lis
 - **Evidence** — `src/visdetect/analysis/optotagging.py:505-510` and `:773`
   (`self.gpe_pulses, self.snr_pulses = split_laser_blocks(all_pulses)`, first block → GPe);
   `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §10 (block 0 = SNr, block 1 = GPe; mapping absent from
-  all six settings files; 16 vs 1 responder asymmetry; the SNr fibre far more effective,
-  attributed to placement).
-- **Two further cautions from the same section, carried so they are not lost** — never pool the
-  blocks or rank by a pooled statistic (they identify different cell types, so pooling halves each
-  response and buries the weaker block); and the Laser analog line is a **trigger command, not an
-  optical power monitor** (identical TTL amplitude across blocks, 0.3490 vs 0.3487 V, says nothing
-  about delivered light). The current code does split the blocks correctly — only the *labels* are
-  in question.
+  all six settings files; the 17/3/0 responder split). ⚠ The attribution of the asymmetry to
+  **fibre placement** is likewise experimenter-supplied and untestable from these files.
+- **Pooling — the caution, corrected.** "Never pool the blocks" was **overstated**: pooled ranking
+  does *not* bury the weaker block (Spearman(pooled, best-per-block) = **0.986**). The defensible
+  principle is narrower and is the one to port: **a pooled statistic cannot assign pathway
+  identity.** The current code does split the blocks — only the *labels* are in question.
+- **And the antidromic interpretation is now DISFAVOURED, which changes what a swapped label would
+  even mean.** The spec's audit retracted its own "consistent but not proven" verdict: the latency
+  FWHM evidence has **no discriminative power** (a sham control with no laser returns a median
+  FWHM of 0.40 ms, and the estimator floor tracks bin width). Against antidromic: **collision is
+  negative and well powered** (short-gap/long-gap P(evoked) ratio **1.197, 95 % CI [1.048,
+  1.367]** — the interval excludes *any* reduction), and **responses outlast the light by >50 ms**
+  (cluster 317: z = 63.7 at 11–20 ms, 22.0 at 20–60 ms, 5.2 at 60–120 ms), which a conducted spike
+  cannot do. Synaptic/network drive is now positively supported; arkypallidal GPe→striatum,
+  passing fibres and probe position (responders sit at a different depth, 1777.5 vs 1860 µm,
+  p = 0.038) are not excluded. **These remain candidates, not identified cell types.**
+- **The Laser line is a trigger command, not an optical power monitor** — identical amplitude
+  across blocks (0.3490 vs 0.3487 V) says nothing about delivered light. The spec adds that the
+  line is not a standard logic HIGH either, so the data cannot distinguish an attenuated digital
+  trigger from a held analog command.
 - **Status** — LIVE, **direction known but polarity unresolved** → `quarantine.md` **Q12**.
   **Re-ingest** — SURVIVES: re-extraction recovers the pulses (E4) but cannot recover which fibre
   was in which structure. That fact exists only in the experimenter's records, and ADR-019 already
