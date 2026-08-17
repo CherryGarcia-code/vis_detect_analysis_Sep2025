@@ -19,9 +19,10 @@ the method is settled and validated, per-session generalisation is not. **Q12 is
 the same document. Both changes are Task-15-fix additions.
 
 > **On the new evidence source.** `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` was produced outside this
-> audit and is **read-only** to it. It is also **untracked in git** — a single uncommitted copy on
-> the same disk as the repo — so it is itself work at risk (`d7.untracked.at_risk` = 5 of 6 becomes
-> 6 of 7). Securing it is a commit, not an analysis. Its scope caveat is load-bearing and is
+> audit and is **read-only** to it. It was **untracked** during the Task-15 fix passes — a single
+> uncommitted copy that transiently made `d7.untracked.at_risk` 6 of 7 — and has since been
+> **committed** (`da5fbf9`, 2026-08-15, 628 lines), returning that count to 5 of 6; the timeline is
+> in the CSV note. Its scope caveat is load-bearing and is
 > repeated wherever it is cited: **one session (BG_046, 17 Sep 2025) of one subject**, with every
 > numeric constant to be re-derived per session.
 >
@@ -287,13 +288,17 @@ Recorded so nothing falls between documents. None blocks sub-project 3.
      code's. Suggestive; different sessions and different pipelines, so it cannot arbitrate alone.
      The asymmetry itself is not a detection-power artefact — responders are not higher-firing
      (p = 0.705) and 8,397 sham tests produced zero false positives.
-- **A second, independent reason this matters more than a label.** The spec's audit moved the
-  antidromic interpretation from "consistent but not proven" to **disfavoured**: collision is
-  negative and well powered (short/long-gap P(evoked) ratio **1.197, 95 % CI [1.048, 1.367]** —
-  excluding *any* reduction), and responses **outlast the light by >50 ms**, which a conducted
-  spike cannot do. So even with the mapping settled, these are **candidates, not identified cell
-  types**, and synaptic/network drive is the positively supported alternative. Settling Q12 fixes
-  *which structure the fibre was over*; it does not by itself license a D1/D2 call.
+- **A second, independent reason this matters more than a label.** The spec's audited verdict on
+  the antidromic interpretation is **"plausible but NOT established"** (§10). ⚠ An earlier
+  revision of this entry said "disfavoured", on two supports the current spec withdraws *for this
+  protocol*: the negative collision test (short/long-gap P(evoked) ratio **1.197, 95 % CI
+  [1.048, 1.367]**) is real but **invalid under a 10 ms sustained pulse** (continued illumination
+  regenerates a spike even if the first is annihilated), and post-light firing is **expected**
+  from ChR2's ~10 ms closure, not evidence against conduction. What stands either way: no
+  responder shows the reliable single-spike sub-millisecond antidromic signature, and pathway
+  assignment is not established for any individual unit. So even with the mapping settled, these
+  are **candidates, not identified cell types**. Settling Q12 fixes *which structure the fibre
+  was over*; it does not by itself license a D1/D2 call.
 - **Until it is settled** — no claim naming D1 or D2 from optotagging is supportable, and the
   existing `data/cache/optotagging/*` label columns should be treated as *block index*, not as
   pathway. ADR-018 already makes `celltype_label_source` a required ledger field; this entry is

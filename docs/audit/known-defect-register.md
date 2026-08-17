@@ -50,10 +50,13 @@ re-extraction matches MATLAB **exactly**: `Baseline_ON` 739/739, `Change_ON` 323
 one session, one subject, nothing replicated. Carried as `quarantine.md` **Q6**.
 
 > **Evidence-source note — read this before citing the spec.** It is a document produced outside
-> this audit and **read-only** to it; nothing in it was edited. It is **untracked in git**, i.e. a
-> single uncommitted copy on the same disk as the repo, which makes it a work-at-risk item in its
-> own right (see `drop-list.md`, *Not dropped, and why*, and `d7.untracked.at_risk`, whose 5-of-6
-> becomes 6-of-7 with this file).
+> this audit and **read-only** to it; nothing in it was edited. It was **untracked** for most of
+> the audit — a single uncommitted copy on the same disk as the repo, which transiently made
+> `d7.untracked.at_risk` 6-of-7 — and has since been **committed** (`da5fbf9`, 2026-08-15, at
+> **628 lines**), returning that count to 5-of-6 (timeline recorded in the CSV note; see also
+> `drop-list.md`, *Not dropped, and why*). It is a **living document** that has revised itself
+> twice mid-audit (386 → 481 → 628 lines), retracting claims each time — re-verify any figure
+> against the committed version before carrying it.
 >
 > ⚠ **It retracts several of its own earlier claims, and this register was corrected against the
 > audited version.** Claims marked ❌ there must not be carried forward, notably: the "Laser
@@ -321,7 +324,7 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
 - **Evidence** — `d3.lick.overlap` = **not-measured** (the 33-session re-extraction batch list is
   still not materialized in the repo); mechanism and the pooling magnitudes at
   `src/visdetect/analysis/lick_channels.py:1-45`; `data/cache/tf_responsive/README.md`; the
-  the analog-sensor root cause, the detector table and every retraction above from
+  analog-sensor root cause, the detector table and every retraction above from
   `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §1, §3 and §7 (one session, BG_046 17092025,
   adversarially audited). §1 now measures the equivalence rather than inferring it: at a 0.150 V
   threshold ch4 reproduces all 10,093 `Lick_L` times at **offset zero, 100.00 %** (best alternative
@@ -377,9 +380,28 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   **byte-identical `__trials (2).json` beside `__trials.json`**, and because
   `load_behavioral_trials` globs `Session/*trials.json` (`ingest.py:72`) and concatenates every
   match (`:89-98`), that session loads **1,471 trials instead of 739 — a 2× overcount**. The fix
-  is one line: **de-duplicate by content hash, not by filename.** Direction: n_trials rises above
-  n(`Baseline_ON`), which is the sign of the BG_046 `20082025` case (+228). *Candidate mechanism,
-  not confirmed on that specific session* — the spec measured 17092025, not 20082025.
+  is one line: **de-duplicate by content hash, not by filename.**
+- **Direction, and which case it actually matches.** The mechanism drives **n_trials ABOVE
+  n(`Baseline_ON`)** — the QC1 spec's **sign A** ("sibling JSONs from more runs than the recording
+  covers sit in `Session/` root and are **concatenated**",
+  `docs/superpowers/specs/2026-08-03-QC1-trial-event-alignment-repair-design.md:37`). The BG_046
+  case with that sign is **`05092025_b`**: two runs filed in one `Session/` directory
+  (281 + 248 = **529** concatenated trials) against **248** `Baseline_ON`, where trials
+  `[281:529]` are the true table (`:44-56`). A byte-identical duplicate is the same glob-and-
+  concatenate defect in its simplest form.
+- **⚠ `20082025` is the OPPOSITE sign, and the mechanism is positively EXCLUDED there.** It is
+  the spec's **sign B**: **486** trials against **714** `Baseline_ON` — *events exceed trials* —
+  and `Session/` root holds a **single** JSON with exactly 486 trials, "so no concatenation
+  occurred here" (`:58-75`). The missing 228 are seven earlier curated runs whose JSONs sit in
+  `Session/delete/` and `Session/partial/` (21 + 207 = 228) and which the **non-recursive** glob
+  skips, while the probe kept recording through them; the trials align to `BON[228:714]`, an
+  **offset, not a truncation**. My index row's "+228 **events**" is the correct reading; an
+  earlier draft of this paragraph mis-anchored the direction to this case and is corrected here.
+- **The two signs need different converter fixes** (spec `:41-43`): sign A needs run *selection*
+  (and hash de-duplication); **sign B has nothing to select** — it needs the offset found. A
+  hash-dedup therefore fixes one class and leaves the other untouched.
+  *Scope*: the duplicate-JSON instance itself was measured on 17092025, not on `05092025_b`; what
+  is verified for `05092025_b` is the concatenation sign and count, from the QC1 spec.
 - **Affected modules** — `visdetect.core.ingest` (`load_behavioral_trials`, `ingest.py:71-98` —
   the duplicate-glob), `visdetect.core.run_alignment` (`build_trial_event_index` at
   `run_alignment.py:210`), `visdetect.core.session` (`trial_event_index` field at `session.py:58`),
@@ -389,7 +411,9 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   invalid; behaviour-only work is unaffected), and any cache or figure derived from those pkls.
 - **Evidence** — `docs/science/QUESTION_INDEX.md:66` (23 of 253; the two BG_046 cases);
   `src/visdetect/core/run_alignment.py:4-6` (17 sessions, root cause named);
-  `docs/superpowers/specs/2026-08-03-QC1-trial-event-alignment-repair-design.md`;
+  `docs/superpowers/specs/2026-08-03-QC1-trial-event-alignment-repair-design.md:35-39` (the two
+  signs and their different fixes), `:44-56` (`05092025_b`, sign A, 281+248=529 vs 248),
+  `:58-75` (`20082025`, sign B, 486 vs 714, single JSON, 228 curated in subfolders);
   `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §9 (the duplicate-JSON 2× overcount and the
   de-duplicate-by-hash rule). **In this checkout `analysis/align.py` does not read
   `trial_event_index`** — only `run_alignment.py` builds it and `session.py` stores it. The repair
@@ -402,11 +426,11 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   refuted the tick reading (see A14). The constant is still well chosen; the *explanation*
   attached to it in my first pass was wrong.
 - **Status** — IN-REPAIR (on a branch, not on `main` or `design/new-repo-foundation`).
-  **Re-ingest** — CONDITIONAL, and now *partly* resolvable: the duplicate-JSON mode **dissolves**
-  with a hash-dedup at ingest, and "total behavioural load failure" plausibly dissolves on a clean
-  re-ingest. **Split recordings do not** — re-ingesting a split session reproduces the same
-  ambiguity unless the loader is told about the halves. Port the solver; do not assume re-ingest
-  fixes this.
+  **Re-ingest** — CONDITIONAL, and only *partly* resolvable. **Sign A dissolves** with hash
+  de-duplication plus run selection at ingest. **Sign B does not**: the trials are correct and the
+  *ephys* is untrimmed, so there is nothing to de-duplicate and nothing to select — the offset has
+  to be found, which is what the QC1 solver does. Re-ingesting `20082025` with a perfect loader
+  still yields 486 trials against 714 events. Port the solver; do not assume re-ingest fixes this.
 
 ### 9. Retracted transient/sustained **state** result
 
@@ -460,14 +484,18 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   and **35 of the 43 start after their assigned trial had ended** (median 0.495 s into the ITI).
   Attributing those forwards instead, equally arbitrary, puts **17 on FA/abort**. The original
   conclusion was an artefact of `searchsorted` attributing ITI events backwards.
-- **✅ The valid hardware argument** — the trial's own `Baseline_ON` pulse **ends before the change
-  was even scheduled**, on **100 % of FA trials** (n = 263, median margin **3.163 s**) and **100 %
-  of aborts** (n = 153, **4.749 s**). No change could have been presented. That is independent of
-  the pkl trial fields Task 4 used, and it is the argument to cite.
-- **The set-equality invariant still holds and is worth porting as an assertion** —
-  `count(Hit) + count(Miss) + count(Ref) == n Change_ON` (256 + 58 + 9 = **323** on this session,
-  with the trial *sets* identical, not merely the counts). It is a check, not evidence for the
-  exclusion rule.
+- **✅ The hardware evidence for THIS entry's claim** (a change *was* presented on `ref` trials) is
+  the **set equality with identical trial sets**: `count(Hit) + count(Miss) + count(Ref) ==
+  n Change_ON`, here 256 + 58 + 9 = **323**, and the spec states the trial *sets* are identical,
+  not merely the counts (§9). Ref trials are inside the `Change_ON` set at the hardware level.
+  That is the second source, independent of the pkl trial fields Task 4 used, and it is what a
+  porter should cite here.
+- **Adjacent but NOT evidence for this entry** — the spec's valid `fa`/`abort` argument (each
+  trial's own `Baseline_ON` pulse **ends before the change was scheduled**, on 100 % of FA trials,
+  n = 263, median margin 3.163 s, and 100 % of aborts, n = 153, 4.749 s). It establishes that no
+  change was presented on `fa`/`abort`, which underwrites *those* exclusions in
+  `EVENT_VALID_OUTCOMES` — it says nothing about `ref`. Do not offer it as support for the ref
+  resolution; an earlier draft of this entry did.
 - **Affected modules** — `visdetect.analysis.constants`, `analysis.align`, `analysis.utils`,
   `core.run_alignment`, `analysis.tf_glm_data`, `analysis.config` (module map, `ref-ambiguity`).
 - **Affected artefacts** — every `Change_ON`-aligned PETH, tensor and decoder cache built under
@@ -567,11 +595,14 @@ full, with evidence.
   −14.9 to +0.03 ms" is already the code's behaviour: `ingest.py:247` tries
   `spike_times_sec_adj.npy` first and only falls back to `spike_times_sec.npy` (`:250`) or raw
   samples (`:253`), logging which it used.
-- **But the spec adds two traps in the same file that the code only half-handles.**
+- **But the spec adds two traps in the same file, and the code happens to survive both.**
   `spike_times_sec_adj.npy` is **not sorted** (117 backsteps of up to 19.7 µs, minimum value
   −0.0002 s), and it has shape `(N,)` while `spike_times_sec.npy` is `(N,1)`. The ingest's
-  `.flatten()` neutralises the shape trap; **nothing anywhere asserts sortedness**, and any
-  `searchsorted`-based binning silently mis-assigns those spikes. Port an explicit sort-and-assert.
+  `.flatten()` (`ingest.py:248`) neutralises the shape trap, and `ingest.py:479` sorts each
+  cluster's train (`times = np.sort(spike_times[idx])`), so **pkl-borne trains are sorted and no
+  current consumer is exposed**. The recommendation is still to port an explicit sort-and-assert:
+  the ingest's sort is incidental to how it groups by cluster, not a guard, and any new reader
+  that goes to the `.npy` directly inherits the unsorted array.
 
 ### E2. BG_046 detection-composition drift (broad/SPN 89 → 15 %, amplitude halving Jun → Jul)
 
@@ -615,12 +646,18 @@ full, with evidence.
 - **MECHANISM — identified on BG_046, and it is NOT the one first proposed.** The NI spec's own
   adversarial audit **retracted** the threshold explanation: "❌ *Earlier claim*: 'the 2025 run's
   `Valve_R` was empty because the laser's 0.38 V never crossed threshold.' **False** — at 0.150 V
-  the laser line has 1,007 crossings" (§1). The real reason is **structural**: the 2025 extraction
-  named the 8 analog channels **positionally**, so its `Valve_R` was really ch7 (the Laser), and
-  `Valve_R` is a **per-trial field** — while **no laser pulse falls inside any trial** (the
-  optotagging blocks run after behaviour ends, from 8908 s against a behavioural end at 8857 s).
-  A per-trial container simply has nowhere to put an out-of-trial event, so the field is empty
-  even though the pulses are present in the raw file at any sane threshold.
+  the laser line has 1,007 crossings" (§1). The real reason the spec gives is **structural**:
+  `Valve_R` is a **per-trial field** and **no laser pulse falls inside any trial** — the
+  optotagging blocks run *after* behaviour ends (§5 puts the behavioural end at **8857 s**;
+  the current spec gives no block start times — see the sourcing note at A15). A per-trial
+  container has nowhere to put an out-of-trial event, so the field is empty even though the
+  pulses are present in the raw file at any sane threshold.
+  ⚠ **My inference, not the spec's text**: that the 2025 extraction named the channels
+  *positionally* and that its `Valve_R` was therefore ch7. §1 states only the channel
+  equivalences `Lick_L ≡ Piezo_1 ≡ ch4`, `Lick_R ≡ Piezo_2 ≡ ch5`, `Valve_L ≡ ch6`; it nowhere
+  derives a channel for `Valve_R`, and "positional" appears nowhere in it. Both the
+  positional-naming reading and the `Valve_R → ch7` step are mine — consistent with the map, but
+  not asserted there.
 - **The sub-TTL voltage is still a real extraction hazard — just not the cause here.** The laser
   line peaks at **0.383 V**, so a conventional 2.5 V threshold finds **zero** pulses (§3). Any new
   extractor must derive thresholds from observed levels. Both facts matter; only the structural
@@ -1076,8 +1113,12 @@ Each of these can move a number or a scope decision and none was in the seed lis
   optotagging.** `split_laser_blocks` returns the two laser blocks **in time order** and its
   caller binds them positionally as `(gpe_pulses, snr_pulses)` — i.e. the code hard-assumes
   **first block = GPe (indirect, putative D2), second = SNr (direct, putative D1)**. The NI spec
-  measured the opposite for BG_046 17092025: **block 0 (8908.4 → 9671.5 s) = SNr**, **block 1
-  (9748.6 → 10511.8 s) = GPe**. If that ordering holds generally, every pathway label the
+  states the opposite for BG_046 17092025: **block 0 = SNr**, **block 1 = GPe** (§10; two blocks
+  of 501 pulses at 10.01 ms, after behaviour). ⚠ **Sourcing note:** earlier drafts of this entry
+  quoted block windows of 8908.4 → 9671.5 s and 9748.6 → 10511.8 s. Those figures came from the
+  386-line revision and **do not appear in the current spec** — the only time landmark it now
+  gives is behaviour ending at 8857 s (§5). They are removed rather than re-quoted; nothing in the
+  argument depends on them. If that ordering holds generally, every pathway label the
   optotagging module emits is **inverted**.
 - **And the mapping has no recorded basis on either side.** The spec checked **all six** settings
   files and the block→target mapping is in none of them; it came from the experimenter. The
@@ -1115,20 +1156,30 @@ Each of these can move a number or a scope decision and none was in the seed lis
   does *not* bury the weaker block (Spearman(pooled, best-per-block) = **0.986**). The defensible
   principle is narrower and is the one to port: **a pooled statistic cannot assign pathway
   identity.** The current code does split the blocks — only the *labels* are in question.
-- **And the antidromic interpretation is now DISFAVOURED, which changes what a swapped label would
-  even mean.** The spec's audit retracted its own "consistent but not proven" verdict: the latency
-  FWHM evidence has **no discriminative power** (a sham control with no laser returns a median
-  FWHM of 0.40 ms, and the estimator floor tracks bin width). Against antidromic: **collision is
-  negative and well powered** (short-gap/long-gap P(evoked) ratio **1.197, 95 % CI [1.048,
-  1.367]** — the interval excludes *any* reduction), and **responses outlast the light by >50 ms**
-  (cluster 317: z = 63.7 at 11–20 ms, 22.0 at 20–60 ms, 5.2 at 60–120 ms), which a conducted spike
-  cannot do. Synaptic/network drive is now positively supported; arkypallidal GPe→striatum,
-  passing fibres and probe position (responders sit at a different depth, 1777.5 vs 1860 µm,
-  p = 0.038) are not excluded. **These remain candidates, not identified cell types.**
-- **The Laser line is a trigger command, not an optical power monitor** — identical amplitude
-  across blocks (0.3490 vs 0.3487 V) says nothing about delivered light. The spec adds that the
-  line is not a standard logic HIGH either, so the data cannot distinguish an attenuated digital
-  trigger from a held analog command.
+- **Antidromic status, re-aligned to the current spec: "plausible but NOT established" (§10) —
+  which still changes what a swapped label would mean.** ⚠ An earlier revision of this entry
+  called the interpretation **DISFAVOURED**, on two supports the current spec refutes *for this
+  protocol*: the negative collision test (short/long-gap P(evoked) ratio **1.197, 95 % CI
+  [1.048, 1.367]**) is real but **invalid under a 10 ms sustained pulse** — even if the first
+  antidromic spike is annihilated, continued illumination regenerates one inside the scoring
+  window — and post-light firing is **expected** from ChR2's ~10 ms closure, not something "a
+  conducted spike cannot do". The pro-antidromic latency-FWHM evidence stays void too (a
+  laser-free sham returns median FWHM 0.40 ms; the estimator tracks bin width). What the spec
+  does establish: the responses are unambiguously **optogenetically driven**, and the expression
+  strategy (anterograde transsynaptic Cre from MOs → ChR2 in striatal somata and axons; direct
+  somatic illumination rejected on fibre position) leaves antidromic invasion as the only route —
+  yet no responder shows the reliable single-spike sub-millisecond antidromic signature
+  (spikes-per-response tracks reliability, ρ = +0.895), and the intra-pulse rhythm looks like
+  synaptic/network drive. The decisive test (short 1–2 ms pulses for collision) is prevented by
+  the protocol. A depth difference this entry once cited (1777.5 vs 1860 µm, p = 0.038) is gone
+  from the current spec, which measures responder depths as **indistinguishable** from
+  non-responders (MWU p = 0.10, KS p = 0.13, no depth gradient). **These remain candidates, not
+  identified cell types — pathway assignment is NOT established for any individual unit.**
+- **The Laser line is a trigger command, not an optical power monitor** — a driver holding a
+  steady command while delivering modulated light is not excluded (§10), and the line is not a
+  standard logic HIGH either, so the data cannot distinguish an attenuated digital trigger from a
+  held analog command (§3). ⚠ The per-block amplitude figures an earlier draft quoted here
+  (0.3490 vs 0.3487 V) are **not in the current spec** and are removed rather than re-quoted.
 - **Status** — LIVE, **direction known but polarity unresolved** → `quarantine.md` **Q12**.
   **Re-ingest** — SURVIVES: re-extraction recovers the pulses (E4) but cannot recover which fibre
   was in which structure. That fact exists only in the experimenter's records, and ADR-019 already

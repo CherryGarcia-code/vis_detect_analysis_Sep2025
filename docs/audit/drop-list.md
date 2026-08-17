@@ -218,18 +218,19 @@ otherwise inherit.
 - **`data/cache/tf_responsive/README.md`** — its STALE banner is the only in-place record of
   register entry 5, and it is what defeats the mtime staleness heuristic. Keep the banner; fix the
   heuristic.
-- **`docs/raw_data/NIDAQ_AND_EVENT_SPEC.md`** — appeared during the Task-15 fix pass, **untracked
-  and on no ref**: **481 lines**, a full re-extraction of one BG_046 session directly from
-  `nidq.bin`, then **adversarially audited by six independent reviewers** and corrected. It is now
-  cited by register entries 6, 8, 11, E1, E4, A13, A14 and A15 and by quarantine Q6/Q12 — the
-  single most load-bearing new evidence in the corpus — and it exists as **one uncommitted copy on
-  the same disk as the repo**. That makes `d7.untracked.at_risk` 6 of 7, not 5 of 6. **Not a drop
-  candidate; a commit candidate**, and it should be committed before anything else in this list is
-  acted on. ⚠ It is also a **living** document that has already revised itself once mid-audit
-  (386 → 481 lines, with retractions); cite it by section and re-read before relying on a figure.
+- **`docs/raw_data/NIDAQ_AND_EVENT_SPEC.md`** — appeared during the Task-15 fix pass as an
+  untracked single copy and is **now committed** (`da5fbf9`, 2026-08-15, at **628 lines**): a full
+  re-extraction of one BG_046 session directly from `nidq.bin`, then **adversarially audited by
+  six independent reviewers** and corrected. It is cited by register entries 6, 8, 11, E1, E4,
+  A13, A14 and A15 and by quarantine Q6/Q12 — the single most load-bearing new evidence in the
+  corpus. While it was uncommitted it made `d7.untracked.at_risk` transiently 6 of 7; with
+  `da5fbf9` landed the count returns to **5 of 6** (timeline in the CSV note). The commit-first
+  advice this entry used to carry is **done**. ⚠ It remains a **living** document that has
+  already revised itself twice mid-audit (386 → 481 → 628 lines, with retractions each time);
+  cite it by section and re-verify against the committed version before relying on a figure.
   The working code it refers to (`tmpclaude-BG_046_17092025/`, ~6.3 GB, git-ignored, including six
   reviewers' scratch work under `_refute1/`…`_refute6/`) is a separate and much larger exposure
-  that D7 did not size because it did not exist at D7's snapshot.
+  that D7 did not size because it did not exist at D7's snapshot — and it is **still untracked**.
 - **The five single-copy untracked scripts** (`validate_event_spike_clock_drift.py`,
   `chronic_feasibility_figure.py`, `render_opto_exemplar_figure.py`,
   `exemplar_tracking_figure.py`, `scratchpad_state_bout_inventory.csv`) — 1,489 lines that exist
