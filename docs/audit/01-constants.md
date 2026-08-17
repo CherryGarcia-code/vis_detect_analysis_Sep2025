@@ -143,9 +143,17 @@ sites: `scripts/batch_processing/batch_plot_tf_pulse.py:35`,
 `scripts/analysis/tf_response/plot_tf_pulse_grid.py:56`, and
 `src/visdetect/analysis/unit_selection.py:249` (which then does `used_params.update(prof)` — an
 empty dict updates nothing, so every profile silently collapses to the function-default
-parameters; `scripts/batch_processing/batch_plot_tf_grids.py` forwards `--profile` into
-`plot_tf_pulse_grid.py` and inherits the defect). A user requesting `striatal_strict`
+parameters). A user requesting `striatal_strict`
 (1200 spikes, 3% ISI) actually ran the defaults (500 spikes, 20% ISI) with no warning.
+
+> **Correction (2026-08-17, Task 15 wave 4, finding X1).** An earlier version of the paragraph
+> above said `scripts/batch_processing/batch_plot_tf_grids.py` "forwards `--profile` into
+> `plot_tf_pulse_grid.py` and inherits the defect". It does not inherit it — it never runs at
+> all: the batch runner's subprocess target is `scripts/analysis/plot_tf_pulse_grid.py`
+> (`batch_plot_tf_grids.py:34`), **a path that does not exist** (the file lives one directory
+> deeper, under `tf_response/`), so that path has never launched anything. Verified against the
+> file; the register (entry 1) and `drop-list.md` §2.1 already state this correctly — this doc
+> was the out-of-step copy.
 
 The intended-vs-actual comparison (`d1.qcprofile.diff.*`) shows a second, structural fact: on
 session 01072025 all four YAML-intended profiles pass the same 108 units, because the pkl stores

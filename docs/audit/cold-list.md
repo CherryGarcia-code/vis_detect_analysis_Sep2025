@@ -87,6 +87,16 @@ therefore the true foundation surface: `analysis.align`, `analysis.behavior`, `a
 `analysis.constants`, `core.session`. Three more are reached by four lines:
 `analysis.track_verdict`, `analysis.utils`, `suite.loader`.
 
+**Hot-module port hazard — `core.video_sync` carries two of the three upward layer edges**
+*(added 2026-08-17, Task 15 wave 4: `d2.layers.upward_module_level` = 3, of which this file
+previously carried only the `anatomy.peak_channel` one)*: `core/video_sync.py:69` imports
+`visdetect.analysis.constants` and `:105` imports `visdetect.analysis.config` — a `core` module
+reaching *up* into `analysis`. It is **hot** (camera line), so this is a now-hazard, not a
+port-time one: porting or reusing `core.video_sync` drags the `analysis` layer into `core`
+unless the two edges are cut (move the video-sync constants/paths down into the core or
+identity layer). Same class as the `peak_channel → analysis.tracking_qc` edge noted in the cold
+table above.
+
 | Live line | Modules it reaches (transitively) |
 |---|---|
 | early-lick / QC1 | 24 |

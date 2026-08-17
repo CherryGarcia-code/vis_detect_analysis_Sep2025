@@ -10,7 +10,7 @@ register:
 
 | Was quarantined | Resolved by | Now |
 |---|---|---|
-| `ref`-trial change-presented ambiguity | Task 4 (`d1.ref.with_change_time` = 18 = `d1.ref.total`, median RT +83 ms), **and independently at the hardware level** — each trial's own `Baseline_ON` pulse ends *before the change was scheduled* on 100 % of FA trials (n=263, median margin 3.163 s) and 100 % of aborts (n=153, 4.749 s) | Register entry **11**, status SETTLED-CONVENTION, two independent sources |
+| `ref`-trial change-presented ambiguity | Task 4 (`d1.ref.with_change_time` = 18 = `d1.ref.total`, median RT +83 ms), **and independently at the hardware level** — the §9 **set equality with identical trial sets**: `count(Hit) + count(Miss) + count(Ref) == n Change_ON` (256 + 58 + 9 = 323), with the spec stating the trial *sets* are identical, not merely the counts — ref trials sit inside the `Change_ON` set at the hardware level. *(Corrected 2026-08-17, Task 15 wave 4: this cell previously cited the `Baseline_ON`-ends-first argument, which register entry 11's own body rules out as evidence for the ref claim — it establishes the `fa`/`abort` exclusions, and says nothing about `ref`.)* | Register entry **11**, status SETTLED-CONVENTION, two independent sources |
 | `CHANGE_SIZES` membership divergence | Task 15 per-consumer check (`d8.changesizes.catch_in_go_loops` = 0) | Register entry **12**, status SETTLED-CONVENTION |
 
 **Q6 was substantially resolved after the audit's first pass** by
@@ -21,20 +21,26 @@ the same document. Both changes are Task-15-fix additions.
 > **On the new evidence source.** `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` was produced outside this
 > audit and is **read-only** to it. It was **untracked** during the Task-15 fix passes — a single
 > uncommitted copy that transiently made `d7.untracked.at_risk` 6 of 7 — and has since been
-> **committed** (`da5fbf9`, 2026-08-15, 628 lines), returning that count to 5 of 6; the timeline is
-> in the CSV note. Its scope caveat is load-bearing and is
+> **committed** (`da5fbf9`, 2026-08-17, 628 lines), returning that count to 5 of 6; the timeline is
+> in the CSV note. *(Commit date corrected 2026-08-15 → 2026-08-17 on 2026-08-17, Task 15 wave 4,
+> per `git show -s --format=%ci da5fbf9`.)* Its scope caveat is load-bearing and is
 > repeated wherever it is cited: **one session (BG_046, 17 Sep 2025) of one subject**, with every
 > numeric constant to be re-derived per session.
 >
 > ⚠ **Cite only the audited version.** The document was adversarially reviewed by six independent
 > reviewers and **explicitly retracts several of its own first-pass claims**. This audit corrected
 > its register and quarantine entries against the audited text on 2026-08-14; anything marked ❌
-> there is refuted and must not be re-imported. The retracted set is listed in the register's
-> evidence-source note.
+> there is refuted and must not be re-imported. The retracted set is listed (non-exhaustively —
+> the note itself says "notably") in the register's evidence-source note; the authority is the
+> spec's own ❌ markers, not any list of them.
 
-Ordered by how much they block. **Q1–Q5 block sub-project 3 or sub-project 1; Q6–Q12 do not** —
-with the exception that Q6's *remaining* part is a scoping question for sub-project 1's `X:` pass
-and Q12 blocks any D1/D2 pathway claim from optotagging.
+Ordered by how much they block — with the per-entry `Blocks` line as the authority. **Q1, Q2 and
+Q5 block sub-project 3 or sub-project 1. Q3 blocks nothing** once ADR-019's "old figures are
+archive" rule is honoured, **and Q4 blocks only the naming** of affected historical lick-rate
+figures. **Q6–Q12 do not block** — with the exception that Q6's *remaining* part is a scoping
+question for sub-project 1's `X:` pass and Q12 blocks any D1/D2 pathway claim from optotagging.
+*(Header corrected 2026-08-17, Task 15 wave 4: the earlier "Q1–Q5 block" over-claimed Q3/Q4
+against their own `Blocks` lines.)*
 
 ---
 
@@ -160,6 +166,20 @@ read "an unmade decision". It is no longer one.
   the `fa` outcome, and `changelist1/2` = [4, 2] / [1.5, 1.35, 1.25] *are* the change sizes
   (cross-check for register entry 12).
 - **What genuinely remains open — and the spec says so itself.**
+  0. **The time-base trap — this one silently corrupts everything downstream** *(added 2026-08-17,
+     Task 15 wave 4: carried nowhere in D8 until now).* NI extraction MUST convert sample indices
+     with the **meta `niSampRate` = 10593.2 Hz**, never the plausible-looking sync-fitted rate
+     (10593.28996). The fitted value is *NI samples per imec-basestation-second*, not Hz; adopting
+     it misaligns events against spikes by a **46.1 ms median residual with a −8.49 ppm ramp, up
+     to ~90 ms** growing across the session — no constant offset can absorb it. Against the meta
+     rate the same reconstruction gives **13.9 µs median (p99 71 µs)** (spec §4). Two obligations
+     for the new pipeline: (a) **assert post-extraction** that the reconstructed TPrime map's
+     event-vs-spike residual against the 1 Hz sync is ≲ 100 µs — a fitted-rate slip fails this by
+     three orders of magnitude; (b) the companion extraction's stored `*_t` arrays in the ~6.3 GB
+     untracked `tmpclaude-BG_046_17092025/` tree were written at the **fitted** rate before that
+     bug was found (spec §4, "Bug found and fixed") — a latent 75–89 ms trap: treat any `.npz`
+     from that tree as fitted-rate unless re-derived, and prefer storing `*_idx` with consumers
+     dividing by the meta rate.
   1. **Per-session generalisation.** One session, one subject, nothing replicated. The channel map
      is *reported* byte-identical across all 50 BG_046 raw sessions, but every numeric constant —
      thresholds, the ~67 ms latency, the lick threshold, the wheel scale — is explicitly to be
@@ -187,7 +207,7 @@ read "an unmade decision". It is no longer one.
      which is what adjudicated the merge rule — and that rule matters, because the old width cut
      placed **20 trial onsets 5.02 ms late** and the trial *count* cannot detect it (both rules
      return 739).
-- **Cost** — one BG_031 session's `X:` read for item 2; fold into the Q5 sweep. Items 1 and 3–5
+- **Cost** — one BG_031 session's `X:` read for item 2; fold into the Q5 sweep. Items 0–1 and 3–5
   are new-pipeline work, not audit work.
 - **Blocks** — nothing that a decision would unblock. It scopes sub-project 1's NI extraction
   stage, which `visdetect.core.spikeglx` (cold, and **truly untested**) is the natural home for.
@@ -255,7 +275,7 @@ Recorded so nothing falls between documents. None blocks sub-project 3.
 | Full enumeration of import-time side effects | `d2.sideeffects.import` = not-measured | AST-walk every module for module-level calls; the known set is `matplotlib.use("Agg")` ×4 (`tf_pulse.py:17`, `unit_selection.py:23`, `core/qc.py:27`, `suite/plotting.py:9`) plus `os.makedirs` at `suite/config.py:19` |
 | Real-data test tier runtime | `d5.tests.realdata_runtime_s` = not-measured | Run the 14 `needs_real_data=True` files listed in `test_partition.csv` once the pkl tree is stable |
 | Pairwise agreement of the duplicated doc pairs | `d6.dup_pair_agreement` = not-measured | Deliberately deferred: ADR-005 deletes the copies. Only the one known divergence matters (register D3) |
-| `partial_spearman` estimator spread measured on **one** input | `d3.pspearman.spread` = 0.892 / 0.901 / 0.901 | Max spread 0.0090 ≤ the 0.02 upgrade threshold, so the register entry was **not** upgraded. Re-run the three families on 2–3 further real inputs with different tie structure before consolidating; B and C are an exact algebraic identity, so only A-vs-B can move |
+| `partial_spearman` estimator spread measured on **one** input | `d3.pspearman.spread` = 0.892 / 0.901 / 0.901 | Max spread 0.0090 ≤ the 0.02 upgrade threshold, so **no register entry was warranted — the finding lives here**, as a residual measurement gap (a consolidation-hygiene item, not an attributable defect). *(Reworded 2026-08-17, Task 15 wave 4: this cell and 03-scripts.md previously implied an existing register entry that was "not upgraded"; no `partial_spearman` register entry ever existed.)* Re-run the three families on 2–3 further real inputs with different tie structure before consolidating; B and C are an exact algebraic identity, so only A-vs-B can move |
 | Whether the two 21.99 GB eye-cam copies are one file on disk | — | `fsutil hardlink list` on both paths; not probed because it is write-adjacent tooling on worktree trees |
 | Historical figure `dt` provenance | `d1.tfperiod.figure_attribution` | See Q3 — unrecoverable; superseded by ADR-019 |
 
@@ -267,8 +287,8 @@ Recorded so nothing falls between documents. None blocks sub-project 3.
   binds them positionally as `(gpe_pulses, snr_pulses)`, i.e. **first block = GPe**
   (`src/visdetect/analysis/optotagging.py:505-510`, `:773`). The NI spec measured **first block =
   SNr** on BG_046 17092025 (`docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §10). Neither assumption is
-  recorded anywhere authoritative: the spec **checked all six settings files** and the mapping is
-  in none of them.
+  recorded anywhere authoritative: the spec states the mapping is **"not in any settings file"**
+  (§10 — it gives no count of files checked; an earlier "all six" here was not the spec's text).
 - **Why it is quarantined rather than asserted.** The spec establishes the mapping for *one*
   session from the experimenter's own account, not from a file. It is entirely possible the block
   order varies between sessions — which is precisely why the spec's recommendation is to capture

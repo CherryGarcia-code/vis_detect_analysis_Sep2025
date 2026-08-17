@@ -30,7 +30,7 @@ out-of-repo memory layer was read read-only.
 | `d6.literals.checked` | 20 | backticked `SYMBOL` claims resolved against `constants.py` + `analysis/config.py` |
 | `d6.literals.mismatch` | 4 | **all four adjudicated as mechanical false positives — substantive doc-vs-code divergences: 0** (see below) |
 | `d6.literals.symbol_missing` | 1 | `STAGE_ORDER` — exists, but assigned inside `if/else`, invisible to the top-level AST scan |
-| `d6.deadpaths` | 111 | 53 unique paths across 25 docs; `analysis_suite/*` = 45 refs / 14 docs (recon baseline 181/42, wider scope — see below) |
+| `d6.deadpaths` | 111 | 53 unique paths across **24** docs (corrected from "25" 2026-08-17, Task 15 wave 4 — `dead_paths.csv` counts 24 unique `doc` values); `analysis_suite/*` = 45 refs / 14 docs (recon baseline 181/42, wider scope — see below) |
 | `d6.modelids` | 3 | all in one file (`harden-result/SKILL.md`), all Opus-4.8-era |
 | `d6.authority.claimants` | 4 | CLAUDE.md + 3 `docs/AI_interaction` files; only CLAUDE.md is loaded by the harness |
 | `d6.dup_pair_agreement` | not-measured | recon overlap %s restated below; full pairwise diff deferred (ADR-005 deletes the copies) |
@@ -73,7 +73,7 @@ value that is a substring of the code expression passes); and conditional or
 computed constants are invisible to the top-level AST — the one
 `symbol-not-found` is exactly that blind spot, not a phantom symbol.
 
-## Dead paths: 111 refs, 53 unique paths, 25 docs
+## Dead paths: 111 refs, 53 unique paths, 24 docs (count corrected 2026-08-17, wave 4)
 
 Recon baseline: **181 `analysis_suite` refs across 42 files** — counted over
 the whole doc corpus (including `docs/superpowers/` and non-backticked
@@ -107,7 +107,9 @@ historical plans:
   `.claude/skills/research-visualizer/SKILL.md:254`
   (`analysis_suite/plotting.py`, `analysis_suite/utils.py`). These load into
   working sessions and steer agents toward a directory that no longer exists.
-- The remaining 22 docs are mostly plans/handoffs (`docs/AI_interaction/`,
+- The remaining **21** docs (corrected from "22" 2026-08-17, Task 15 wave 4:
+  24 total − CLAUDE.md − 2 skills; the earlier arithmetic started from the
+  wrong total of 25) are mostly plans/handoffs (`docs/AI_interaction/`,
   `docs/UNITMATCH/`) — but `docs/ARCHITECTURE.md` (12 dead refs, incl.
   `src/visdetect/analysis/archive/`) and `docs/DOCUMENTATION_INDEX.md` are
   presented as current.

@@ -1,0 +1,117 @@
+file,set,triage_depth,verdict,toplevel_body,name_ref_count,name_ref_example,last_commit,writes_figure,writes_data,why
+scripts/QC_CHECKS/check_alignment_times.py,orphan-nonentry,full,job-body,work,1,docs/manuals/MANUAL_Data_QC.md,2026-05-19,False,False,"referenced by name in 1 tracked file(s), e.g. docs/manuals/MANUAL_Data_QC.md"
+scripts/QC_CHECKS/check_change_nan_outcomes.py,orphan-nonentry,full,job-body,work,0,,2026-05-19,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/QC_CHECKS/check_kilosort4_counts.py,orphan-nonentry,full,job-body,work,0,,2025-12-04,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/__init__.py,orphan-nonentry,full,package-marker,defs-only,43,.claude/skills/codebase-auditor/SKILL.md,2026-06-18,False,False,package marker; not dead-by-orphanhood (scripts/__init__.py is register A12's wheel-build trigger); dunder-stem name matches are noise
+scripts/analysis/behavior/_regen_manifest.py,orphan-nonentry,full,job-body,work,0,,2026-05-19,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/analysis/check_fa_timing.py,orphan-nonentry,full,job-body,work,0,,2026-05-19,True,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/analysis/decision_latents/_concept_slide.py,orphan-nonentry,full,job-body,work,0,,2026-06-25,True,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/analysis/decision_latents/_diag_f1b_vs_f1d.py,orphan-nonentry,full,job-body,work,0,,2026-06-20,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/analysis/decision_latents/_recovery_summary_fig.py,orphan-nonentry,full,job-body,work,0,,2026-06-25,True,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/analysis/decision_latents/_tf_sampling_check.py,orphan-nonentry,full,job-body,work,4,docs/superpowers/plans/2026-06-18-B8-behavioral-decision-latents-by-state-plan.md,2026-06-18,True,False,"referenced by name in 4 tracked file(s), e.g. docs/superpowers/plans/2026-06-18-B8-behavioral-decision-latents-by-state-plan.md"
+scripts/analysis/inspect_counts.py,orphan-nonentry,full,job-body,work,0,,2026-05-19,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/analysis/inspect_fa_types.py,orphan-nonentry,full,job-body,work,0,,2026-05-19,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/check_scripts.py,orphan-nonentry,full,job-body,work,0,,2026-05-19,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/check_unitmatch_shapes.py,orphan-nonentry,full,job-body,work,0,,2026-02-02,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/conversion/__init__.py,orphan-nonentry,full,package-marker,defs-only,43,.claude/skills/codebase-auditor/SKILL.md,2026-06-18,False,False,package marker; not dead-by-orphanhood (scripts/__init__.py is register A12's wheel-build trigger); dunder-stem name matches are noise
+scripts/conversion/generate_synthetic_session.py,orphan-nonentry,full,job-body,work,0,,2026-05-19,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/data_management/debug_pkl.py,orphan-nonentry,full,job-body,work,0,,2026-05-19,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/kilosort_related/check_kilosort4_counts.py,orphan-nonentry,full,dead,defs-only,0,,2025-12-04,False,False,"in-degree 0, no entry point, defs-only, named nowhere tracked"
+scripts/neural_latents/__init__.py,orphan-nonentry,full,package-marker,defs-only,43,.claude/skills/codebase-auditor/SKILL.md,2026-06-29,False,False,package marker; not dead-by-orphanhood (scripts/__init__.py is register A12's wheel-build trigger); dunder-stem name matches are noise
+scripts/optotagging/__init__.py,orphan-nonentry,full,package-marker,defs-only,43,.claude/skills/codebase-auditor/SKILL.md,2026-07-01,False,False,package marker; not dead-by-orphanhood (scripts/__init__.py is register A12's wheel-build trigger); dunder-stem name matches are noise
+scripts/pipelines/concat_sort/__init__.py,orphan-nonentry,full,package-marker,defs-only,43,.claude/skills/codebase-auditor/SKILL.md,2026-03-11,False,False,package marker; not dead-by-orphanhood (scripts/__init__.py is register A12's wheel-build trigger); dunder-stem name matches are noise
+scripts/pipelines/concat_sort/_temp_frag.py,orphan-nonentry,full,job-body,work,0,,2026-03-11,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/pipelines/concat_sort/check_completion_marker.py,orphan-nonentry,full,job-body,work,1,docs/AI_interaction/concat-sort/MONITORING_GUIDE.md,2026-04-14,False,False,"referenced by name in 1 tracked file(s), e.g. docs/AI_interaction/concat-sort/MONITORING_GUIDE.md"
+scripts/pipelines/concat_sort/summary_and_next_steps.py,orphan-nonentry,full,job-body,work,2,docs/AI_interaction/concat-sort/MONITORING_GUIDE.md,2026-04-14,False,False,"referenced by name in 2 tracked file(s), e.g. docs/AI_interaction/concat-sort/MONITORING_GUIDE.md"
+scripts/pipelines/tracking/tests/test_freeze_policy.py,orphan-nonentry,full,job-body,work,1,docs/superpowers/plans/2026-06-02-deepum-finetune.md,2026-06-03,False,False,"pytest test module - collected by path (py -m pytest <path>), invisible to both the import DAG and the name grep"
+scripts/pipelines/tracking/tests/test_runner_ckpt_arg.py,orphan-nonentry,full,job-body,work,1,docs/superpowers/plans/2026-06-02-deepum-finetune.md,2026-06-03,False,False,"pytest test module - collected by path (py -m pytest <path>), invisible to both the import DAG and the name grep"
+scripts/pipelines/tracking/tools/check_gpu_torch.py,orphan-nonentry,full,job-body,work,2,docs/superpowers/plans/2026-06-02-deepum-finetune.md,2026-06-03,False,False,"referenced by name in 2 tracked file(s), e.g. docs/superpowers/plans/2026-06-02-deepum-finetune.md"
+scripts/popgeom_theta/theta_prototype.py,orphan-nonentry,full,job-body,work,2,docs/science/2026-07-21-sensory-motor-geometry-regulation-null.md,2026-07-21,True,True,"referenced by name in 2 tracked file(s), e.g. docs/science/2026-07-21-sensory-motor-geometry-regulation-null.md"
+scripts/population_field/__init__.py,orphan-nonentry,full,package-marker,defs-only,43,.claude/skills/codebase-auditor/SKILL.md,2026-07-08,False,False,package marker; not dead-by-orphanhood (scripts/__init__.py is register A12's wheel-build trigger); dunder-stem name matches are noise
+scripts/state_dynamics/within_session_dynamics.py,orphan-nonentry,full,job-body,work,1,docs/superpowers/plans/2026-08-09-subproject-0-audit.md,2026-07-21,True,True,"referenced by name in 1 tracked file(s), e.g. docs/superpowers/plans/2026-08-09-subproject-0-audit.md"
+scripts/state_tf_learning/b9_recruitment.py,orphan-nonentry,full,job-body,work,1,docs/science/2026-07-01-B9-fast-path-results.md,2026-07-01,True,False,"referenced by name in 1 tracked file(s), e.g. docs/science/2026-07-01-B9-fast-path-results.md"
+scripts/state_tf_learning/b9_summary_figure.py,orphan-nonentry,full,job-body,work,1,docs/science/2026-07-01-B9-fast-path-results.md,2026-07-01,True,False,"referenced by name in 1 tracked file(s), e.g. docs/science/2026-07-01-B9-fast-path-results.md"
+scripts/talk_substrate/test_common.py,orphan-nonentry,full,job-body,defs-only,0,,2026-06-30,False,False,"pytest test module - collected by path (py -m pytest <path>), invisible to both the import DAG and the name grep"
+scripts/tf_responsiveness/cluster/diag_full_design.py,orphan-nonentry,full,job-body,work,0,,2026-06-22,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/tf_responsiveness/cluster/diag_full_standardize.py,orphan-nonentry,full,job-body,work,0,,2026-06-22,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/tf_responsiveness/cluster/diag_fullcv.py,orphan-nonentry,full,job-body,work,0,,2026-06-22,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/tf_responsiveness/cluster/diag_lin_vs_log2.py,orphan-nonentry,full,job-body,work,0,,2026-06-22,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/tf_responsiveness/cluster/diag_schema.py,orphan-nonentry,full,job-body,work,0,,2026-06-22,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/tf_responsiveness/cluster/diag_tf_baseonly_tagB.py,orphan-nonentry,full,job-body,work,0,,2026-06-22,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/tf_responsiveness/cluster/diag_tf_fix.py,orphan-nonentry,full,job-body,work,0,,2026-06-22,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/tf_responsiveness/cluster/diag_tf_signal.py,orphan-nonentry,full,job-body,work,0,,2026-06-22,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/tf_responsiveness/cluster/diag_tf_signal2.py,orphan-nonentry,full,job-body,work,0,,2026-06-22,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/tf_responsiveness/cluster/diag_tf_standardize.py,orphan-nonentry,full,job-body,work,0,,2026-06-22,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/tf_responsiveness/cluster/test_faithful_synthetic.py,orphan-nonentry,full,job-body,work,0,,2026-06-23,False,False,"pytest test module - collected by path (py -m pytest <path>), invisible to both the import DAG and the name grep"
+scripts/tf_responsiveness/smoke_bg046.py,orphan-nonentry,full,job-body,work,0,,2026-06-29,False,False,top-level work runs on `py <path>` despite no __main__ guard
+scripts/tracking_dant/__init__.py,orphan-nonentry,full,package-marker,defs-only,43,.claude/skills/codebase-auditor/SKILL.md,2026-06-23,False,False,package marker; not dead-by-orphanhood (scripts/__init__.py is register A12's wheel-build trigger); dunder-stem name matches are noise
+scripts/QC_CHECKS/audit_unit_table.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/QC_technical/validate_event_spike_clock_drift.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/analysis/behavior/batch_run_behavior.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/analysis/behavior/run_behavior_pipeline.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/analysis/coding_direction_stub.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/analysis/decision_latents/_recovery_fixtures.py,no-output,coarse,shared-module,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/analysis/fix_unitmatch_cluster_group.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/analysis/lick/batch_run_lick_analysis.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/analysis/lick/plot_lick_raster.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/analysis/tf_response/extract_top_clusters.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/analysis/tf_response/plot_tf_pulse_grid.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/anatomy/import_brainglobe_tracks.py,no-output,coarse,shared-module,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/anatomy/import_track.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/anatomy/preflight_tracks.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/anatomy/render_brain_3d.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/anatomy/run_brainreg.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/batch_processing/batch_convert_MatToPkl.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/batch_processing/batch_plot_tf_grids.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/batch_processing/batch_plot_tf_pulse.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/conversion/backfill_stim_phase.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/conversion/convert_mat_to_pkl.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/conversion/copy_pybombcell_locally.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/conversion/raw_to_pkl.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/conversion/validate_pkl.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/data_management/migrate_pkls.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/data_management/move_redundant_files.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/data_management/organize_bg012_behavior.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/data_management/organize_subject_data.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/data_management/verify_deletion_integrity.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/inspect_match_table.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/inspect_ni_events.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/kilosort_related/check_session_chanmaps.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/kilosort_related/generate_chanmaps.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/pipelines/concat_sort/_quick_yield.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/pipelines/concat_sort/build_concat_pkls.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/pipelines/concat_sort/run_kilosort4.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/pipelines/tracking/_subject_paths.py,no-output,coarse,shared-module,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/pipelines/tracking/make_state_tables.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/pipelines/tracking/render_curation_sheets.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/pipelines/tracking/tests/test_ae_smoke.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/pipelines/tracking/tests/test_deepum_common.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/pipelines/tracking/tests/test_deepum_smoke.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/pipelines/tracking/tests/test_eval_assembly.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/pipelines/tracking/train_deepum_common.py,no-output,coarse,shared-module,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/qc/check_refactor_guardrails.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/qc/repair_session_ids.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/rebuild_tf_cache.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/state_labeling/calibrate_states.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/state_labeling/run_state_labeler.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/state_labeling/validate_states.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/talk_substrate/fig_c2_changesize.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/talk_substrate/fig_c3_fa_timing.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/talk_substrate/fig_c_outcome.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/talk_substrate/fig_d_state.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/tf_labeling/run_labeling_gui.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/tf_responsiveness/cluster/verify_lean_import.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/tf_responsiveness/cluster_bg/verify_lean_import_bg.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/tf_responsiveness/preparatory_fig5/licktime_shuffle_control.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/tf_responsiveness/preparatory_fig5/prep_common.py,no-output,coarse,shared-module,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/tf_responsiveness/state_conditioned/continuum_common.py,no-output,coarse,shared-module,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/tracking_consensus/write_readme.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/tracking_dant/adapter.py,no-output,coarse,shared-module,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/tracking_dant/registry.py,no-output,coarse,shared-module,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/tracking_dant/run_dant_bg046.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/update_analysis_imports.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/utils/png_viewer.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/video/_tagger_ui.py,no-output,coarse,shared-module,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/video/fit_sync.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/video/sync_status.py,no-output,coarse,entry-point,defs-only,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)
+scripts/video/tag_session.py,no-output,coarse,entry-point,work,,,,False,False,coarse: census columns only (in_degree/has_main/has_argparse)

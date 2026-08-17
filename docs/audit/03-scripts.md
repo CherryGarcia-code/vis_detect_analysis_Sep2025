@@ -88,9 +88,19 @@ sessions; x=`occ_StimSens`, y=`hit_rate_go`, control z=`n_trials`):
 Maximum pairwise spread = **0.0090** (unrounded: A=0.891614, B=0.900577,
 C=0.900577; corrcoef-vs-spearmanr = 0.008963; B and C are identical to 6 dp — the
 closed form coincides with Pearson-on-rank-residuals in the absence of divergent tie
-corrections). This is **below the 0.02 threshold**, so the register entry stays at
-"different estimator in principle" and is **NOT** upgraded to materially-different-
-in-practice. On this input, re-ranking the rank-residuals (A) vs Pearson on the
+corrections). This is **below the 0.02 threshold**, so **no register entry was
+warranted** — the finding is carried as a residual measurement gap in
+`quarantine.md` Q11, not as a defect entry.
+
+> **Correction (2026-08-17, Task 15 wave 4, finding X4).** The paragraph above
+> previously said "the register entry stays at 'different estimator in principle'
+> and is NOT upgraded" — phrasing that implies a `partial_spearman` register entry
+> exists. None does, and none was ever created: the measured spread (0.0090) fell
+> below the pre-declared upgrade threshold, so the finding's home is quarantine
+> Q11's residual-gaps table. The upgrade *rule* was real; the entry it would have
+> upgraded was never instantiated.
+
+On this input, re-ranking the rank-residuals (A) vs Pearson on the
 rank-residuals (B) vs the closed form (C) agree to ~0.01 — a consolidation to one
 canonical `partial_spearman` is still warranted for hygiene, but no existing result
 is invalidated by the estimator choice on the evidence measured here.
@@ -123,6 +133,10 @@ included — they are measurement subjects, not staged artefacts).
   in-degree-0 **classification** (shared-module vs job-body vs genuinely dead) is
   deferred to the drop-list task (Task 15), which takes
   `script_classification.csv` and `date_parser_sites.csv` as input.
+  *(Discharged 2026-08-17, Task 15 wave 4: `scripts/audit/d3_script_triage.py` →
+  `data/cache/audit/script_triage.csv`, ids `d8.scripts.orphan_triage` /
+  `d8.scripts.nooutput_triage`, drop-list §2.8. Headline: 1 dead, 38 job-bodies,
+  7 package markers of the 46.)*
 - `d3.shim_importers` = **0** importers of the top-level shims
   `src/visdetect/{session,io}.py` across scripts/, src/, tests/ — the drop-list
   evidence: the shims can go.

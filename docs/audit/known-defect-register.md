@@ -25,7 +25,7 @@ or says plainly that the direction is unknown and points at `quarantine.md`.
 | **Affected artefacts** | Caches, figures, tables, pkls or docs that carry the defect's imprint. |
 | **Evidence** | Measurement ids **and** `file:line`. Where a claim has no measured backing, the entry says so. |
 | **Status** | `LIVE` (present in code today) · `IN-REPAIR` (fix in flight on a branch) · `CODE-FIXED / ARTEFACTS-STALE` · `SETTLED-CONVENTION` (resolved to a documented choice) · `QUARANTINED` (direction unknown) · `HISTORICAL` (cannot recur; matters only for old outputs) |
-| **Re-ingest disposition** | The project owner has decided the new repo will (a) use **NWB** and (b) **re-ingest sessions from raw** rather than copy pickles or caches. `DISSOLVED` = the defect lives only in derived artefacts nobody carries forward. `SURVIVES` = it is a convention, a piece of code, or a fact about the raw data, and re-ingest does not touch it. `CONDITIONAL` = it turns on a decision the owner has not yet made. |
+| **Re-ingest disposition** | The project owner has decided the new repo will (a) use **NWB** and (b) **re-ingest sessions from raw** rather than copy pickles or caches. `DISSOLVED` = the defect lives only in derived artefacts nobody carries forward. `SURVIVES` = it is a convention, a piece of code, or a fact about the raw data, and re-ingest does not touch it. `CONDITIONAL` = it turns on the NI re-extraction **being done** — the decision itself is made (see the box below); the entries wait on the work, not on a choice. *(Definition updated 2026-08-17, Task 15 wave 4; it previously read "a decision the owner has not yet made", contradicting the box below.)* |
 
 ### ⚠️ The one thing that flips three entries: **the NI half of the re-ingest**
 
@@ -38,13 +38,18 @@ product*, and re-running it reproduces every NI-layer defect.
 
 Entries **6 (lick channel)**, **E4 (BG_031 Laser gap)** and **8 (QC1 alignment)** hinge on this —
 the three rows dispositioned `CONDITIONAL` in the index below. Re-extracting NI from
-`nidq.bin`/`nidq.meta` dissolves the first two outright.
+`nidq.bin`/`nidq.meta` dissolves entry 6 outright and **plausibly** E4 — E4's own body says
+"plausibly recovers the 35 sessions", because the mechanism was measured on BG_046, not BG_031,
+and the hedge belongs here too *(callout aligned with E4's body 2026-08-17, Task 15 wave 4)*.
 
 **This is no longer an open decision.** `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` (2026-08-13/14,
 then **adversarially audited by six independent reviewers** and corrected) is a full re-extraction
 of one BG_046 session directly from `nidq.bin` that both **confirms the diagnosis** and **supplies
-a validated recipe** — settings-first discipline, channel map, per-channel threshold derivation,
-a merge-then-first-pulse edge rule, and a 13-step pipeline checklist. Under the corrected rule the
+a validated recipe** — settings-first discipline, the §4 time-base rule (convert indices at meta
+`niSampRate` = 10593.2 Hz, **never** the sync-fitted rate — see `quarantine.md` Q6 **trap 0** for
+the 46.1 ms/−8.49 ppm failure mode and the post-extraction assert), channel map, per-channel
+threshold derivation, a merge-then-first-pulse edge rule, and a 13-step pipeline checklist. Under
+the corrected rule the
 re-extraction matches MATLAB **exactly**: `Baseline_ON` 739/739, `Change_ON` 323/323, `Valve`
 251/251, all at **0.0000 ms**. What remains open is **per-session generalisation**, not method:
 one session, one subject, nothing replicated. Carried as `quarantine.md` **Q6**.
@@ -52,19 +57,24 @@ one session, one subject, nothing replicated. Carried as `quarantine.md` **Q6**.
 > **Evidence-source note — read this before citing the spec.** It is a document produced outside
 > this audit and **read-only** to it; nothing in it was edited. It was **untracked** for most of
 > the audit — a single uncommitted copy on the same disk as the repo, which transiently made
-> `d7.untracked.at_risk` 6-of-7 — and has since been **committed** (`da5fbf9`, 2026-08-15, at
+> `d7.untracked.at_risk` 6-of-7 — and has since been **committed** (`da5fbf9`, 2026-08-17, at
 > **628 lines**), returning that count to 5-of-6 (timeline recorded in the CSV note; see also
-> `drop-list.md`, *Not dropped, and why*). It is a **living document** that has revised itself
-> twice mid-audit (386 → 481 → 628 lines), retracting claims each time — re-verify any figure
-> against the committed version before carrying it.
+> `drop-list.md`, *Not dropped, and why*). *(Commit date corrected 2026-08-15 → 2026-08-17 on
+> 2026-08-17, Task 15 wave 4, per `git show -s --format=%ci da5fbf9`.)* It is a **living
+> document** that revised itself **three times** mid-audit (386 → 481 → 530 → 628 lines — the
+> earlier "twice" skipped the 530-line revision the SDD ledger records), retracting claims each
+> time — re-verify any figure against the committed version before carrying it.
 >
 > ⚠ **It retracts several of its own earlier claims, and this register was corrected against the
 > audited version.** Claims marked ❌ there must not be carried forward, notably: the "Laser
 > 1003/1003" agreement row (no rule yields 1003 — there are 1004 raw rises, 1002 real plus two
 > 0.094 ms artefacts, **both** mid-behaviour); "reproduces `NI_Sync.txt` to 0.000 ms" (a
 > mathematical identity, since `NI_Sync.txt` is CatGT's extraction converted with the same meta
-> rate, and the two `.mat` files are byte-identical to each other — three "independent
-> confirmations" were one measurement); the ≥15 ms sliver rule; the "~5 ms tick"; "~4 frames"; the
+> rate, and the two `.mat` files are byte-identical to each other **on `Synch`/`Baseline_ON`** —
+> the spec's own qualifier (§4), restored here 2026-08-17 (Task 15 wave 4) because unqualified it
+> refutes entry 6: the lick channels of the two `.mat` files **differ**, and that difference *is*
+> entry 6's mechanism — so three "independent confirmations" were one measurement); the ≥15 ms
+> sliver rule; the "~5 ms tick"; "~4 frames"; the
 > surplus-`Change_ON` argument; and the 8σ detector's self-validation. Each is handled at the
 > entry that cites it.
 
@@ -104,15 +114,21 @@ one session, one subject, nothing replicated. Carried as `quarantine.md` **Q6**.
 | A11 | Delete-guard false positive blocks all recursive deletes | LIVE | SURVIVES | Pushes an operator toward the 2026-06-07 data-loss shape |
 | A12 | No built distribution has ever contained `visdetect` | LIVE | DISSOLVED | Every non-editable consumer breaks at build time |
 | A13 | TF-GLM wheel regressor edge-counts one encoder line | LIVE | SURVIVES | Unsigned, direction-blind: over-states movement (session-wide gross/net **1.25×**, larger in quiet windows) → the "movement-controlled" GLM is not movement-controlled |
-| A14 | NI event times are not stimulus times | LIVE (data fact) | SURVIVES | `Baseline_ON` leads the physical screen change by up to **+67.3 ms** (an upper bound), comparable to striatal visual latency — and is **not frame-locked**, sd **14.6 ms** per trial |
+| A14 | NI event times are not stimulus times | LIVE (data fact) | SURVIVES | `Baseline_ON` leads the physical screen change by a **median +67.3 ms (IQR 55–79)** — 67.3 bounds the display-latency *component*, not the per-trial lead — comparable to striatal visual latency, and is **not frame-locked**, sd **14.6 ms** per trial |
 | A15 | Optotag block→target mapping is assumed, and inverted on the one measured session | LIVE | SURVIVES | Every D1(SNr)/D2(GPe) pathway label from optotagging may be **swapped** — see `quarantine.md` Q12 |
+| A16 | 43 scientific parameters re-declared with **disagreeing values** across scripts | LIVE | SURVIVES | Cross-script comparability broken **per name**: two scripts using "the same" parameter can compute under different values |
 | D1 | `QUESTION_INDEX.md:49` asserts refuted VMS engagement-gating | LIVE | SURVIVES | Misdirects design, not values |
 | D2 | `2026-06-17-post-tf-null…md:4,48` names the wrong region | LIVE | SURVIVES | Its "cheap decisive control" is void as designed |
-| D3 | `docs/GOTCHAS.md:10` teaches the integer session-id footgun | LIVE | SURVIVES | An agent reading the copy is instructed to create defect 4 |
+| D3 | `docs/GOTCHAS.md:10` teaches the integer session-id footgun | LIVE | **DISSOLVED** (ADR-005) | An agent reading the copy is instructed to create defect 4 |
+| D4 | `2026-07-07-…-spectrum-celltype.md:52,172` carries two walked-back clauses unmarked | LIVE | SURVIVES | Clause (b) actively instructs future authors to write the refuted thing |
 
-**35 entries**: 12 master-design seeds (Section A), 5 ephys (Section B), 15 audit-added
-(Section C), 3 documentation-layer (Section D). A13–A15 were added in the Task-15 fix pass from
-`docs/raw_data/NIDAQ_AND_EVENT_SPEC.md`.
+**37 entries**: 12 master-design seeds (Section A), 5 ephys (Section B), 16 audit-added
+(Section C), 4 documentation-layer (Section D). A13–A15 were added in the Task-15 fix pass from
+`docs/raw_data/NIDAQ_AND_EVENT_SPEC.md`; A16 and D4 were added 2026-08-17 in the Task-15 wave-4
+re-read (findings I7 and I6 — both were measured all along, `d8.constants.scientific_divergent`
+and `d6.science.stale_docs` row 4, but carried no register entry). *(D3's index disposition
+corrected SURVIVES → DISSOLVED 2026-08-17, wave 4 — the body always said DISSOLVED by ADR-005;
+the index row had drifted.)*
 
 **Module coverage (acceptance criterion A2):** all **64** library modules are classified
 (`d8.modules.classified`); **31** touch no symbol-matched entry (`d8.modules.clean`). No module is
@@ -187,17 +203,31 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   `270325`) — frozen pre-fix output sitting in a live deliverable. That 14 is a **lower bound**:
   same-parse rows whose misplaced day is ≤ 12 are indistinguishable from valid tuples.
 - **Evidence** — `d3.dateparser.trio`; `d4.stale.chron_impossible` = 14;
-  `d3.dateparser.sites` = 19 — **the CSV under-counts**: the true parser-site population is
-  **23**. The 4 out-of-regex sites are `scripts/analysis/plot_learning_curve.py:18`,
-  `scripts/analysis/run_deep_unitmatch.py:75`,
-  `scripts/batch_processing/build_manifest_and_behavior_summary.py:151` (all
-  `pd.to_datetime(..., format='%d%m%Y')`, identical silent-wrong-date behaviour) and
-  `scripts/pipelines/tracking/run_unitmatch_all.py:73` (`strptime('%d%m%y')`, the 6-digit
-  variant). **Cite 23, not 19.**
+  `d3.dateparser.sites` = 19 — **the CSV under-counts**, and so did this entry's first
+  correction: the hand-count "23" (19 + 4 enumerated sites) missed at least four further sites
+  (`scripts/analysis/behavior/hmm_behavioral_states.py:45`,
+  `scripts/pipelines/concat_sort/build_concat_windows.py:56`,
+  `scripts/pipelines/tracking/build_qc_sheets.py:116`,
+  `scripts/pipelines/tracking/run_unitmatch_all.py:67`; `:78`'s hand-rolled
+  `strptime("0"+s, "%d%m%Y")` repair was already counted but proves the class breeds). The
+  **computed** population is **`d8.dateparser.recount` = 27** — an AST census of every
+  `strptime`/`to_datetime` call with a literal `%d%m%Y` **or** `%d%m%y` format over `scripts/` +
+  `src/` (excluding `scripts/audit/`; `scripts/audit/d3_parser_recount.py`, sites in
+  `data/cache/audit/date_parser_recount.csv`: scripts 27, src **0** — the library's own
+  `parse_session_date` parses by digit slicing, not `strptime`, which is exactly this entry's
+  mechanism). Still a **lower bound**: a format passed through a variable is invisible to the
+  census. **Cite the computed 27 via `d8.dateparser.recount`, not 23, not 19.** *(Hand-count
+  replaced by the committed census 2026-08-17, Task 15 wave 4.)*
 - **Status** — LIVE. **Re-ingest** — SURVIVES: a parser and a convention.
 - **Mitigation already in the tree** — `config.session_date_key` (`config.py:423`) is the
   multi-subject-safe ordering key. Six modules use a canonicaliser
   (`uses_canonicaliser = True` in the module map).
+- **An exculpatory note on the adjacent `zfill` count** — the 77 ad-hoc `zfill(8)` sites
+  (`d3.zfill.sites`) are **redundant-but-harmless on today's manifest**, not 77 further defects:
+  `load_staging_manifest` already returns `session_name` as all-`str` 8-digit tokens
+  (`d3.zfill.manifest_dtype` = `{'str': 28}`), so a recon-era "~78 defects" reading of that count
+  is wrong. The hazard they carry is the documented float-string one (`'1072025.0'.zfill(8)` ≠
+  `'01072025'`), which binds only if an upstream int/float cast has already corrupted the token.
 
 ### 4. Corrupted session-id rows in live caches
 
@@ -215,7 +245,12 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   `FIGURES/popgeom_theta/{theta_per_session,theta_count_matched,theta_support_matched}.csv` and
   `FIGURES/state_dynamics/within_session_dynamics.csv` (67 rows, all `00-padded`, all
   non-BG_046). Add entry A2's **1,670** further rows, which fall outside the census's
-  corrupt-token definition.
+  corrupt-token definition. **Downstream doc carrying six of these caches with no in-doc
+  marker** *(added 2026-08-17, Task 15 wave 4, per `06-ai-layer.md` "Corrupted caches under a
+  live results doc")*: `docs/science/2026-08-03-early-lick-learning-results.md` §7 lists
+  `early_lick_repl_BG_046/039/031.csv` + `fa_hazard_trials_BG_046/039/031.csv` — exactly the six
+  RED-test offenders — as its artefacts; a porter re-deriving that doc's numbers must route the
+  joins through the canonicaliser (or the repaired caches) first.
 - **Evidence** — `d4.ids.files_corrupt` = 10; `d4.ids.rows_corrupt` = 15,869;
   `d4.ids.integrity_test_red` = exit 1 (`tests/test_session_id_csv_integrity.py`, deliberately
   left red as the live tripwire); `d8.idcorruption.fivedigit_rows` = 1,670.
@@ -234,9 +269,11 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   changed by the 2026-07-31 lick-channel fix, so **borderline `resp_log2` calls will flip**. The
   headline ordering **VMS 5.3 % > DMS 2.8 % / 3.1 %** is unsafe until re-derived. The **number**
   of flips is unmeasured — re-running the TF GLM is compute this audit does not do.
-- **Affected modules** — `visdetect.analysis.tf_glm`, `analysis.tf_glm_data`,
-  `analysis.evidence_learning_io`, `analysis.state_tf_learning`, `suite.loader` (module map,
-  `stale-tf-registries`).
+- **Affected modules** — `visdetect.analysis.tf_glm`, `analysis.evidence_learning_io`,
+  `analysis.state_tf_learning`, `suite.loader` (the module map's 4 `stale-tf-registries` rows)
+  **+ `analysis.tf_glm_data` by inspection** — the map's symbol patterns do not flag it, but it
+  is the registry pipeline's data layer *(citation split map-vs-hand 2026-08-17, Task 15 wave 4;
+  the earlier wording attributed all five to the map, which flags four)*.
 - **Affected artefacts** — `data/cache/tf_responsive/*` (whose own `README.md` carries the
   ⚠️ STALE banner) and, downstream, **six** `docs/science` results docs that rest on the registry
   and mention it in none: `2026-07-01-B9`, `2026-07-01-B10`,
@@ -251,6 +288,17 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
 - **Status** — CODE-FIXED / ARTEFACTS-STALE. **Re-ingest** — DISSOLVED: the registry is a derived
   cache and will be rebuilt against the fixed regressor. The *claim* does not dissolve; it must
   be re-derived before being repeated.
+- **Staleness beyond this entry's registry** *(added 2026-08-17, Task 15 wave 4 — carrying
+  `data/cache/audit/stale_caches.csv`'s verdicts, which no D8 doc previously did in full)*: the
+  mtime heuristic (`d4.stale.topics` = 7/7) also ranks **`behavior`, `session_sorting`,
+  `talk_substrate`, `tf_glm_bg046` and `tracking_consensus`** stale (writer committed after the
+  newest artefact), alongside this entry's `tf_responsive` and the **uncertain** `um_ref` (its
+  one-day margin sits inside the measurement's own timezone skew — quarantine Q8, do not cite
+  without re-running). Seven further topics are *writer-untraceable* (`no-writer-found`), which
+  is the D4 provenance gap, not evidence of freshness. These are cache-level staleness verdicts
+  from an mtime heuristic — weaker evidence than this entry's README-banner + mechanism, and to
+  be re-run before any port decision, but a porter consuming any of those five topic caches
+  should treat "artefact older than its writer's last commit" as a rebuild trigger.
 
 ### 6. Lick-channel extraction defect
 
@@ -335,8 +383,10 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   *threshold*:** it picks the one true line from whichever MATLAB extraction wrote the events, but
   both extractions' thresholds remain someone's unrecorded choice, so a resolver-clean session can
   still be built on the 14.9 %-recall train. **Re-ingest** — **CONDITIONAL**, and this is the
-  hinge described at the top: the raw `nidq.meta` channel map is byte-identical across all 50
-  BG_046 raw sessions, so re-extracting from `nidq.bin` with a per-session derived threshold
+  hinge described at the top: the raw `nidq.meta` channel map is **reported** byte-identical
+  across all 50 BG_046 raw sessions (the spec's own hedge, §"Scope caveat" — restored here
+  2026-08-17, wave 4, after an earlier draft stated it as fact; the sweep that would establish it
+  is quarantine Q5's), so re-extracting from `nidq.bin` with a per-session derived threshold
   (spec §7, §11 step 9) dissolves the defect; re-running `build_session_from_raw` against the
   existing `*NIdaq_events.mat` (`ingest.py:444`) reproduces it.
 
@@ -370,8 +420,10 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
 - **Direction of effect** — trial↔event pairing changes on the affected pkls, so **every
   `ni_events`-aligned neural result on them changes**; behaviour-only work is unaffected. Three
   failure modes with different signs: split recording (a full day's behaviour attached to each
-  half — BG_031 `19052025` = 231 + 339 ≈ 569), excess `Baseline_ON`, and total behavioural load
-  failure. On the primary subject the two named cases are BG_046 `20082025` (+228 events) and
+  half — BG_031 `19052025` = 231 + 339 ≈ 569; ⚠ the sum is actually **570** — the "≈569" is
+  reproduced verbatim from the source, `QUESTION_INDEX.md:66`, and the off-by-one is flagged
+  here rather than silently corrected because the source has not been re-measured), excess
+  `Baseline_ON`, and total behavioural load failure. On the primary subject the two named cases are BG_046 `20082025` (+228 events) and
   `05092025_b` (−281) — **both Expert**, so a Naive-vs-Expert contrast is asymmetrically exposed.
 - **A concrete, code-level mechanism for one failure mode, newly evidenced.** The root cause is
   already named in-repo: "the converter loads whatever `*trials.json` files sit in `Session/`
@@ -397,9 +449,10 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   skips, while the probe kept recording through them; the trials align to `BON[228:714]`, an
   **offset, not a truncation**. My index row's "+228 **events**" is the correct reading; an
   earlier draft of this paragraph mis-anchored the direction to this case and is corrected here.
-- **The two signs need different converter fixes** (spec `:41-43`): sign A needs run *selection*
-  (and hash de-duplication); **sign B has nothing to select** — it needs the offset found. A
-  hash-dedup therefore fixes one class and leaves the other untouched.
+- **The two signs need different converter fixes** (spec `:40-42`; cite corrected from `:41-43`,
+  2026-08-17 wave 4): sign A needs run *selection* (and hash de-duplication); **sign B has
+  nothing to select** — it needs the offset found. A hash-dedup therefore fixes one class and
+  leaves the other untouched.
   *Scope*: the duplicate-JSON instance itself was measured on 17092025, not on `05092025_b`; what
   is verified for `05092025_b` is the concatenation sign and count, from the QC1 spec.
 - **Affected modules** — `visdetect.core.ingest` (`load_behavioral_trials`, `ingest.py:71-98` —
@@ -409,6 +462,11 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   because `Change_ON` is in the pattern — that is the blast radius, not a bug list).
 - **Affected artefacts** — 23 of 253 pkls (`ni_events`-aligned neural analyses on them are
   invalid; behaviour-only work is unaffected), and any cache or figure derived from those pkls.
+  **The 23 are enumerable machine-readably** *(pointer added 2026-08-17, Task 15 wave 4 — they
+  were previously listed nowhere in D8)*: `data/cache/qc_alignment/trial_vs_baselineon_audit.csv`
+  (untracked QC1 cache, 253 rows), the rows with `count_safe = False` — exactly 23, verified this
+  wave. If the cache is absent, regenerate with
+  `scripts/QC_technical/audit_trial_baselineon_alignment.py` (tracked on this branch).
 - **Evidence** — `docs/science/QUESTION_INDEX.md:66` (23 of 253; the two BG_046 cases);
   `src/visdetect/core/run_alignment.py:4-6` (17 sessions, root cause named);
   `docs/superpowers/specs/2026-08-03-QC1-trial-event-alignment-repair-design.md:35-39` (the two
@@ -506,7 +564,12 @@ unclassified. See *Module coverage* at the end for the caveat that "clean" ≠ "
   constants at `src/visdetect/analysis/constants.py:49` and
   `src/visdetect/core/run_alignment.py:24`, enforcement at `analysis/align.py:158`, `:284`;
   second source `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` **§9** (one session, BG_046 17092025) —
-  cite the `Baseline_ON`-ends-first argument, **not** the retracted surplus-pulse one.
+  cite the **set-equality-with-identical-trial-sets argument** (`count(Hit) + count(Miss) +
+  count(Ref) == n Change_ON`, 256 + 58 + 9 = 323, identical trial *sets*), **not** the retracted
+  surplus-pulse one and **not** the `Baseline_ON`-ends-first argument (which this entry's own
+  body rules out as ref evidence — it underwrites the `fa`/`abort` exclusions only). *(Evidence
+  pointer corrected 2026-08-17, Task 15 wave 4; it previously named the `Baseline_ON`-ends-first
+  argument, contradicting the body two bullets above it.)*
 - **A porting trap in the same place** — `run_alignment.py:22-24` warns verbatim: "CASE-SENSITIVE.
   Real pkl labels are capitalised: Hit/Miss/FA/abort/Ref. Do NOT refactor onto
   `EVENT_VALID_OUTCOMES` — that is lowercase and omits Ref." Two constants encode one rule in two
@@ -1054,12 +1117,18 @@ Each of these can move a number or a scope decision and none was in the seed lis
 
 - **Direction of effect — the `Baseline_ON` TTL is not the moment the stimulus appeared, and the
   gap is neither small nor constant.**
-  1. **The TTL leads the physical screen change by ~67 ms — an UPPER BOUND, not a display
-     latency.** Measured TTL→photodiode is **+67.3 ms (IQR 55–79)**, robust to detector settings
-     (3σ → 65.5 ms, 24σ → 72.0 ms). **Aligning visual responses to the raw `Baseline_ON` TTL
+  1. **The TTL leads the physical screen change by a median ~67 ms — and 67.3 bounds the
+     display-latency COMPONENT, not the per-trial lead.** Measured TTL→photodiode is a **median
+     +67.3 ms (IQR 55–79)**, robust to detector settings (3σ → 65.5 ms, 24σ → 72.0 ms). The
+     "upper bound" in the spec's heading bounds how much of that gap is *display* latency (part of
+     it is TTL→frame scheduling, see point 2) — it does **not** cap the per-trial lead, whose
+     upper quartile starts at **~79 ms**. **Aligning visual responses to the raw `Baseline_ON` TTL
      therefore places "stimulus onset" tens of ms too early, comparable to striatal visual latency
      itself.** Use `vbl` and/or the photodiode. Direction on any latency claim: measured response
-     latencies are **overstated**, by an amount bounded above by ~67 ms.
+     latencies are **overstated** — by ~67 ms on the median trial, and by more on the upper half
+     of trials. *(Corrected 2026-08-17, Task 15 wave 4: an earlier version presented the median as
+     a maximum — "up to +67.3 ms", "bounded above by ~67 ms" — understating the upper half of the
+     per-trial distribution.)*
   2. **The larger hazard is the JITTER, not the mean.** The TTL is **not frame-locked** — sd
      **14.6 ms** against the stimulus PC's own `vbl` log — while the photodiode **is**
      (corr −0.988; re-referencing to the frame removes 97.6 % of the variance). So the 67.3 ms
@@ -1120,8 +1189,10 @@ Each of these can move a number or a scope decision and none was in the seed lis
   gives is behaviour ending at 8857 s (§5). They are removed rather than re-quoted; nothing in the
   argument depends on them. If that ordering holds generally, every pathway label the
   optotagging module emits is **inverted**.
-- **And the mapping has no recorded basis on either side.** The spec checked **all six** settings
-  files and the block→target mapping is in none of them; it came from the experimenter. The
+- **And the mapping has no recorded basis on either side.** The spec states the block→target
+  mapping is **"not in any settings file"** (§10 — it gives no count of files checked; an earlier
+  "all six" here was not the spec's text, corrected 2026-08-17, wave 4); it came from the
+  experimenter. The
   code's assumption is likewise undocumented — `optotagging.py:505-510`'s docstring simply asserts
   "GPe (block 1) and SNr (block 2)". So this is not "the code disagrees with the truth"; it is
   **two undocumented assumptions that disagree with each other**, with no artefact in the repo
@@ -1149,8 +1220,8 @@ Each of these can move a number or a scope decision and none was in the seed lis
   optotagging figure under `FIGURES/optotagging/` — wherever a `fiber` / GPe / SNr label appears.
 - **Evidence** — `src/visdetect/analysis/optotagging.py:505-510` and `:773`
   (`self.gpe_pulses, self.snr_pulses = split_laser_blocks(all_pulses)`, first block → GPe);
-  `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §10 (block 0 = SNr, block 1 = GPe; mapping absent from
-  all six settings files; the 17/3/0 responder split). ⚠ The attribution of the asymmetry to
+  `docs/raw_data/NIDAQ_AND_EVENT_SPEC.md` §10 (block 0 = SNr, block 1 = GPe; mapping "not in any
+  settings file"; the 17/3/0 responder split). ⚠ The attribution of the asymmetry to
   **fibre placement** is likewise experimenter-supplied and untestable from these files.
 - **Pooling — the caution, corrected.** "Never pool the blocks" was **overstated**: pooled ranking
   does *not* bury the weaker block (Spearman(pooled, best-per-block) = **0.986**). The defensible
@@ -1184,6 +1255,41 @@ Each of these can move a number or a scope decision and none was in the seed lis
   **Re-ingest** — SURVIVES: re-extraction recovers the pulses (E4) but cannot recover which fibre
   was in which structure. That fact exists only in the experimenter's records, and ADR-019 already
   requires it as acquisition metadata.
+
+### A16. 43 scientific parameters re-declared with disagreeing values across scripts
+
+*(Added 2026-08-17, Task 15 wave 4, finding I7: the measurement existed —
+`d8.constants.scientific_divergent` = 43 — but its only surface was `drop-list.md` §5's CSV
+warning; a class this size needs a register entry, because it is ADR-009 attribution material.)*
+
+- **Direction of effect** — **cross-script comparability is broken per name, in an unknown
+  per-name direction.** Of the 127 non-canonical names whose re-typed copies **disagree**
+  (`retypes_agree = False`), the hand re-triage classifies **43 as scientific parameters** (84
+  are scaffolds, 0 ambiguous). Two scripts using "the same" parameter name can silently compute
+  under different values — e.g. `STATES` is re-declared at **21 sites** and `SUBJECT` at **25**
+  with disagreeing memberships/values — so any cross-script comparison, pooled figure or ported
+  reproduction that assumes "same name ⇒ same analysis choice" inherits an unmeasured delta.
+  Per-name direction requires reading the two values; the CSV holds every site.
+- **Why this is a register entry and not just a census row** — it is the *class* a porter will
+  hit most often under ADR-009: when a ported component's number differs from an old script's,
+  the **first check** is whether the old script ran under a divergent local value of a shared
+  name. Without this entry that check has no register anchor to attribute against.
+- **Affected modules** — none in the library as canonical definitions; the disagreeing sites are
+  script-local re-declarations (`defined_in` column of the CSV). The canonical layer's failure is
+  upstream: 42 canonical constants are not re-exported by `config.py`
+  (`d1.constants.not_reexported`), which is part of why scripts re-declare.
+- **Affected artefacts** — every figure or cache produced by a script holding a disagreeing value
+  of a scientific parameter. **Not enumerable per-figure** — that is the D4 provenance gap
+  (`d4.trace.untraceable_frac` = 0.42).
+- **Evidence** — `d8.constants.scientific_divergent` = 43,
+  `data/cache/audit/constants_retriage.csv` (name, census bucket, re-triage class, site count);
+  the re-triage method and its caveats in `drop-list.md` §5's `constants_census.csv` row;
+  `d1.constants.divergent_params` = 98 (the census bucket this corrects — it both omits
+  scientific names filed as path-alias and includes scaffolds).
+- **Status** — LIVE. **Re-ingest** — SURVIVES: names and values are code, untouched by any data
+  operation. The new repo's cure is structural — one importable truth per scientific parameter
+  (ADR-009's attribution base assumes it), with the two-name treatment entry 12 prescribes where
+  two legitimate memberships genuinely exist.
 
 ---
 
@@ -1269,6 +1375,37 @@ that way, which is the strongest argument for recording them somewhere a porter 
 - **Status** — LIVE. **Re-ingest** — DISSOLVED by ADR-005 (the new repo deletes the copies and
   generates `CLAUDE.generated.md`), but only if the dead-path check covers the *prose* half too.
 
+### D4. `2026-07-07-transient-sustained-spectrum-celltype.md:52,172` carries two walked-back clauses unmarked
+
+*(Added 2026-08-17, Task 15 wave 4, finding I6: `d6.science.stale_docs` = 4, and rows 1–3 got
+D1, D2 and entry-7 treatment respectively — row 4 had no carrier in any D8 document.)*
+
+- **The claims** — (a) line 52: the weak `pulse_fwhm` ↔ `interp_fwhm` correlation (ρ = 0.11) is
+  "**inherent, not a bug**"; (b) line 172, **mandatory caveat 2**: "Describe the spectrum as
+  skewed/heavy-tailed, **not clean lognormal**."
+- **Walked back by** — memory `tf_pulse_peth_circularity_bug_jul2026`: the ρ = 0.11 weakness "is
+  probably just noise" from the same 600-pulse cap the circularity fix removed (entry 7's
+  mechanism) — so (a)'s "inherent" is unsupported; and memory
+  `tf_spectrum_celltype_orthogonality_jul2026`: a later direct lognorm-vs-gamma MLE/AIC/KS fit
+  **favoured lognormal in all three regions** ("OK to call `interp_fwhm` ~lognormal now") — so
+  (b) mandates wording the project's own later measurement refutes.
+- **Why (b) is the sharper half** — it is not a stale result, it is a stale **instruction**: a
+  "mandatory caveat" list that future write-ups are told to follow, actively instructing authors
+  to write the refuted thing. A doc-level lint that checks claims would not even flag it.
+- **Direction of effect** — misdirects writing and design; **no numerical direction** (see this
+  section's preamble — Section D is outside the ADR-009 attribution base).
+- **Affected modules** — none. Documentation-layer entry.
+- **Affected artefacts** — `docs/science/2026-07-07-transient-sustained-spectrum-celltype.md`
+  (lines 52, 172; line 180's "weak corroborator" framing is consistent with the correction and
+  needs no change). The width-axis *results* themselves are unaffected — claims 1–2 of that line
+  of work were verified (memory `tf_transient_sustained_state_jul2026`).
+- **Evidence** — `d6.science.stale_docs` = 4 (row 4, with both doc:line cites and both memory
+  anchors in the measurement's notes). Flagged-not-fixed by Task 13: outside the audit's write
+  scope.
+- **Status** — LIVE. **Re-ingest** — SURVIVES: prose. Settles with two one-line edits adopting
+  the later measurements (drop "inherent, not a bug" for "consistent with 600-cap noise;
+  unresolved", and relax caveat 2 to "≈ lognormal per the MLE/AIC/KS fit").
+
 ---
 
 ## Module coverage — acceptance criterion A2
@@ -1281,15 +1418,20 @@ not affected.
 **Three caveats a porter must apply before trusting a `clean` verdict:**
 
 1. **`clean` means "matches no symbol pattern", not "defect-free".** The classifier's
-   `DEFECT_SYMBOLS` table predates the five ephys entries **and the three NI-spec entries added in
-   the fix pass**, so it has no pattern for any of them. The clearest casualty is
+   `DEFECT_SYMBOLS` table predates the five ephys entries **and the four entries added in the
+   fix passes (A13–A15, A16)**, so it has no pattern for any of them. The clearest casualty is
    `visdetect.core.ingest`, which reads `clean` while being the module at the centre of **E1**
    (`ingest.py:415`, `:492-495`) *and* of entry 8's duplicate-JSON mechanism (`ingest.py:71-98`).
-   `visdetect.analysis.optotagging` likewise reads `clean` and carries **A15**. Entries E1–E5 and
-   A1–A15 carry their affected modules **by hand, from `file:line`**, in the entries above — read
-   those, not the CSV, for those defects. The classifier was **not re-run** in the fix pass, so
-   `d8.modules.classified` = 64 and `d8.modules.clean` = 31 are unchanged and still correct for
-   what they measure.
+   `visdetect.analysis.optotagging` likewise reads `clean` and carries **A15**. Entries E1–E5,
+   A1–A16 and D1–D4 carry their affected modules **by hand, from `file:line`**, in the entries
+   above — read those, not the CSV, for those defects. The classifier was **not re-run** in the
+   fix passes, so `d8.modules.classified` = 64 and `d8.modules.clean` = 31 are unchanged and
+   still correct for what they measure.
+   **The inverse caveat also holds: `flagged` ≠ `affected`** *(added 2026-08-17, wave 4)*. The
+   symbol patterns over-flag as well as under-flag: the map marks `analysis.ddm` and
+   `core.video_sync` with `id-corruption` while entry 4's hand list says **"Affected modules —
+   none in the library; this is an artefact-layer defect."** The hand-written entry is the
+   authority in both directions; the map is a screening aid.
 2. **`alignment-QC1` is a blast radius, not a bug list.** The pattern includes `Change_ON`, so it
    flags every module that aligns to change onset (**14** modules). That is the correct exposure
    set for QC1 attribution; it does not mean 14 modules are broken. Per-entry module counts:

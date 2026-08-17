@@ -28,11 +28,17 @@ Evidence: `d7.branches.unmerged`, `d7.local_only.commits`, and the per-branch
 | `worktree-camera-tagging` | 0/0 | 0 | Nothing unique — fully contained in `main` |
 | `worktree-population-field` | 0/0 | 0 | Nothing unique — fully contained in `main` |
 | `worktree-theta-prototype` | 0/0 | 0 | Nothing unique — fully contained in `main` |
-| `feature/camera-tagger-2b` | 0/0 | 0 | Nothing unique — merged to `main` as `caa377d` |
+| `feature/camera-tagger-2b` | 0/0 | 0 | Nothing unique — merged to `main` as `caa377d`. *(Wording reconciled with `branch-disposition.md` 2026-08-17, wave 4: its "Port-on-first-use (whole subsystem)" recommendation is about the camera **subsystem**'s ADR-020 cold-list status, not the ref — the ref is droppable because its content is on `main`; the subsystem ports on first use regardless of what happens to the ref)* |
 | `feature/fig5eh-preparatory-cellclass` | 4/4 | 0 | **The brief's stated precondition FAILS** (`git merge-base --is-ancestor … main` → exit 1; `git cherry main` → 4 `+` patches), so do **not** drop it on the recommendation as worded. It is droppable by a different, verified route: all four commits are ancestors of `design/new-repo-foundation` *and* of the cached `origin/` refs for it, so the content reaches `main` when that branch merges |
 
 **Explicitly NOT droppable, despite also showing `Local-only = 0`:**
 
+- **`feature/population-field-plan2`** — 3 unique doc commits (Plan 2 analysis-layers design
+  spec, Plan 2a implementation plan, NI lick-channel semantics null control);
+  `branch-disposition.md`'s recommendation is **"Merge docs to main before freeze"**, i.e. the
+  ref holds content not yet on `main`. *(Added 2026-08-17, wave 4: the branch previously
+  appeared in neither this section's table nor this list, leaving its disposition ambiguous
+  here.)*
 - **`hardening/fa-psth-and-manifest-sort`** — `2f6fcdc` (centralised `fa_lick` PSTH condition +
   the DDMMYY manifest-sort fix) is contained in **no other branch**
   (`git branch -a --contains 2f6fcdc` lists only that ref and its origin twin; not an ancestor of
@@ -125,6 +131,60 @@ visible (`d3.vdtf.writers` = 10 — `scripts/tf_responsiveness/plot_bg046_pulses
   importable, so the provenance of anything those scripts produced is unverifiable. Drop the
   inserts; the new repo's packaging (register entry A12) removes the need for them.
 
+### 2.8 The script-classification triage — the promise, discharged *(added 2026-08-17, Task 15 wave 4)*
+
+`d3.scripts.no_output`'s note and `03-scripts.md:122-125` promised that Task 15 would triage
+`script_classification.csv` into shared-module vs job-body vs dead for this list. Done by the
+committed `scripts/audit/d3_script_triage.py`; per-file evidence in
+`data/cache/audit/script_triage.csv`; measurement ids `d8.scripts.orphan_triage`,
+`d8.scripts.nooutput_triage`.
+
+- **FULL triage — the 46 orphan-nonentry scripts** (in-degree-0, no `__main__`, no argparse;
+  three axes: AST top-level-work, tracked name-reference grep with the audit's own files
+  excluded as referencers, git last-commit recency). **The "strongest dead-code candidates"
+  turn out mostly NOT dead**: `dead:1 | shared-module:0 | job-body:38 | package-marker:7`.
+  - **Drop: 1 file** — `scripts/kilosort_related/check_kilosort4_counts.py`, whose entire
+    content is the comment `# moved from scripts/` (an empty husk; last commit 2025-12-04,
+    defs-only, named nowhere tracked). A same-stem sibling, `scripts/QC_CHECKS/`, holds the
+    real script.
+  - **38 job-bodies** — guard-less top-level work that runs on `py <path>` (invisible to both
+    the import DAG and, mostly, the name grep; 11 of the 38 *are* name-referenced by docs or
+    wrappers; one is a pytest module collected by path). These are ad-hoc runnable scripts, not
+    dead code — but 14 of them were last committed before June 2026, so they are **cold-treatment
+    candidates** (port on first use), not drops. Recency per file in the CSV.
+  - **7 package markers** — `__init__.py` files; never dead-by-orphanhood, and
+    `scripts/__init__.py` is register **A12**'s wheel-build trigger — do not "clean it up"
+    without fixing `setup.cfg` first.
+- **COARSE triage — the 108 no-output scripts** (census columns only; the three buckets
+  partition the 108 exactly): `shared-module:9 | entry-point:61 | orphan-nonentry:38` — the 38
+  are the overlap with the 46 and got the full treatment above. The 9 shared-modules and 61
+  entry-points are **not** drop candidates on this evidence.
+- **What was NOT triaged, stated plainly** — runtime string dispatch and Slurm/subprocess
+  invocation remain invisible (the import-DAG blind spot stands); references from untracked
+  files were not counted; no script was executed. The dead verdict is therefore
+  "dead-by-every-static-signal", and the single dead file is content-verified, not just
+  signal-verified.
+
+### 2.9 The 16 dead canonical constants
+
+- **Evidence** — `d1.constants.dead` = 16: canonical constants in
+  `src/visdetect/analysis/constants.py` with **zero importers and zero re-typed copies**
+  (AST-verified importer detection; names enumerated at `01-constants.md:36-40` —
+  `LOHSE_*` ×4, `MOTION_ENERGY_*` ×2, `PUPIL_*` ×7, `STATE_LABEL_W_DEFAULT`,
+  `TF_DETREND_*` ×2). Nothing reads them; dropping them from the new constants layer loses
+  nothing. *(Row added 2026-08-17, wave 4 — the measurement existed but this list never carried
+  it.)*
+
+### 2.10 Palette re-hardcoding (drop the literals, not the scripts)
+
+- **Evidence** — `d1.palette.hex_total` = **692** hex-colour literal occurrences /
+  `d1.palette.hex_distinct` = **174** distinct colours in tracked `scripts/`, against **4**
+  canonical palettes in config. The top repeats are the canonical `STATE_LABEL_COLORS` values
+  **re-hardcoded per script instead of imported** — `#3474ae` (Disengaged) ×38, `#ef6548`
+  (Impulsive) ×28 (`d1.palette.top_hex`, `data/cache/audit/hexes.txt`). Same class as §2.6: the
+  dead thing is the **literal**, not the script — in the new repo every scientific colour comes
+  from the palette module, and a re-typed hex is a review flag. *(Row added 2026-08-17, wave 4.)*
+
 ## 3. Docs
 
 ### 3.1 `AI_exploration/` references — the directory does not exist
@@ -185,6 +245,15 @@ dropping the reference.
   (`.gitignore:18` `*.zip`), with GUID filenames that name nothing. Carried by no branch,
   referenced by no doc, and too small to hold anything a reader could not re-export.
 
+### 3.6 Three stale Opus-4.8 model pins in `harden-result/SKILL.md`
+
+- **Evidence** — `d6.modelids` = 3: all three hardcoded model ids in primary `.claude` prose sit
+  in `.claude/skills/harden-result/SKILL.md` ("Opus 4.8" / `claude-opus-4-8`), superseded by the
+  2026-08-10 Fable repin (both settings files now pin `claude-fable-5[1m]`, and the env var
+  overrides per-call `model:` anyway — memory `feedback_subagent_model_opus`). Drop the literal
+  pins for "the configured top-tier model": a skill that names a model drifts every upgrade.
+  *(Row added 2026-08-17, wave 4 — the measurement existed but no drop/fix list carried it.)*
+
 ## 4. Artefacts
 
 | Item | Evidence | Note |
@@ -202,32 +271,44 @@ otherwise inherit.
 | Artefact | Rows to drop or correct |
 |---|---|
 | `data/cache/audit/syspath_sites.csv` | 3 **self-scan junk rows** — `scripts\audit\d2_layering.py:2`, `:30`, `:36` (category `computed`) are the census matching its own docstring, comment and detector string. Filter `file` starting `scripts/audit`; the tree has **225** sites net of all 8 audit-own rows |
-| `data/cache/audit/date_parser_sites.csv` | **Incomplete**: 19 `strptime` rows (plus 77 `zfill8` rows in the same file). The true parser-site population is **23** — the 4 out-of-regex sites are enumerated in register entry 3 |
+| `data/cache/audit/date_parser_sites.csv` | **Incomplete**: 19 `strptime` rows (plus 77 `zfill8` rows in the same file). The **computed** parser-site population is **`d8.dateparser.recount` = 27** (`scripts/audit/d3_parser_recount.py`, AST census over `scripts/` + `src/` covering `to_datetime` and the `%d%m%y` variant; full site list in `data/cache/audit/date_parser_recount.csv`) — itself still a lower bound (variable-passed formats invisible). *(2026-08-17, wave 4: replaces the hand-count "23", which missed ≥4 further sites.)* |
 | `data/cache/audit/csv_key_domains.csv` | **`rows_lost_on_join` / `joinable_to_manifest` are unusable** for the 126 path-scoped other-subject files (~118,621 phantom "lost" rows; the heuristic reads only the filename). Genuine BG_046 loss is **667 rows across 8 files** |
 | `data/cache/audit/constants_census.csv` | **Bucket labels are not ground truth** (the `"OUT" in name` rule). Use `data/cache/audit/constants_retriage.csv` instead: of 127 disagreeing names, **43** are scientific parameters, 84 are non-scientific, 0 ambiguous (`d8.constants.scientific_divergent`). `defined_in` is capped at 6 sites, so names with more are under-enumerated. **The re-triage CSV holds only `retypes_agree = False` rows**, so of the three names `01-constants.md:51-70` flags as suspect mislabels, `OUTCOMES` and `OUTCOME_COLORS` appear (both non-scientific: a figure-panel spec and a palette) while **`N_TRIALS_PER_OUTCOME` is absent by construction — its two sites agree, so it is not a divergence at all.** All three of that caveat's candidates therefore resolve as *not* scientific-parameter divergences |
 | `data/cache/audit/traceability_sample.csv` | The `producer` column names a **mentioner, not a verified writer**; 7 rows attribute `scripts/audit/d3_scripts_census.py`, which embeds artefact stems as data and sorts ahead of the real writers. The `method` column is unaffected. Separately, **`d4.trace.tracked_covered` = 83 counts `git ls-files` output, not verified census inclusion** — a tracked figure outside a `FIGURES/<topic>/` directory would inflate it silently. None exists today (checked), and the implementer's manual set-difference confirmed 0 missing, but the check is not mechanically re-derivable from the commit; re-verify with a set-difference, not by trusting the number |
-| All census CSVs | **Windows backslash separators.** Normalise on read. `module_register_map.csv`, `cold_list_seed.csv` and `constants_retriage.csv` (Task-15 outputs) use forward slashes |
+| `data/cache/audit/guardrails_after.txt` | Not a defect in the census — a **residual with no other D8 home** *(added 2026-08-17, wave 4)*: after excluding the `.claude`-tree false positives, **220 real HARD guardrail violations remain** (`d5.guardrail.after`; recon predicted ~218). That 220 is live technical debt the porter inherits, enumerated in the file — it is not discharged by any drop or fix recorded elsewhere in D8 |
+| All census CSVs | **Windows backslash separators.** Normalise on read. `module_register_map.csv`, `cold_list_seed.csv`, `constants_retriage.csv`, `script_triage.csv` and `date_parser_recount.csv` (Task-15 outputs) use forward slashes |
 
 ---
 
 ## Not dropped, and why — the near-misses
 
 - **`tests/test_session_id_csv_integrity.py`** — it is **RED on purpose**. It is the live tripwire
-  for register entry 4 and names the 6 offender caches with exactly 15,802 stripped rows. Port it
-  first, do not "fix" it by fixing the data.
+  for register entry 4 — a **dynamic scanner** that walks every `data/**.csv` session-id column
+  and asserts **zero** stripped tokens; it names no offender itself. The "6 caches / 15,802 rows"
+  is its *current failure output*, captured in `data/cache/audit/integrity_test.txt`
+  (`d4.ids.integrity_test_red`) — re-running it re-derives whatever is true then. *(Description
+  corrected 2026-08-17, wave 4: the earlier wording read as if the test statically "names" those
+  six files.)* One reconciliation the D8 corpus owed: the test's own docstring cites a
+  **2026-07-13 audit finding 38,730 corrupted rows across 19 CSVs** — a historical pre-repair
+  snapshot (`scripts/qc/repair_session_ids.py --execute` is the docstring's own repair path) that
+  no D8 count reconciles to; today's census finds 15,869 (`d4.ids.rows_corrupt`). Treat 38,730/19
+  as **unreconciled-historical** — evidence the class recurs after repair, not a competing count
+  of today's corruption. Port it first, do not "fix" it by fixing the data.
 - **`data/cache/tf_responsive/README.md`** — its STALE banner is the only in-place record of
   register entry 5, and it is what defeats the mtime staleness heuristic. Keep the banner; fix the
   heuristic.
 - **`docs/raw_data/NIDAQ_AND_EVENT_SPEC.md`** — appeared during the Task-15 fix pass as an
-  untracked single copy and is **now committed** (`da5fbf9`, 2026-08-15, at **628 lines**): a full
+  untracked single copy and is **now committed** (`da5fbf9`, 2026-08-17 — date corrected from
+  2026-08-15 on 2026-08-17, wave 4, per `git show` — at **628 lines**): a full
   re-extraction of one BG_046 session directly from `nidq.bin`, then **adversarially audited by
   six independent reviewers** and corrected. It is cited by register entries 6, 8, 11, E1, E4,
   A13, A14 and A15 and by quarantine Q6/Q12 — the single most load-bearing new evidence in the
   corpus. While it was uncommitted it made `d7.untracked.at_risk` transiently 6 of 7; with
   `da5fbf9` landed the count returns to **5 of 6** (timeline in the CSV note). The commit-first
-  advice this entry used to carry is **done**. ⚠ It remains a **living** document that has
-  already revised itself twice mid-audit (386 → 481 → 628 lines, with retractions each time);
-  cite it by section and re-verify against the committed version before relying on a figure.
+  advice this entry used to carry is **done**. ⚠ It remains a **living** document that revised
+  itself **three times** mid-audit (386 → 481 → 530 → 628 lines, with retractions each time —
+  the earlier "twice" skipped the 530-line revision recorded in the SDD ledger); cite it by
+  section and re-verify against the committed version before relying on a figure.
   The working code it refers to (`tmpclaude-BG_046_17092025/`, ~6.3 GB, git-ignored, including six
   reviewers' scratch work under `_refute1/`…`_refute6/`) is a separate and much larger exposure
   that D7 did not size because it did not exist at D7's snapshot — and it is **still untracked**.
