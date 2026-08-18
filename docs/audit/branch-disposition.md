@@ -44,7 +44,7 @@ audit.**
 | Branch | Worktree | Last commit | Ahead (raw/cherry) | Local-only | What it holds | RECOMMENDED | DECISION |
 |---|---|---|---|---|---|---|---|
 | `design/new-repo-foundation` | *(primary checkout)* | 2026-08-13 | 64/63 (1 merge) | **16** | The new-repo design corpus (8 ADRs, master design, panel review) + 16 audit commits (Tasks 1–12) — the 16 local-only commits **are** the audit commits | **Keep — active work.** Push the local-only commits before any freeze step | |
-| `feature/camera-tagger-2b` | `camera-tagger-2b` | 2026-08-06 | 0/0 | 0 | Nothing unique — merged to main as `caa377d` (amortized ROI + per-frame pupil label capture, Plan 2b) | **Port-on-first-use (whole subsystem)** — the camera/tagger subsystem is cold-listed under ADR-020, not carried at cutover | |
+| `feature/camera-tagger-2b` | `camera-tagger-2b` | 2026-08-06 | 0/0 | 0 | Nothing unique — merged to main as `caa377d` (amortized ROI + per-frame pupil label capture, Plan 2b) | **Port-on-first-use (whole subsystem)** — the camera/tagger subsystem is cold-listed under ADR-020, not carried at cutover. *(This recommendation is about the subsystem's ADR-020 cold-list status, not the ref — the ref itself is droppable because its content is on `main`; mirrored from `drop-list.md` §1, 2026-08-18, Task 16 final wave)* | |
 | `feature/early-lick-and-session-sorting` | `qc1-alignment` | **2026-08-13 (moved during this audit)** | 33/32 (1 merge) | **3** | Live QC1 trial/event-alignment repair: 32 files, +8,821/−23 (solver, repair script, integrity gate, verification harnesses) | **Owner decision — live work in flight.** Not a freeze candidate while QC1 is open; push the 3 local-only commits regardless | |
 | `feature/fig5eh-preparatory-cellclass` | *(none)* | 2026-07-24 | 4/4 | 0 | 4 doc/spec commits (prep-activity vs regulation-axis spec, Phase-2 trajectories, Appendix A dataset inventory) | **Drop after verifying still-ancestor** — ⚠️ *the stated precondition FAILS (not an ancestor of main, 4 `+` patches), but the drop is safe by a different route: all 4 commits are ancestors of `design/new-repo-foundation` and its origin ref. See evidence note* | |
 | `feature/population-field-plan2` | `population-field-plan2` | 2026-08-04 | 4/3 (1 merge) | 0 | 3 unique doc commits: Plan 2 analysis-layers design spec, Plan 2a implementation plan, NI lick-channel semantics null control | **Merge docs to main before freeze** | |
@@ -81,7 +81,9 @@ ancestors of the active `design/new-repo-foundation` branch (and of
 both:
 
 ```
-$ git branch -a --contains 5d1e732        (identical output for 6cad30e, 381b4d3, 6da0f31)
+$ git branch -a --contains 5d1e732        (identical for 6cad30e; 381b4d3/6da0f31 additionally list
+                                           hardening/fa-psth-and-manifest-sort + its origin ref —
+                                           extra containment only strengthens safe-to-drop)
 * design/new-repo-foundation
 + feature/early-lick-and-session-sorting
   feature/fig5eh-preparatory-cellclass
@@ -93,6 +95,12 @@ $ git merge-base --is-ancestor <each of the 4> design/new-repo-foundation       
 $ git merge-base --is-ancestor <each of the 4> origin/design/new-repo-foundation -> ANCESTOR (exit 0)
 $ git log --ancestry-path --oneline 5d1e732..design/new-repo-foundation          -> 61 commits (linear path exists)
 ```
+
+*(Annotation corrected 2026-08-18, Task 16 final wave: it previously claimed
+identical `--contains` output for all four commits, which is false for
+`381b4d3`/`6da0f31` — re-verified read-only; those two are exactly the doc
+commits the contrast note below records as shared with
+`hardening/fa-psth-and-manifest-sort`.)*
 
 **Deleting the `fig5eh` ref therefore loses nothing**, and the content reaches
 main automatically when `design/new-repo-foundation` merges. No merge-to-main

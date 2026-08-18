@@ -154,8 +154,10 @@ checked, **4** mismatch the code and **1** names a symbol that does not exist
 
 **F12 — Work at risk, physically.** **31** commits exist on no origin ref
 (`d7.local_only.commits`) and the remote is unverifiable from this checkout
-(quarantine Q9); the irreplaceable hand-label sets (224 files, 31 MB) are backed up
-on the SAME physical disk (`d7.handlabels.exposure`); **5/6** untracked
+(quarantine Q9); the irreplaceable hand-label sets are **269** files, **220** of
+them untracked (`d7.handlabels.exposure`), and their only backup sits on the SAME
+physical disk — a 2026-08-06 snapshot of **224** files that predates ~45 newer
+label files, so M6's re-backup is not optional; **5/6** untracked
 working-tree files exist on no ref (`d7.untracked.at_risk`); the primary tree
 carries 72.5 GB gitignored data + 37.8 GB FIGURES that no migration moves
 (`d7.gitignored.volume`). The refactor guardrail was repaired mid-audit:

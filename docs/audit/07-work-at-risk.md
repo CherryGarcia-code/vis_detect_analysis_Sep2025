@@ -240,9 +240,10 @@ constructs:
   name, incompatible semantics.
 
 **The session-id finding is the sharpest one.** The sibling has **zero** uses of
-`canonical_session_id` or `zfill(8)`; `staging.py:33` matches sessions with a raw
-`manifest["session_name"] == session.session_id`. Its only `zfill` calls are
-`zfill(3)` on *subject* ids. So the leading-zero-day footgun this repo spent a
+`canonical_session_id` or `zfill(8)`; `staging.py:34` matches sessions with a raw
+`manifest["session_name"] == session.session_id` *(pointer corrected
+`:33`→`:34` 2026-08-18, Task 16 final wave — register A8 already cited `:34`)*.
+Its only `zfill` calls are `zfill(3)` on *subject* ids. So the leading-zero-day footgun this repo spent a
 `canonical_session_id()` helper, a CLAUDE.md paragraph and a (currently RED)
 integrity test to close is **simply unfixed there** — and 15,802 corrupted rows
 in this repo (`d4.ids.integrity_test_red`) are the measured cost of getting it

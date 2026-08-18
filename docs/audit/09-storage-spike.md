@@ -65,9 +65,13 @@ writer, which is the only place the numbers would have been valid anyway. They
 should be measured there before any of them is quoted.
 
 > **Note for Task 16.** The executive-summary brief asks for "the D9 numbers".
-> There are none. Task 16 must instead cite the five `not-measured` `d9.*` ids and
-> the owner's 2026-08-13 format decision recorded here. The absence is a decision,
-> not an omission, and should be presented as one.
+> There are none. Task 16 must instead cite the four not-measured `d9.*` spike ids
+> plus `d9.keep_all_good`'s partial state, and the owner's 2026-08-13 format
+> decision recorded here. The absence is a decision, not an omission, and should
+> be presented as one. *(Corrected from "the five `not-measured` `d9.*` ids"
+> 2026-08-18, Task 16 final wave, to match this document's own header —
+> `d9.keep_all_good` is partial, not `not-measured`; the executive summary had
+> already cited it correctly.)*
 
 ## Carry-forward 1 — the gzip-compression gotcha
 

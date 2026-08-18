@@ -202,8 +202,8 @@ the terminal-status record lives entirely in the private memory layer.
 The retraction-marker survey above tests `docs/superpowers/` (designs and plans).
 This section tests the same disease in `docs/science/` (results write-ups): for
 each results doc, does a claim in it get walked back in the project's **memory
-layer** — which lives outside the repo at
-`C:\Users\Ben\.claude\projects\e--python-analysis-…\memory\` — with no marker in
+layer** — which lives outside the repo at `<memory dir>` (the harness's
+per-project memory directory under the user profile) — with no marker in
 the doc itself? Judgment + grep, not a script; the memory notes were read
 read-only. Scope: the 11 dated results docs plus `QUESTION_INDEX.md`
 (= the spec's 12); the three `state_labeler/` files were surveyed too and are
