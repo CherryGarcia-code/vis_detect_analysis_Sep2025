@@ -53,9 +53,14 @@ broader "local date parser" definition: 19 strptime-`%d%m%Y` sites + 3
 lowercase `%y`, 6-digit) = 23. The 4 extra sites are equally exposed to the same
 class of defect (the `to_datetime` sites inherit the identical `%d%m%Y` silent-wrong-
 date behaviour; the `%d%m%y` site is the 6-digit variant) — they are just outside
-the shipped regex. Baseline counting-basis difference, not tree drift; the register
-should treat the parser-site population as 23 with 19 captured in
-`date_parser_sites.csv`.
+the shipped regex. Baseline counting-basis difference, not tree drift. *(Updated
+2026-08-18, Task 16: the hand-reconstructed 23 was itself superseded by the Task-15
+wave-4 AST census — `d8.dateparser.recount` = **27** sites (`scripts/` 27, `src/` 0;
+3 `to_datetime`, 1 six-digit `%d%m%y`; `scripts/audit/d3_parser_recount.py`,
+`data/cache/audit/date_parser_recount.csv`). The AST call census catches multi-line
+and keyword-arg calls both the shipped regex and the hand count missed. Treat the
+parser-site population as **27**, with 19 captured in `date_parser_sites.csv`;
+register entry 3 carries the recount and says the same.)*
 
 ## zfill(8) vs manifest dtype (`d3.zfill.*`)
 

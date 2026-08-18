@@ -149,7 +149,15 @@ committed `scripts/audit/d3_script_triage.py`; per-file evidence in
     real script.
   - **38 job-bodies** — guard-less top-level work that runs on `py <path>` (invisible to both
     the import DAG and, mostly, the name grep; 11 of the 38 *are* name-referenced by docs or
-    wrappers; one is a pytest module collected by path). These are ad-hoc runnable scripts, not
+    wrappers; **four are pytest modules collected by path** (`py -m pytest <path>`):
+    `scripts/pipelines/tracking/tests/test_freeze_policy.py`,
+    `scripts/pipelines/tracking/tests/test_runner_ckpt_arg.py`,
+    `scripts/talk_substrate/test_common.py`,
+    `scripts/tf_responsiveness/cluster/test_faithful_synthetic.py` — of these,
+    `test_common.py` (defs-only, named nowhere tracked) is rescued from the dead verdict
+    **solely** by the pytest rule; the other three also carry a name reference or top-level
+    work. *(Corrected "one is a pytest module" → four, 2026-08-18, Task 16, per the four
+    pytest-rule rows in `script_triage.csv`.)* These are ad-hoc runnable scripts, not
     dead code — but 14 of them were last committed before June 2026, so they are **cold-treatment
     candidates** (port on first use), not drops. Recency per file in the CSV.
   - **7 package markers** — `__init__.py` files; never dead-by-orphanhood, and
